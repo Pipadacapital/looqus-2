@@ -1,8 +1,9 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
+import React from 'react'
 
-export default async function RootPage() {
+export default async function ProtectedLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient()
   const {
     data: { user },
@@ -14,13 +15,11 @@ export default async function RootPage() {
 
   const membership = await prisma.workspaceMember.findFirst({
     where: { userId: user.id },
-    include: { workspace: { select: { slug: true } } },
-    orderBy: { joinedAt: 'asc' },
   })
 
-  if (membership) {
-    redirect(`/w/${membership.workspace.slug}/dashboard`)
+  if (!membership) {
+    redirect('/onboarding')
   }
 
-  redirect('/onboarding')
+  return <>{children}</>
 }

@@ -1,0 +1,190 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── Enums ──────────────────────────────────────────────────────────────────
+
+enum SystemRole {
+  SUPERADMIN
+  USER
+}
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  MANAGER
+  ANALYST
+  VIEWER
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+enum SubscriptionPlan {
+  FREE
+  STARTER
+  GROWTH
+  ENTERPRISE
+}
+
+enum ConnectionStatus {
+  CONNECTED
+  DISCONNECTED
+  EXPIRED
+  REVOKED
+}
+
+// ─── User ───────────────────────────────────────────────────────────────────
+// Linked to Supabase auth.users via the id field.
+// The id here must match the Supabase user UUID.
+
+model User {
+  id         String     @id @db.Uuid
+  email      String     @unique
+  fullName   String?    @map("full_name")
+  avatarUrl  String?    @map("avatar_url")
+  jobRole    String?    @map("job_role")
+  systemRole SystemRole @default(USER) @map("system_role")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  memberships     WorkspaceMember[]
+  invitationsSent Invitation[]      @relation("InvitedBy")
+  ownedWorkspaces Workspace[]       @relation("WorkspaceCreator")
+  auditLogs       AuditLog[]
+
+  @@map("users")
+}
+
+// ─── Workspace ──────────────────────────────────────────────────────────────
+// Each workspace represents a single brand/business tenant.
+
+model Workspace {
+  id      String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name    String
+  slug    String  @unique
+  logoUrl String? @map("logo_url")
+
+  industry       String? @map("industry")
+  monthlyRevenue String? @map("monthly_revenue")
+  storeUrl       String? @map("store_url")
+
+  plan SubscriptionPlan @default(FREE)
+
+  createdById String @map("created_by_id") @db.Uuid
+  createdBy   User   @relation("WorkspaceCreator", fields: [createdById], references: [id])
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  members            WorkspaceMember[]
+  invitations        Invitation[]
+  shopifyConnections ShopifyConnection[]
+  auditLogs          AuditLog[]
+
+  @@map("workspaces")
+}
+
+// ─── Workspace Member ───────────────────────────────────────────────────────
+// Junction table: assigns a role to a user within a workspace.
+
+model WorkspaceMember {
+  id          String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String        @map("user_id") @db.Uuid
+  workspaceId String        @map("workspace_id") @db.Uuid
+  role        WorkspaceRole @default(VIEWER)
+
+  joinedAt  DateTime @default(now()) @map("joined_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId])
+  @@index([workspaceId])
+  @@map("workspace_members")
+}
+
+// ─── Invitation ─────────────────────────────────────────────────────────────
+// Invite users to a workspace. Tracks status and expiration.
+
+model Invitation {
+  id          String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email       String
+  workspaceId String           @map("workspace_id") @db.Uuid
+  role        WorkspaceRole    @default(VIEWER)
+  status      InvitationStatus @default(PENDING)
+  token       String           @unique @default(dbgenerated("gen_random_uuid()"))
+
+  invitedById String    @map("invited_by_id") @db.Uuid
+  invitedBy   User      @relation("InvitedBy", fields: [invitedById], references: [id])
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([email, workspaceId])
+  @@index([token])
+  @@map("invitations")
+}
+
+// ─── Shopify Connection ─────────────────────────────────────────────────────
+// Each workspace can connect one or more Shopify stores.
+
+model ShopifyConnection {
+  id          String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId String           @map("workspace_id") @db.Uuid
+  shopDomain  String           @map("shop_domain")
+  accessToken String           @map("access_token")
+  scopes      String[]
+  status      ConnectionStatus @default(CONNECTED)
+
+  installedAt DateTime  @default(now()) @map("installed_at")
+  lastSyncAt  DateTime? @map("last_sync_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, shopDomain])
+  @@map("shopify_connections")
+}
+
+// ─── Audit Log ──────────────────────────────────────────────────────────────
+// Immutable log of significant actions for compliance and debugging.
+
+model AuditLog {
+  id          String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId String? @map("workspace_id") @db.Uuid
+  userId      String  @map("user_id") @db.Uuid
+
+  action     String
+  entityType String  @map("entity_type")
+  entityId   String? @map("entity_id")
+  metadata   Json?
+
+  ipAddress String? @map("ip_address")
+  userAgent String? @map("user_agent")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user      User       @relation(fields: [userId], references: [id])
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@index([userId, createdAt])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
