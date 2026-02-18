@@ -1,6 +1,5 @@
 generator client {
-  provider        = "prisma-client-js"
-  previewFeatures = ["multiSchema"]
+  provider = "prisma-client-js"
 }
 
 datasource db {
@@ -45,9 +44,7 @@ enum ConnectionStatus {
   REVOKED
 }
 
-// ─── User ───────────────────────────────────────────────────────────────────
-// Linked to Supabase auth.users via the id field.
-// The id here must match the Supabase user UUID.
+
 
 model User {
   id         String     @id @db.Uuid
@@ -145,12 +142,13 @@ model Invitation {
 // Each workspace can connect one or more Shopify stores.
 
 model ShopifyConnection {
-  id          String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  workspaceId String           @map("workspace_id") @db.Uuid
-  shopDomain  String           @map("shop_domain")
-  accessToken String           @map("access_token")
-  scopes      String[]
-  status      ConnectionStatus @default(CONNECTED)
+  id             String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId    String           @map("workspace_id") @db.Uuid
+  shopDomain     String           @map("shop_domain")
+  shopifyStoreId String?          @map("shopify_store_id")
+  accessToken    String           @map("access_token")
+  scopes         String[]
+  status         ConnectionStatus @default(CONNECTED)
 
   installedAt DateTime  @default(now()) @map("installed_at")
   lastSyncAt  DateTime? @map("last_sync_at")

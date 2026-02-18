@@ -6,6 +6,7 @@ import { prisma } from '@/lib/prisma'
 
 export type OnboardingResult = {
   error?: string
+  shopifyAuthUrl?: string
 }
 
 export async function completeOnboarding(data: {
@@ -16,6 +17,7 @@ export async function completeOnboarding(data: {
   industry: string
   monthlyRevenue: string
   storeUrl: string
+  connectShopify: boolean
 }): Promise<OnboardingResult> {
   const supabase = await createClient()
   const {
@@ -26,7 +28,8 @@ export async function completeOnboarding(data: {
     redirect('/auth/login')
   }
 
-  const { fullName, role, brandName, slug, industry, monthlyRevenue, storeUrl } = data
+  const { fullName, role, brandName, slug, industry, monthlyRevenue, storeUrl, connectShopify } =
+    data
 
   if (!brandName.trim()) {
     return { error: 'Brand name is required.' }
@@ -87,6 +90,14 @@ export async function completeOnboarding(data: {
       },
     })
   })
+
+  // If user wants to connect Shopify, return the OAuth initiation URL
+  // instead of redirecting to the dashboard
+  if (connectShopify && normalizedStoreUrl) {
+    const shopDomain = `${normalizedStoreUrl}.myshopify.com`
+    const shopifyAuthUrl = `/api/shopify/auth?shop=${encodeURIComponent(shopDomain)}&workspaceSlug=${encodeURIComponent(normalizedSlug)}`
+    return { shopifyAuthUrl }
+  }
 
   redirect(`/w/${normalizedSlug}/dashboard`)
 }

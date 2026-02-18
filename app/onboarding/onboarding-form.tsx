@@ -107,7 +107,7 @@ export function OnboardingForm({ defaultFullName, email }: OnboardingFormProps) 
     }
   }
 
-  const handleSubmit = () => {
+  const handleSubmit = (connectShopify: boolean) => {
     setError(null)
     startTransition(async () => {
       const result = await completeOnboarding({
@@ -118,7 +118,12 @@ export function OnboardingForm({ defaultFullName, email }: OnboardingFormProps) 
         industry,
         monthlyRevenue,
         storeUrl: storeUrl.trim(),
+        connectShopify,
       })
+      if (result?.shopifyAuthUrl) {
+        window.location.href = result.shopifyAuthUrl
+        return
+      }
       if (result?.error) {
         setError(result.error)
         if (result.error.includes('URL')) {
@@ -325,8 +330,8 @@ export function OnboardingForm({ defaultFullName, email }: OnboardingFormProps) 
             <div>
               <h2 className="text-lg font-semibold">Connect your Shopify store</h2>
               <p className="text-sm text-muted-foreground">
-                Enter your Shopify store URL to start syncing your data.
-                You can also do this later from settings.
+                Enter your store handle and we&apos;ll redirect you to Shopify
+                to authorize access. You can also do this later from settings.
               </p>
             </div>
 
@@ -385,10 +390,28 @@ export function OnboardingForm({ defaultFullName, email }: OnboardingFormProps) 
               <IconArrowRight className="ml-1.5 h-4 w-4" />
             </Button>
           ) : (
-            <Button onClick={handleSubmit} disabled={isPending}>
-              {isPending ? 'Setting up...' : storeUrl ? 'Connect & launch' : 'Skip & launch'}
-              <IconArrowRight className="ml-1.5 h-4 w-4" />
-            </Button>
+            <div className="flex items-center gap-2">
+              {storeUrl.trim() && (
+                <Button
+                  variant="ghost"
+                  onClick={() => handleSubmit(false)}
+                  disabled={isPending}
+                >
+                  Skip for now
+                </Button>
+              )}
+              <Button
+                onClick={() => handleSubmit(!!storeUrl.trim())}
+                disabled={isPending}
+              >
+                {isPending
+                  ? 'Setting up...'
+                  : storeUrl.trim()
+                    ? 'Connect & launch'
+                    : 'Skip & launch'}
+                <IconArrowRight className="ml-1.5 h-4 w-4" />
+              </Button>
+            </div>
           )}
         </div>
       </div>
