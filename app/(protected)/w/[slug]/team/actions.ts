@@ -5,6 +5,7 @@ import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
 import { sendMail } from '@/lib/mail/send'
 import { InviteMemberEmail } from '@/lib/mail/templates/invite-member'
+import { createNotification } from '@/lib/notifications/create'
 
 async function getAuthUser() {
   const supabase = await createClient()
@@ -110,7 +111,22 @@ export async function inviteMember(data: {
     })
   } catch (err) {
     console.error('Failed to send invite email:', err)
-    // Invitation is still created — they can resend or share link manually
+  }
+
+  const inviteeUser = await prisma.user.findUnique({
+    where: { email },
+    select: { id: true },
+  })
+
+  if (inviteeUser) {
+    await createNotification({
+      userId: inviteeUser.id,
+      workspaceId: data.workspaceId,
+      type: 'WORKSPACE_INVITE',
+      title: `${inviterName} invited you to ${workspace?.name ?? 'a workspace'}`,
+      body: `You've been invited as ${roleLabel}. Click to accept.`,
+      actionUrl: acceptUrl,
+    }).catch(() => {})
   }
 
   revalidatePath(`/w/${data.workspaceSlug}/team`)
@@ -153,6 +169,22 @@ export async function updateMemberRole(data: {
     },
   })
 
+  const workspace = await prisma.workspace.findUnique({
+    where: { id: data.workspaceId },
+    select: { name: true },
+  })
+
+  const newRoleLabel = data.newRole.charAt(0) + data.newRole.slice(1).toLowerCase()
+
+  await createNotification({
+    userId: target.userId,
+    workspaceId: data.workspaceId,
+    type: 'ROLE_CHANGED',
+    title: `Your role was changed to ${newRoleLabel}`,
+    body: `Your role in ${workspace?.name ?? 'the workspace'} has been updated.`,
+    actionUrl: `/w/${data.workspaceSlug}/team`,
+  }).catch(() => {})
+
   revalidatePath(`/w/${data.workspaceSlug}/team`)
   return { success: true }
 }
@@ -185,9 +217,22 @@ export async function removeMember(data: {
     return { error: 'Cannot remove the workspace owner.' }
   }
 
+  const workspace = await prisma.workspace.findUnique({
+    where: { id: data.workspaceId },
+    select: { name: true },
+  })
+
   await prisma.workspaceMember.delete({
     where: { id: data.memberId },
   })
+
+  await createNotification({
+    userId: target.userId,
+    workspaceId: data.workspaceId,
+    type: 'MEMBER_REMOVED',
+    title: `You were removed from ${workspace?.name ?? 'a workspace'}`,
+    body: 'You no longer have access to this workspace.',
+  }).catch(() => {})
 
   revalidatePath(`/w/${data.workspaceSlug}/team`)
   return { success: true }

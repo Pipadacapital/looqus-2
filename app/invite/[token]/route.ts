@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
 import { ensureUserExists } from '@/lib/ensure-user'
+import { createNotification, createNotificationForMany } from '@/lib/notifications/create'
 
 export async function GET(
   request: NextRequest,
@@ -93,6 +94,55 @@ export async function GET(
       data: { status: 'ACCEPTED' },
     }),
   ])
+
+  const joinerName =
+    user.user_metadata?.full_name ??
+    user.user_metadata?.name ??
+    user.email ??
+    'Someone'
+
+  // Notify the joining user that they've been added
+  await createNotification({
+    userId: user.id,
+    workspaceId: invitation.workspaceId,
+    type: 'MEMBER_JOINED',
+    title: `Welcome to ${invitation.workspace.name}!`,
+    body: `You've joined as ${invitation.role.charAt(0) + invitation.role.slice(1).toLowerCase()}.`,
+    actionUrl: `/w/${invitation.workspace.slug}/dashboard`,
+  }).catch(() => {})
+
+  // Notify the inviter that their invite was accepted
+  await createNotification({
+    userId: invitation.invitedById,
+    workspaceId: invitation.workspaceId,
+    type: 'INVITE_ACCEPTED',
+    title: `${joinerName} accepted your invitation`,
+    body: `${joinerName} joined ${invitation.workspace.name}.`,
+    actionUrl: `/w/${invitation.workspace.slug}/team`,
+  }).catch(() => {})
+
+  // Notify workspace admins/owners about the new member
+  const admins = await prisma.workspaceMember.findMany({
+    where: {
+      workspaceId: invitation.workspaceId,
+      role: { in: ['OWNER', 'ADMIN'] },
+      userId: { notIn: [invitation.invitedById, user.id] },
+    },
+    select: { userId: true },
+  })
+
+  if (admins.length > 0) {
+    await createNotificationForMany(
+      admins.map((a) => a.userId),
+      {
+        workspaceId: invitation.workspaceId,
+        type: 'MEMBER_JOINED',
+        title: `${joinerName} joined ${invitation.workspace.name}`,
+        body: `A new member joined the workspace.`,
+        actionUrl: `/w/${invitation.workspace.slug}/team`,
+      }
+    ).catch(() => {})
+  }
 
   return NextResponse.redirect(
     new URL(`/w/${invitation.workspace.slug}/dashboard`, request.url)

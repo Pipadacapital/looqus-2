@@ -61,11 +61,21 @@ export async function completeOnboarding(data: {
     : null
 
   await prisma.$transaction(async (tx) => {
-    await tx.user.update({
+    await tx.user.upsert({
       where: { id: user.id },
-      data: {
+      update: {
         fullName: fullName || undefined,
         jobRole: role || undefined,
+      },
+      create: {
+        id: user.id,
+        email: user.email!,
+        fullName: fullName || null,
+        jobRole: role || null,
+        avatarUrl:
+          user.user_metadata?.avatar_url ??
+          user.user_metadata?.picture ??
+          null,
       },
     })
 

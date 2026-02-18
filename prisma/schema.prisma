@@ -44,6 +44,19 @@ enum ConnectionStatus {
   REVOKED
 }
 
+enum NotificationType {
+  WORKSPACE_INVITE
+  INVITE_ACCEPTED
+  MEMBER_JOINED
+  MEMBER_REMOVED
+  ROLE_CHANGED
+  SHOPIFY_CONNECTED
+  SHOPIFY_DISCONNECTED
+  SYNC_COMPLETED
+  SYNC_FAILED
+  SYSTEM
+}
+
 
 
 model User {
@@ -61,6 +74,7 @@ model User {
   invitationsSent Invitation[]      @relation("InvitedBy")
   ownedWorkspaces Workspace[]       @relation("WorkspaceCreator")
   auditLogs       AuditLog[]
+  notifications   Notification[]
 
   @@map("users")
 }
@@ -90,6 +104,7 @@ model Workspace {
   invitations        Invitation[]
   shopifyConnections ShopifyConnection[]
   auditLogs          AuditLog[]
+  notifications      Notification[]
 
   @@map("workspaces")
 }
@@ -185,4 +200,29 @@ model AuditLog {
   @@index([userId, createdAt])
   @@index([entityType, entityId])
   @@map("audit_logs")
+}
+
+// ─── Notification ────────────────────────────────────────────────────────────
+// In-app notifications for users across all event types.
+
+model Notification {
+  id          String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String           @map("user_id") @db.Uuid
+  workspaceId String?          @map("workspace_id") @db.Uuid
+  type        NotificationType
+  title       String
+  body        String?
+  actionUrl   String?          @map("action_url")
+  read        Boolean          @default(false)
+  metadata    Json?
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  readAt    DateTime? @map("read_at")
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+
+  @@index([userId, read, createdAt])
+  @@index([workspaceId, createdAt])
+  @@map("notifications")
 }
