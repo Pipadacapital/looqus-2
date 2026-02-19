@@ -1,8 +1,14 @@
 'use server'
 
+import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
+import {
+  normalizeShopDomain,
+  generateNonce,
+  buildAuthUrl,
+} from '@/lib/shopify/client'
 
 export type OnboardingResult = {
   error?: string
@@ -17,6 +23,8 @@ export async function completeOnboarding(data: {
   industry: string
   monthlyRevenue: string
   storeUrl: string
+  shopifyClientId: string
+  shopifyClientSecret: string
   connectShopify: boolean
 }): Promise<OnboardingResult> {
   const supabase = await createClient()
@@ -28,8 +36,18 @@ export async function completeOnboarding(data: {
     redirect('/auth/login')
   }
 
-  const { fullName, role, brandName, slug, industry, monthlyRevenue, storeUrl, connectShopify } =
-    data
+  const {
+    fullName,
+    role,
+    brandName,
+    slug,
+    industry,
+    monthlyRevenue,
+    storeUrl,
+    shopifyClientId,
+    shopifyClientSecret,
+    connectShopify,
+  } = data
 
   if (!brandName.trim()) {
     return { error: 'Brand name is required.' }
@@ -60,6 +78,13 @@ export async function completeOnboarding(data: {
     ? storeUrl.replace(/\.myshopify\.com$/i, '').trim().toLowerCase()
     : null
 
+  const wantsShopify =
+    connectShopify && normalizedStoreUrl && shopifyClientId && shopifyClientSecret
+
+  const shopDomain = normalizedStoreUrl
+    ? normalizeShopDomain(normalizedStoreUrl)
+    : null
+
   await prisma.$transaction(async (tx) => {
     await tx.user.upsert({
       where: { id: user.id },
@@ -85,9 +110,7 @@ export async function completeOnboarding(data: {
         slug: normalizedSlug,
         industry: industry || null,
         monthlyRevenue: monthlyRevenue || null,
-        storeUrl: normalizedStoreUrl
-          ? `${normalizedStoreUrl}.myshopify.com`
-          : null,
+        storeUrl: shopDomain ?? null,
         createdById: user.id,
       },
     })
@@ -99,14 +122,44 @@ export async function completeOnboarding(data: {
         role: 'OWNER',
       },
     })
+
+    // If connecting Shopify, save a pending connection with credentials
+    if (wantsShopify && shopDomain) {
+      await tx.shopifyConnection.create({
+        data: {
+          workspaceId: workspace.id,
+          shopDomain,
+          clientId: shopifyClientId,
+          clientSecret: shopifyClientSecret,
+          scopes: [],
+          status: 'DISCONNECTED',
+        },
+      })
+    }
   })
 
-  // If user wants to connect Shopify, return the OAuth initiation URL
-  // instead of redirecting to the dashboard
-  if (connectShopify && normalizedStoreUrl) {
-    const shopDomain = `${normalizedStoreUrl}.myshopify.com`
-    const shopifyAuthUrl = `/api/shopify/auth?shop=${encodeURIComponent(shopDomain)}&workspaceSlug=${encodeURIComponent(normalizedSlug)}`
-    return { shopifyAuthUrl }
+  // If user wants to connect Shopify, set OAuth state cookie and return the auth URL
+  if (wantsShopify && shopDomain) {
+    const nonce = generateNonce()
+    const authUrl = buildAuthUrl(shopDomain, shopifyClientId, nonce)
+
+    const oauthState = JSON.stringify({
+      nonce,
+      workspaceSlug: normalizedSlug,
+      userId: user.id,
+      shopDomain,
+    })
+
+    const cookieStore = await cookies()
+    cookieStore.set('shopify_oauth_state', oauthState, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/',
+      maxAge: 600,
+    })
+
+    return { shopifyAuthUrl: authUrl }
   }
 
   redirect(`/w/${normalizedSlug}/dashboard`)

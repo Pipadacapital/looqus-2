@@ -5,7 +5,7 @@ import {
   validateShopDomain,
   exchangeCodeForToken,
   fetchShopInfo,
-} from '@/lib/shopify/oauth'
+} from '@/lib/shopify/client'
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
@@ -14,33 +14,19 @@ export async function GET(request: NextRequest) {
   const state = searchParams.get('state')
   const hmac = searchParams.get('hmac')
 
-  // ── Validate required params ─────────────────────────────────────────────
   if (!code || !shop || !state || !hmac) {
     return NextResponse.redirect(
       new URL('/onboarding?error=missing_params', request.url)
     )
   }
 
-  // ── Validate shop domain format ──────────────────────────────────────────
   if (!validateShopDomain(shop)) {
     return NextResponse.redirect(
       new URL('/onboarding?error=invalid_shop', request.url)
     )
   }
 
-  // ── Validate HMAC signature ──────────────────────────────────────────────
-  const queryParams: Record<string, string> = {}
-  searchParams.forEach((value, key) => {
-    queryParams[key] = value
-  })
-
-  if (!validateHmac(queryParams)) {
-    return NextResponse.redirect(
-      new URL('/onboarding?error=invalid_signature', request.url)
-    )
-  }
-
-  // ── Validate OAuth state cookie ──────────────────────────────────────────
+  // Validate OAuth state cookie
   const oauthStateCookie = request.cookies.get('shopify_oauth_state')?.value
   if (!oauthStateCookie) {
     return NextResponse.redirect(
@@ -63,76 +49,103 @@ export async function GET(request: NextRequest) {
     )
   }
 
-  // Verify nonce matches the state parameter
   if (oauthState.nonce !== state) {
     return NextResponse.redirect(
       new URL('/onboarding?error=state_mismatch', request.url)
     )
   }
 
-  // Verify shop domain matches
   if (oauthState.shopDomain !== shop) {
     return NextResponse.redirect(
       new URL('/onboarding?error=shop_mismatch', request.url)
     )
   }
 
-  // ── Exchange code for access token ───────────────────────────────────────
-  try {
-    const { accessToken, scope } = await exchangeCodeForToken(shop, code)
+  // Look up the pending connection to get per-store Client ID + Secret
+  const workspace = await prisma.workspace.findUnique({
+    where: { slug: oauthState.workspaceSlug },
+  })
 
-    // Fetch the Shopify store ID
+  if (!workspace) {
+    return NextResponse.redirect(
+      new URL('/onboarding?error=workspace_not_found', request.url)
+    )
+  }
+
+  const pendingConnection = await prisma.shopifyConnection.findUnique({
+    where: {
+      workspaceId_shopDomain: {
+        workspaceId: workspace.id,
+        shopDomain: shop,
+      },
+    },
+    select: { clientId: true, clientSecret: true },
+  })
+
+  if (!pendingConnection) {
+    return NextResponse.redirect(
+      new URL(
+        `/w/${oauthState.workspaceSlug}/dashboard?error=connection_not_found`,
+        request.url
+      )
+    )
+  }
+
+  // Validate HMAC using the per-store client secret
+  const queryParams: Record<string, string> = {}
+  searchParams.forEach((value, key) => {
+    queryParams[key] = value
+  })
+
+  if (!validateHmac(queryParams, pendingConnection.clientSecret)) {
+    return NextResponse.redirect(
+      new URL(
+        `/w/${oauthState.workspaceSlug}/dashboard?error=invalid_signature`,
+        request.url
+      )
+    )
+  }
+
+  // Exchange code for a permanent offline access token
+  try {
+    const { accessToken, scope } = await exchangeCodeForToken(
+      shop,
+      code,
+      pendingConnection.clientId,
+      pendingConnection.clientSecret
+    )
+
     let shopifyStoreId: string | null = null
     try {
       const shopInfo = await fetchShopInfo(shop, accessToken)
       shopifyStoreId = shopInfo.id
     } catch {
-      // Non-critical: store ID is optional
+      // Non-critical
     }
 
-    // Find the workspace
-    const workspace = await prisma.workspace.findUnique({
-      where: { slug: oauthState.workspaceSlug },
-    })
-
-    if (!workspace) {
-      return NextResponse.redirect(
-        new URL('/onboarding?error=workspace_not_found', request.url)
-      )
-    }
-
-    // Create or update the Shopify connection
-    await prisma.shopifyConnection.upsert({
+    await prisma.shopifyConnection.update({
       where: {
         workspaceId_shopDomain: {
           workspaceId: workspace.id,
           shopDomain: shop,
         },
       },
-      create: {
-        workspaceId: workspace.id,
-        shopDomain: shop,
+      data: {
         shopifyStoreId,
         accessToken,
-        scopes: scope.split(','),
-        status: 'CONNECTED',
-      },
-      update: {
-        shopifyStoreId,
-        accessToken,
+        tokenExpiresAt: null,
         scopes: scope.split(','),
         status: 'CONNECTED',
         installedAt: new Date(),
       },
     })
 
-    // Also update the workspace storeUrl for display purposes
     await prisma.workspace.update({
       where: { id: workspace.id },
       data: { storeUrl: shop },
     })
 
-    // Clear the OAuth state cookie and redirect to dashboard
+    // Clear cookie and redirect to dashboard
     const response = NextResponse.redirect(
       new URL(`/w/${oauthState.workspaceSlug}/dashboard`, request.url)
     )

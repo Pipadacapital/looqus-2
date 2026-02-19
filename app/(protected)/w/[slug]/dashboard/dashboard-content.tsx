@@ -6,7 +6,7 @@ import {
   IconCheck,
   IconExternalLink,
   IconRefresh,
-  IconArrowRight,
+  IconLoader2,
 } from '@tabler/icons-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -43,9 +43,18 @@ export function DashboardContent({
   shopifyConnection,
 }: DashboardContentProps) {
   const [storeHandle, setStoreHandle] = useState('')
+  const [clientId, setClientId] = useState('')
+  const [clientSecret, setClientSecret] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [connecting, setConnecting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  const handleConnect = () => {
+  const canConnect =
+    storeHandle.trim() && clientId.trim() && clientSecret.trim()
+
+  const handleConnect = async () => {
+    if (!canConnect) return
+
     const cleaned = storeHandle
       .trim()
       .toLowerCase()
@@ -53,11 +62,35 @@ export function DashboardContent({
       .replace(/^https?:\/\//, '')
       .split('/')[0]
 
-    if (!cleaned) return
+    setConnecting(true)
+    setError(null)
 
-    window.location.href = `/api/shopify/auth?shop=${encodeURIComponent(
-      cleaned + '.myshopify.com'
-    )}&workspaceSlug=${encodeURIComponent(workspaceSlug)}`
+    try {
+      const res = await fetch('/api/shopify/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          shopDomain: cleaned,
+          clientId: clientId.trim(),
+          clientSecret: clientSecret.trim(),
+          workspaceSlug,
+        }),
+      })
+
+      const data = await res.json()
+
+      if (!res.ok) {
+        setError(data.error || 'Failed to connect store')
+        return
+      }
+
+      // Redirect to Shopify OAuth authorization page
+      window.location.href = data.authUrl
+    } catch {
+      setError('Network error. Please try again.')
+    } finally {
+      setConnecting(false)
+    }
   }
 
   return (
@@ -155,55 +188,100 @@ export function DashboardContent({
                     Connect Shopify store
                   </Button>
                 </DialogTrigger>
-                <DialogContent className="sm:max-w-md">
+                <DialogContent className="sm:max-w-lg">
                   <DialogHeader>
                     <DialogTitle>Connect your Shopify store</DialogTitle>
                     <DialogDescription>
-                      Enter your store handle and we&apos;ll redirect you to
-                      Shopify to authorize access.
+                      Enter your store handle and the app credentials from the{' '}
+                      <a
+                        href="https://dev.shopify.com/dashboard/"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-primary underline underline-offset-2"
+                      >
+                        Shopify Dev Dashboard
+                      </a>
+                      .
                     </DialogDescription>
                   </DialogHeader>
 
-                  <div className="grid gap-3 py-2">
-                    <Label htmlFor="store-handle">Store URL</Label>
-                    <div className="flex items-center">
-                      <Input
-                        id="store-handle"
-                        placeholder="your-store"
-                        value={storeHandle}
-                        onChange={(e) => setStoreHandle(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' && storeHandle.trim()) {
-                            handleConnect()
-                          }
-                        }}
-                        className="rounded-r-none"
-                        autoFocus
-                      />
-                      <span className="flex h-9 items-center rounded-r-md border border-l-0 bg-muted px-3 text-sm text-muted-foreground">
-                        .myshopify.com
-                      </span>
+                  <div className="grid gap-4 py-2">
+                    <div className="grid gap-2">
+                      <Label htmlFor="store-handle">Store URL</Label>
+                      <div className="flex items-center">
+                        <Input
+                          id="store-handle"
+                          placeholder="your-store"
+                          value={storeHandle}
+                          onChange={(e) => setStoreHandle(e.target.value)}
+                          className="rounded-r-none"
+                          autoFocus
+                        />
+                        <span className="flex h-9 items-center rounded-r-md border border-l-0 bg-muted px-3 text-sm text-muted-foreground">
+                          .myshopify.com
+                        </span>
+                      </div>
                     </div>
-                    <p className="text-xs text-muted-foreground">
-                      You can find this in your Shopify admin URL, e.g.{' '}
-                      <span className="font-medium">your-store</span>
-                      .myshopify.com
-                    </p>
+
+                    <div className="grid gap-2">
+                      <Label htmlFor="dash-client-id">Client ID</Label>
+                      <Input
+                        id="dash-client-id"
+                        placeholder="Paste your app's Client ID"
+                        value={clientId}
+                        onChange={(e) => setClientId(e.target.value)}
+                      />
+                    </div>
+
+                    <div className="grid gap-2">
+                      <Label htmlFor="dash-client-secret">Client Secret</Label>
+                      <Input
+                        id="dash-client-secret"
+                        type="password"
+                        placeholder="Paste your app's Client Secret"
+                        value={clientSecret}
+                        onChange={(e) => setClientSecret(e.target.value)}
+                      />
+                    </div>
+
+                    <div className="rounded-lg border bg-muted/50 p-3">
+                      <p className="text-xs font-medium mb-1.5">How to get credentials</p>
+                      <ol className="text-xs text-muted-foreground space-y-0.5 list-decimal list-inside">
+                        <li>Create an app in the <a href="https://dev.shopify.com/dashboard/" target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2">Dev Dashboard</a></li>
+                        <li>Configure access scopes (read_orders, read_products, etc.)</li>
+                        <li>Install the app on your store</li>
+                        <li>Copy Client ID &amp; Secret from Settings</li>
+                      </ol>
+                    </div>
+
+                    {error && (
+                      <p className="text-sm text-destructive">{error}</p>
+                    )}
                   </div>
 
                   <DialogFooter>
                     <Button
                       variant="ghost"
                       onClick={() => setDialogOpen(false)}
+                      disabled={connecting}
                     >
                       Cancel
                     </Button>
                     <Button
                       onClick={handleConnect}
-                      disabled={!storeHandle.trim()}
+                      disabled={!canConnect || connecting}
                     >
-                      Continue to Shopify
-                      <IconArrowRight className="ml-1.5 h-4 w-4" />
+                      {connecting ? (
+                        <>
+                          <IconLoader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                          Redirecting to Shopify...
+                        </>
+                      ) : (
+                        <>
+                          <IconPlugConnected className="mr-1.5 h-4 w-4" />
+                          Continue to Shopify
+                        </>
+                      )}
                     </Button>
                   </DialogFooter>
                 </DialogContent>

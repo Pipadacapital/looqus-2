@@ -80,6 +80,8 @@ export function OnboardingForm({ defaultFullName, email }: OnboardingFormProps) 
   const [industry, setIndustry] = useState('')
   const [monthlyRevenue, setMonthlyRevenue] = useState('')
   const [storeUrl, setStoreUrl] = useState('')
+  const [shopifyClientId, setShopifyClientId] = useState('')
+  const [shopifyClientSecret, setShopifyClientSecret] = useState('')
 
   useEffect(() => {
     if (!slugTouched) {
@@ -118,6 +120,8 @@ export function OnboardingForm({ defaultFullName, email }: OnboardingFormProps) 
         industry,
         monthlyRevenue,
         storeUrl: storeUrl.trim(),
+        shopifyClientId: shopifyClientId.trim(),
+        shopifyClientSecret: shopifyClientSecret.trim(),
         connectShopify,
       })
       if (result?.shopifyAuthUrl) {
@@ -330,36 +334,67 @@ export function OnboardingForm({ defaultFullName, email }: OnboardingFormProps) 
             <div>
               <h2 className="text-lg font-semibold">Connect your Shopify store</h2>
               <p className="text-sm text-muted-foreground">
-                Enter your store handle and we&apos;ll redirect you to Shopify
-                to authorize access. You can also do this later from settings.
+                Create a custom app in your{' '}
+                <a
+                  href="https://dev.shopify.com/dashboard/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-primary underline underline-offset-2"
+                >
+                  Shopify Dev Dashboard
+                </a>
+                , configure the required scopes, install it on your store, then
+                paste the credentials below.
               </p>
             </div>
 
-            <div className="rounded-lg border-2 border-dashed p-6">
-              <div className="flex flex-col items-center text-center gap-4">
-                <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-[#96bf48]/10">
-                 
-                </div>
-                <div>
-                  <p className="font-medium">Shopify Store</p>
-                  <p className="text-sm text-muted-foreground">
-                    Connect your store to pull in orders, products, and customer data.
-                  </p>
-                </div>
-                <div className="w-full max-w-sm">
-                  <div className="flex items-center">
-                    <Input
-                      placeholder="your-store"
-                      value={storeUrl}
-                      onChange={(e) => setStoreUrl(e.target.value)}
-                      className="rounded-r-none"
-                    />
-                    <span className="flex h-9 items-center rounded-r-md border border-l-0 bg-muted px-3 text-sm text-muted-foreground">
-                      .myshopify.com
-                    </span>
-                  </div>
+            <div className="space-y-4">
+              <div className="grid gap-2">
+                <Label htmlFor="onb-store-handle">Store URL</Label>
+                <div className="flex items-center">
+                  <Input
+                    id="onb-store-handle"
+                    placeholder="your-store"
+                    value={storeUrl}
+                    onChange={(e) => setStoreUrl(e.target.value)}
+                    className="rounded-r-none"
+                  />
+                  <span className="flex h-9 items-center rounded-r-md border border-l-0 bg-muted px-3 text-sm text-muted-foreground">
+                    .myshopify.com
+                  </span>
                 </div>
               </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="onb-client-id">Client ID</Label>
+                <Input
+                  id="onb-client-id"
+                  placeholder="Paste your app's Client ID"
+                  value={shopifyClientId}
+                  onChange={(e) => setShopifyClientId(e.target.value)}
+                />
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="onb-client-secret">Client Secret</Label>
+                <Input
+                  id="onb-client-secret"
+                  type="password"
+                  placeholder="Paste your app's Client Secret"
+                  value={shopifyClientSecret}
+                  onChange={(e) => setShopifyClientSecret(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="rounded-lg border bg-muted/50 p-4">
+              <p className="text-xs font-medium mb-2">How to get your credentials</p>
+              <ol className="text-xs text-muted-foreground space-y-1 list-decimal list-inside">
+                <li>Open the <a href="https://dev.shopify.com/dashboard/" target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2">Shopify Dev Dashboard</a> and create a new app</li>
+                <li>Under <span className="font-medium text-foreground">Configuration</span>, add the required access scopes (read_orders, read_products, etc.)</li>
+                <li>Install the app on your store</li>
+                <li>Go to <span className="font-medium text-foreground">Settings</span> and copy the Client ID and Client Secret</li>
+              </ol>
             </div>
 
             <p className="text-center text-xs text-muted-foreground">
@@ -391,7 +426,7 @@ export function OnboardingForm({ defaultFullName, email }: OnboardingFormProps) 
             </Button>
           ) : (
             <div className="flex items-center gap-2">
-              {storeUrl.trim() && (
+              {storeUrl.trim() && shopifyClientId.trim() && shopifyClientSecret.trim() && (
                 <Button
                   variant="ghost"
                   onClick={() => handleSubmit(false)}
@@ -401,12 +436,16 @@ export function OnboardingForm({ defaultFullName, email }: OnboardingFormProps) 
                 </Button>
               )}
               <Button
-                onClick={() => handleSubmit(!!storeUrl.trim())}
+                onClick={() =>
+                  handleSubmit(
+                    !!(storeUrl.trim() && shopifyClientId.trim() && shopifyClientSecret.trim())
+                  )
+                }
                 disabled={isPending}
               >
                 {isPending
                   ? 'Setting up...'
-                  : storeUrl.trim()
+                  : storeUrl.trim() && shopifyClientId.trim() && shopifyClientSecret.trim()
                     ? 'Connect & launch'
                     : 'Skip & launch'}
                 <IconArrowRight className="ml-1.5 h-4 w-4" />

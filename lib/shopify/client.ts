@@ -1,8 +1,9 @@
 import crypto from 'crypto'
 
-const SHOPIFY_API_KEY = process.env.SHOPIFY_API_KEY!
-const SHOPIFY_API_SECRET = process.env.SHOPIFY_API_SECRET!
-const SHOPIFY_SCOPES = process.env.SHOPIFY_SCOPES || 'read_orders,read_products,read_customers,read_analytics,read_inventory'
+const SHOPIFY_API_VERSION = '2025-01'
+
+const DEFAULT_SCOPES =
+  'read_orders,read_all_orders,read_products,read_customers,read_analytics,read_inventory,read_reports'
 
 /**
  * Validates that a shop domain matches *.myshopify.com format.
@@ -17,16 +18,11 @@ export function validateShopDomain(shop: string): boolean {
  */
 export function normalizeShopDomain(input: string): string {
   let shop = input.trim().toLowerCase()
-
-  // Strip protocol
   shop = shop.replace(/^https?:\/\//, '')
-  // Strip trailing slash or path
   shop = shop.split('/')[0]
-  // Append .myshopify.com if not present
   if (!shop.endsWith('.myshopify.com')) {
     shop = `${shop}.myshopify.com`
   }
-
   return shop
 }
 
@@ -38,14 +34,18 @@ export function generateNonce(): string {
 }
 
 /**
- * Builds the Shopify OAuth authorization URL.
+ * Builds the Shopify OAuth authorization URL using per-store credentials.
  */
-export function buildAuthUrl(shop: string, state: string): string {
+export function buildAuthUrl(
+  shop: string,
+  clientId: string,
+  state: string
+): string {
   const redirectUri = `${process.env.NEXT_PUBLIC_APP_URL}/api/shopify/callback`
 
   const params = new URLSearchParams({
-    client_id: SHOPIFY_API_KEY,
-    scope: SHOPIFY_SCOPES,
+    client_id: clientId,
+    scope: DEFAULT_SCOPES,
     redirect_uri: redirectUri,
     state,
   })
@@ -55,24 +55,23 @@ export function buildAuthUrl(shop: string, state: string): string {
 
 /**
  * Validates the HMAC signature that Shopify sends on the OAuth callback.
- * Shopify signs the query parameters (excluding `hmac` and `signature`)
- * using the app's API secret.
+ * Uses the per-store client secret for validation.
  */
-export function validateHmac(query: Record<string, string>): boolean {
+export function validateHmac(
+  query: Record<string, string>,
+  clientSecret: string
+): boolean {
   const hmac = query.hmac
   if (!hmac) return false
 
-  // Build the message from sorted query params, excluding hmac and signature
   const entries = Object.entries(query)
     .filter(([key]) => key !== 'hmac' && key !== 'signature')
     .sort(([a], [b]) => a.localeCompare(b))
 
-  const message = entries
-    .map(([key, value]) => `${key}=${value}`)
-    .join('&')
+  const message = entries.map(([key, value]) => `${key}=${value}`).join('&')
 
   const generatedHmac = crypto
-    .createHmac('sha256', SHOPIFY_API_SECRET)
+    .createHmac('sha256', clientSecret)
     .update(message)
     .digest('hex')
 
@@ -83,29 +82,30 @@ export function validateHmac(query: Record<string, string>): boolean {
 }
 
 /**
- * Exchanges the temporary authorization code for a permanent access token.
- * Returns the access token, granted scopes, and optional store info.
+ * Exchanges the temporary authorization code for a permanent offline access token.
+ * Uses per-store client credentials (Client ID + Secret from Dev Dashboard).
  */
 export async function exchangeCodeForToken(
   shop: string,
-  code: string
-): Promise<{
-  accessToken: string
-  scope: string
-}> {
+  code: string,
+  clientId: string,
+  clientSecret: string
+): Promise<{ accessToken: string; scope: string }> {
   const response = await fetch(`https://${shop}/admin/oauth/access_token`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      client_id: SHOPIFY_API_KEY,
-      client_secret: SHOPIFY_API_SECRET,
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
       code,
     }),
   })
 
   if (!response.ok) {
     const text = await response.text()
-    throw new Error(`Shopify token exchange failed (${response.status}): ${text}`)
+    throw new Error(
+      `Shopify token exchange failed (${response.status}): ${text}`
+    )
   }
 
   const data = await response.json()
@@ -117,18 +117,18 @@ export async function exchangeCodeForToken(
 }
 
 /**
- * Fetches basic shop info using the access token.
- * Used to retrieve the Shopify store ID after connecting.
+ * Fetches basic shop info using an access token.
  */
 export async function fetchShopInfo(
-  shop: string,
+  shopDomain: string,
   accessToken: string
 ): Promise<{ id: string; name: string }> {
-  const response = await fetch(`https://${shop}/admin/api/2024-01/shop.json`, {
-    headers: {
-      'X-Shopify-Access-Token': accessToken,
-    },
-  })
+  const response = await fetch(
+    `https://${shopDomain}/admin/api/${SHOPIFY_API_VERSION}/shop.json`,
+    {
+      headers: { 'X-Shopify-Access-Token': accessToken },
+    }
+  )
 
   if (!response.ok) {
     throw new Error(`Failed to fetch shop info: ${response.status}`)

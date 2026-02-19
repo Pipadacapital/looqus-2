@@ -161,7 +161,10 @@ model ShopifyConnection {
   workspaceId    String           @map("workspace_id") @db.Uuid
   shopDomain     String           @map("shop_domain")
   shopifyStoreId String?          @map("shopify_store_id")
-  accessToken    String           @map("access_token")
+  clientId       String           @map("client_id")
+  clientSecret   String           @map("client_secret")
+  accessToken    String?          @map("access_token")
+  tokenExpiresAt DateTime?        @map("token_expires_at")
   scopes         String[]
   status         ConnectionStatus @default(CONNECTED)
 
