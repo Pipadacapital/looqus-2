@@ -52,9 +52,18 @@ enum NotificationType {
   ROLE_CHANGED
   SHOPIFY_CONNECTED
   SHOPIFY_DISCONNECTED
+  META_ADS_CONNECTED
+  META_ADS_DISCONNECTED
+  GOOGLE_ADS_CONNECTED
+  GOOGLE_ADS_DISCONNECTED
   SYNC_COMPLETED
   SYNC_FAILED
   SYSTEM
+}
+
+enum OAuthProvider {
+  META
+  GOOGLE
 }
 
 
@@ -100,11 +109,13 @@ model Workspace {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  members            WorkspaceMember[]
-  invitations        Invitation[]
-  shopifyConnections ShopifyConnection[]
-  auditLogs          AuditLog[]
-  notifications      Notification[]
+  members              WorkspaceMember[]
+  invitations          Invitation[]
+  shopifyConnections   ShopifyConnection[]
+  metaAdsConnections   MetaAdsConnection[]
+  googleAdsConnections GoogleAdsConnection[]
+  auditLogs            AuditLog[]
+  notifications        Notification[]
 
   @@map("workspaces")
 }
@@ -176,6 +187,134 @@ model ShopifyConnection {
 
   @@unique([workspaceId, shopDomain])
   @@map("shopify_connections")
+}
+
+// ─── OAuth State ────────────────────────────────────────────────────────────
+// Server-side CSRF protection for OAuth flows. TTL ~10 minutes.
+
+model OAuthState {
+  id           String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  provider     OAuthProvider
+  workspaceId  String        @map("workspace_id") @db.Uuid
+  userId       String        @map("user_id") @db.Uuid
+  stateHash    String        @unique @map("state_hash")
+  codeVerifier String?       @map("code_verifier")
+  expiresAt    DateTime      @map("expires_at")
+  createdAt    DateTime      @default(now()) @map("created_at")
+
+  @@index([stateHash])
+  @@index([expiresAt])
+  @@map("oauth_states")
+}
+
+// ─── Meta Ads Connection ────────────────────────────────────────────────────
+
+model MetaAdsConnection {
+  id                  String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId         String           @map("workspace_id") @db.Uuid
+  accessToken         String           @map("access_token")
+  tokenExpiresAt      DateTime?        @map("token_expires_at")
+  scopes              String[]
+  adAccountIds        String[]         @map("ad_account_ids")
+  selectedAdAccountId String?          @map("selected_ad_account_id")
+  businessId          String?          @map("business_id")
+  metaUserId          String?          @map("meta_user_id")
+  status              ConnectionStatus @default(CONNECTED)
+
+  lastSyncAt    DateTime?        @map("last_sync_at")
+  lastSyncError String?          @map("last_sync_error")
+  createdAt     DateTime         @default(now()) @map("created_at")
+  updatedAt     DateTime         @updatedAt @map("updated_at")
+
+  workspace     Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  dailyMetrics  MetaAdsDailyMetric[]
+
+  @@unique([workspaceId])
+  @@map("meta_ads_connections")
+}
+
+// ─── Google Ads Connection ──────────────────────────────────────────────────
+
+model GoogleAdsConnection {
+  id                 String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId        String           @map("workspace_id") @db.Uuid
+  refreshToken       String           @map("refresh_token")
+  scopes             String[]
+  customerIds        String[]         @map("customer_ids")
+  selectedCustomerId String?          @map("selected_customer_id")
+  loginCustomerId    String?          @map("login_customer_id")
+  googleEmail        String?          @map("google_email")
+  status             ConnectionStatus @default(CONNECTED)
+
+  lastSyncAt       DateTime?        @map("last_sync_at")
+  lastSyncError    String?          @map("last_sync_error")
+  createdAt        DateTime         @default(now()) @map("created_at")
+  updatedAt        DateTime         @updatedAt @map("updated_at")
+
+  workspace        Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  dailyMetrics     GoogleAdsDailyMetric[]
+
+  @@unique([workspaceId])
+  @@map("google_ads_connections")
+}
+
+// ─── Meta Ads Daily Metric ──────────────────────────────────────────────────
+
+model MetaAdsDailyMetric {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  connectionId   String   @map("connection_id") @db.Uuid
+  adAccountId    String   @map("ad_account_id")
+  campaignId     String   @map("campaign_id")
+  campaignName   String   @map("campaign_name")
+  adsetId        String?  @map("adset_id")
+  adsetName      String?  @map("adset_name")
+  date           DateTime @db.Date
+  impressions    Int      @default(0)
+  clicks         Int      @default(0)
+  spend          Decimal  @default(0) @db.Decimal(12, 4)
+  conversions    Int      @default(0)
+  revenue        Decimal  @default(0) @db.Decimal(12, 4)
+  ctr            Decimal  @default(0) @db.Decimal(8, 4)
+  cpc            Decimal  @default(0) @db.Decimal(8, 4)
+  cpm            Decimal  @default(0) @db.Decimal(8, 4)
+  rawJson        Json?    @map("raw_json")
+
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  connection     MetaAdsConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@unique([connectionId, adAccountId, campaignId, date])
+  @@index([connectionId, date])
+  @@map("meta_ads_daily_metrics")
+}
+
+// ─── Google Ads Daily Metric ────────────────────────────────────────────────
+
+model GoogleAdsDailyMetric {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  connectionId   String   @map("connection_id") @db.Uuid
+  customerId     String   @map("customer_id")
+  campaignId     String   @map("campaign_id")
+  campaignName   String   @map("campaign_name")
+  adGroupId      String?  @map("ad_group_id")
+  adGroupName    String?  @map("ad_group_name")
+  date           DateTime @db.Date
+  impressions    Int      @default(0)
+  clicks         Int      @default(0)
+  spend          Decimal  @default(0) @db.Decimal(12, 4)
+  conversions    Decimal  @default(0) @db.Decimal(12, 4)
+  conversionValue Decimal @default(0) @map("conversion_value") @db.Decimal(12, 4)
+  ctr            Decimal  @default(0) @db.Decimal(8, 4)
+  averageCpc     Decimal  @default(0) @map("average_cpc") @db.Decimal(8, 4)
+  rawJson        Json?    @map("raw_json")
+
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  connection     GoogleAdsConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@unique([connectionId, customerId, campaignId, date])
+  @@index([connectionId, date])
+  @@map("google_ads_daily_metrics")
 }
 
 // ─── Audit Log ──────────────────────────────────────────────────────────────
