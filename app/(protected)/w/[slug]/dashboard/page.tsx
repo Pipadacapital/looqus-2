@@ -32,16 +32,47 @@ export default async function DashboardPage({
         },
         take: 1,
       },
+      meta_ads_connections: {
+        select: {
+          id: true,
+          ad_account_ids: true,
+          selected_ad_account_id: true,
+          meta_user_id: true,
+          status: true,
+          last_sync_at: true,
+          last_sync_error: true,
+          created_at: true,
+        },
+      },
+      google_ads_connections: {
+        select: {
+          id: true,
+          customer_ids: true,
+          selected_customer_id: true,
+          google_email: true,
+          status: true,
+          last_sync_at: true,
+          last_sync_error: true,
+          created_at: true,
+        },
+      },
     },
   })
 
   if (!workspace) redirect('/')
 
   const connection = workspace.shopifyConnections[0] ?? null
+  const metaConnectionRaw = workspace.meta_ads_connections
+  const metaConnection =
+    metaConnectionRaw?.status === 'CONNECTED' ? metaConnectionRaw : null
+  const googleConnectionRaw = workspace.google_ads_connections
+  const googleConnection =
+    googleConnectionRaw?.status === 'CONNECTED' ? googleConnectionRaw : null
 
   return (
     <DashboardContent
       workspaceSlug={slug}
+      workspaceId={workspace.id}
       workspaceName={workspace.name}
       shopifyConnection={
         connection
@@ -51,6 +82,34 @@ export default async function DashboardPage({
               status: connection.status,
               installedAt: connection.installedAt.toISOString(),
               lastSyncAt: connection.lastSyncAt?.toISOString() ?? null,
+            }
+          : null
+      }
+      metaConnection={
+        metaConnection
+          ? {
+              id: metaConnection.id,
+              adAccountIds: metaConnection.ad_account_ids,
+              selectedAdAccountId: metaConnection.selected_ad_account_id,
+              metaUserId: metaConnection.meta_user_id,
+              status: metaConnection.status,
+              lastSyncAt: metaConnection.last_sync_at?.toISOString() ?? null,
+              lastSyncError: metaConnection.last_sync_error,
+              createdAt: metaConnection.created_at.toISOString(),
+            }
+          : null
+      }
+      googleConnection={
+        googleConnection
+          ? {
+              id: googleConnection.id,
+              customerIds: googleConnection.customer_ids,
+              selectedCustomerId: googleConnection.selected_customer_id,
+              googleEmail: googleConnection.google_email,
+              status: googleConnection.status,
+              lastSyncAt: googleConnection.last_sync_at?.toISOString() ?? null,
+              lastSyncError: googleConnection.last_sync_error,
+              createdAt: googleConnection.created_at.toISOString(),
             }
           : null
       }

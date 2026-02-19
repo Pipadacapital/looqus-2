@@ -85,52 +85,51 @@ model Invitation {
 }
 
 model ShopifyConnection {
-  id             String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  workspaceId    String           @map("workspace_id") @db.Uuid
-  shopDomain     String           @map("shop_domain")
-  shopifyStoreId String?          @map("shopify_store_id")
-  accessToken    String?          @map("access_token")
+  id             String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId    String            @map("workspace_id") @db.Uuid
+  shopDomain     String            @map("shop_domain")
+  shopifyStoreId String?           @map("shopify_store_id")
+  accessToken    String?           @map("access_token")
   scopes         String[]
-  status         ConnectionStatus @default(CONNECTED)
-  installedAt    DateTime         @default(now()) @map("installed_at")
-  lastSyncAt     DateTime?        @map("last_sync_at")
-  updatedAt      DateTime         @updatedAt @map("updated_at")
-  clientId       String           @map("client_id")
-  clientSecret   String           @map("client_secret")
-  tokenExpiresAt DateTime?        @map("token_expires_at")
-  workspace      Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  orders         ShopifyOrder[]
-  lineItems      ShopifyLineItem[]
-  products       ShopifyProduct[]
+  status         ConnectionStatus  @default(CONNECTED)
+  installedAt    DateTime          @default(now()) @map("installed_at")
+  lastSyncAt     DateTime?         @map("last_sync_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+  clientId       String            @map("client_id")
+  clientSecret   String            @map("client_secret")
+  tokenExpiresAt DateTime?         @map("token_expires_at")
+  workspace      Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   customers      ShopifyCustomer[]
+  lineItems      ShopifyLineItem[]
+  orders         ShopifyOrder[]
+  products       ShopifyProduct[]
 
   @@unique([workspaceId, shopDomain])
   @@map("shopify_connections")
 }
 
 model ShopifyOrder {
-  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  connectionId      String    @map("connection_id") @db.Uuid
-  shopifyId         String    @map("shopify_id")
-  orderNumber       String    @map("order_number")
+  id                String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  connectionId      String            @map("connection_id") @db.Uuid
+  shopifyId         String            @map("shopify_id")
+  orderNumber       String            @map("order_number")
   name              String
   email             String?
-  totalPrice        Decimal   @map("total_price") @db.Decimal(12, 2)
-  subtotalPrice     Decimal   @map("subtotal_price") @db.Decimal(12, 2)
-  totalTax          Decimal   @map("total_tax") @db.Decimal(12, 2)
-  totalDiscount     Decimal   @map("total_discount") @db.Decimal(12, 2)
+  totalPrice        Decimal           @map("total_price") @db.Decimal(12, 2)
+  subtotalPrice     Decimal           @map("subtotal_price") @db.Decimal(12, 2)
+  totalTax          Decimal           @map("total_tax") @db.Decimal(12, 2)
+  totalDiscount     Decimal           @map("total_discount") @db.Decimal(12, 2)
   currency          String
-  financialStatus   String    @map("financial_status")
-  fulfillmentStatus String?   @map("fulfillment_status")
-  customerShopifyId String?   @map("customer_shopify_id")
-  processedAt       DateTime  @map("processed_at")
-  cancelledAt       DateTime? @map("cancelled_at")
+  financialStatus   String            @map("financial_status")
+  fulfillmentStatus String?           @map("fulfillment_status")
+  customerShopifyId String?           @map("customer_shopify_id")
+  processedAt       DateTime          @map("processed_at")
+  cancelledAt       DateTime?         @map("cancelled_at")
   tags              String[]
-  createdAt         DateTime  @default(now()) @map("created_at")
-  updatedAt         DateTime  @updatedAt @map("updated_at")
-
-  connection ShopifyConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
-  lineItems  ShopifyLineItem[]
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
+  lineItems         ShopifyLineItem[]
+  connection        ShopifyConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
   @@unique([connectionId, shopifyId])
   @@index([connectionId, processedAt])
@@ -138,19 +137,18 @@ model ShopifyOrder {
 }
 
 model ShopifyLineItem {
-  id               String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  orderId          String  @map("order_id") @db.Uuid
-  connectionId     String  @map("connection_id") @db.Uuid
-  shopifyId        String  @map("shopify_id")
+  id               String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderId          String            @map("order_id") @db.Uuid
+  connectionId     String            @map("connection_id") @db.Uuid
+  shopifyId        String            @map("shopify_id")
   title            String
   quantity         Int
-  price            Decimal @db.Decimal(12, 2)
+  price            Decimal           @db.Decimal(12, 2)
   sku              String?
-  variantTitle     String?  @map("variant_title")
-  productShopifyId String?  @map("product_shopify_id")
-
-  order      ShopifyOrder      @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  connection ShopifyConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  variantTitle     String?           @map("variant_title")
+  productShopifyId String?           @map("product_shopify_id")
+  connection       ShopifyConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  order            ShopifyOrder      @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
   @@unique([connectionId, shopifyId])
   @@index([orderId])
@@ -158,22 +156,21 @@ model ShopifyLineItem {
 }
 
 model ShopifyProduct {
-  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  connectionId   String    @map("connection_id") @db.Uuid
-  shopifyId      String    @map("shopify_id")
+  id             String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  connectionId   String            @map("connection_id") @db.Uuid
+  shopifyId      String            @map("shopify_id")
   title          String
   handle         String
   vendor         String?
-  productType    String?   @map("product_type")
+  productType    String?           @map("product_type")
   status         String
   tags           String[]
-  imageUrl       String?   @map("image_url")
-  totalInventory Int?      @map("total_inventory")
-  publishedAt    DateTime? @map("published_at")
-  createdAt       DateTime  @default(now()) @map("created_at")
-  updatedAt       DateTime  @updatedAt @map("updated_at")
-
-  connection ShopifyConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  imageUrl       String?           @map("image_url")
+  totalInventory Int?              @map("total_inventory")
+  publishedAt    DateTime?         @map("published_at")
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+  connection     ShopifyConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
   @@unique([connectionId, shopifyId])
   @@index([connectionId])
@@ -181,22 +178,21 @@ model ShopifyProduct {
 }
 
 model ShopifyCustomer {
-  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  connectionId     String    @map("connection_id") @db.Uuid
-  shopifyId        String    @map("shopify_id")
+  id               String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  connectionId     String            @map("connection_id") @db.Uuid
+  shopifyId        String            @map("shopify_id")
   email            String?
-  firstName        String?   @map("first_name")
-  lastName         String?   @map("last_name")
-  ordersCount      Int       @default(0) @map("orders_count")
-  totalSpent       Decimal   @default(0) @map("total_spent") @db.Decimal(12, 2)
+  firstName        String?           @map("first_name")
+  lastName         String?           @map("last_name")
+  ordersCount      Int               @default(0) @map("orders_count")
+  totalSpent       Decimal           @default(0) @map("total_spent") @db.Decimal(12, 2)
   currency         String?
   tags             String[]
   state            String?
-  shopifyCreatedAt DateTime? @map("shopify_created_at")
-  createdAt        DateTime  @default(now()) @map("created_at")
-  updatedAt        DateTime  @updatedAt @map("updated_at")
-
-  connection ShopifyConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  shopifyCreatedAt DateTime?         @map("shopify_created_at")
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+  connection       ShopifyConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
   @@unique([connectionId, shopifyId])
   @@index([connectionId])

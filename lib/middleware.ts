@@ -43,7 +43,9 @@ export async function updateSession(request: NextRequest) {
     !request.nextUrl.pathname.startsWith('/login') &&
     !request.nextUrl.pathname.startsWith('/auth') &&
     !request.nextUrl.pathname.startsWith('/invite') &&
-    !request.nextUrl.pathname.startsWith('/api/shopify/callback')
+    !request.nextUrl.pathname.startsWith('/api/shopify/callback') &&
+    !request.nextUrl.pathname.startsWith('/api/integrations/meta/callback') &&
+    !request.nextUrl.pathname.startsWith('/api/integrations/google/callback')
   ) {
     const url = request.nextUrl.clone()
     url.pathname = '/auth/login'

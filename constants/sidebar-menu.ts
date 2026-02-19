@@ -8,7 +8,7 @@ import {
   IconReport,
   IconSearch,
   IconSettings,
-  IconUsers,
+  IconUsers,IconBuildingStore
 } from "@tabler/icons-react"
 
 export const sidebarMenuData = {
@@ -19,9 +19,9 @@ export const sidebarMenuData = {
       icon: IconDashboard,
     },
     {
-      title: "Lifecycle",
-      path: "lifecycle",
-      icon: IconListDetails,
+      title: "Store",
+      path: "store",
+      icon: IconBuildingStore,
     },
     {
       title: "Analytics",
