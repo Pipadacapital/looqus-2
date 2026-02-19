@@ -8,7 +8,340 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
-// ─── Enums ──────────────────────────────────────────────────────────────────
+model User {
+  id              String            @id @db.Uuid
+  email           String            @unique
+  fullName        String?           @map("full_name")
+  avatarUrl       String?           @map("avatar_url")
+  jobRole         String?           @map("job_role")
+  systemRole      SystemRole        @default(USER) @map("system_role")
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+  auditLogs       AuditLog[]
+  invitationsSent Invitation[]      @relation("InvitedBy")
+  notifications   Notification[]
+  memberships     WorkspaceMember[]
+  ownedWorkspaces Workspace[]       @relation("WorkspaceCreator")
+
+  @@map("users")
+}
+
+model Workspace {
+  id                     String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                   String
+  slug                   String                  @unique
+  logoUrl                String?                 @map("logo_url")
+  industry               String?                 @map("industry")
+  monthlyRevenue         String?                 @map("monthly_revenue")
+  storeUrl               String?                 @map("store_url")
+  plan                   SubscriptionPlan        @default(FREE)
+  createdById            String                  @map("created_by_id") @db.Uuid
+  createdAt              DateTime                @default(now()) @map("created_at")
+  updatedAt              DateTime                @updatedAt @map("updated_at")
+  auditLogs              AuditLog[]
+  google_ads_connections google_ads_connections?
+  invitations            Invitation[]
+  meta_ads_connections   meta_ads_connections?
+  notifications          Notification[]
+  shopifyConnections     ShopifyConnection[]
+  members                WorkspaceMember[]
+  createdBy              User                    @relation("WorkspaceCreator", fields: [createdById], references: [id])
+
+  @@map("workspaces")
+}
+
+model WorkspaceMember {
+  id          String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String        @map("user_id") @db.Uuid
+  workspaceId String        @map("workspace_id") @db.Uuid
+  role        WorkspaceRole @default(VIEWER)
+  joinedAt    DateTime      @default(now()) @map("joined_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId])
+  @@index([workspaceId])
+  @@map("workspace_members")
+}
+
+model Invitation {
+  id          String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email       String
+  workspaceId String           @map("workspace_id") @db.Uuid
+  role        WorkspaceRole    @default(VIEWER)
+  status      InvitationStatus @default(PENDING)
+  token       String           @unique @default(dbgenerated("gen_random_uuid()"))
+  invitedById String           @map("invited_by_id") @db.Uuid
+  expiresAt   DateTime         @map("expires_at")
+  createdAt   DateTime         @default(now()) @map("created_at")
+  updatedAt   DateTime         @updatedAt @map("updated_at")
+  invitedBy   User             @relation("InvitedBy", fields: [invitedById], references: [id])
+  workspace   Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([email, workspaceId])
+  @@index([token])
+  @@map("invitations")
+}
+
+model ShopifyConnection {
+  id             String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId    String           @map("workspace_id") @db.Uuid
+  shopDomain     String           @map("shop_domain")
+  shopifyStoreId String?          @map("shopify_store_id")
+  accessToken    String?          @map("access_token")
+  scopes         String[]
+  status         ConnectionStatus @default(CONNECTED)
+  installedAt    DateTime         @default(now()) @map("installed_at")
+  lastSyncAt     DateTime?        @map("last_sync_at")
+  updatedAt      DateTime         @updatedAt @map("updated_at")
+  clientId       String           @map("client_id")
+  clientSecret   String           @map("client_secret")
+  tokenExpiresAt DateTime?        @map("token_expires_at")
+  workspace      Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  orders         ShopifyOrder[]
+  lineItems      ShopifyLineItem[]
+  products       ShopifyProduct[]
+  customers      ShopifyCustomer[]
+
+  @@unique([workspaceId, shopDomain])
+  @@map("shopify_connections")
+}
+
+model ShopifyOrder {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  connectionId      String    @map("connection_id") @db.Uuid
+  shopifyId         String    @map("shopify_id")
+  orderNumber       String    @map("order_number")
+  name              String
+  email             String?
+  totalPrice        Decimal   @map("total_price") @db.Decimal(12, 2)
+  subtotalPrice     Decimal   @map("subtotal_price") @db.Decimal(12, 2)
+  totalTax          Decimal   @map("total_tax") @db.Decimal(12, 2)
+  totalDiscount     Decimal   @map("total_discount") @db.Decimal(12, 2)
+  currency          String
+  financialStatus   String    @map("financial_status")
+  fulfillmentStatus String?   @map("fulfillment_status")
+  customerShopifyId String?   @map("customer_shopify_id")
+  processedAt       DateTime  @map("processed_at")
+  cancelledAt       DateTime? @map("cancelled_at")
+  tags              String[]
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  connection ShopifyConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  lineItems  ShopifyLineItem[]
+
+  @@unique([connectionId, shopifyId])
+  @@index([connectionId, processedAt])
+  @@map("shopify_orders")
+}
+
+model ShopifyLineItem {
+  id               String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderId          String  @map("order_id") @db.Uuid
+  connectionId     String  @map("connection_id") @db.Uuid
+  shopifyId        String  @map("shopify_id")
+  title            String
+  quantity         Int
+  price            Decimal @db.Decimal(12, 2)
+  sku              String?
+  variantTitle     String?  @map("variant_title")
+  productShopifyId String?  @map("product_shopify_id")
+
+  order      ShopifyOrder      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  connection ShopifyConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@unique([connectionId, shopifyId])
+  @@index([orderId])
+  @@map("shopify_line_items")
+}
+
+model ShopifyProduct {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  connectionId   String    @map("connection_id") @db.Uuid
+  shopifyId      String    @map("shopify_id")
+  title          String
+  handle         String
+  vendor         String?
+  productType    String?   @map("product_type")
+  status         String
+  tags           String[]
+  imageUrl       String?   @map("image_url")
+  totalInventory Int?      @map("total_inventory")
+  publishedAt    DateTime? @map("published_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  connection ShopifyConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@unique([connectionId, shopifyId])
+  @@index([connectionId])
+  @@map("shopify_products")
+}
+
+model ShopifyCustomer {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  connectionId     String    @map("connection_id") @db.Uuid
+  shopifyId        String    @map("shopify_id")
+  email            String?
+  firstName        String?   @map("first_name")
+  lastName         String?   @map("last_name")
+  ordersCount      Int       @default(0) @map("orders_count")
+  totalSpent       Decimal   @default(0) @map("total_spent") @db.Decimal(12, 2)
+  currency         String?
+  tags             String[]
+  state            String?
+  shopifyCreatedAt DateTime? @map("shopify_created_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  connection ShopifyConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@unique([connectionId, shopifyId])
+  @@index([connectionId])
+  @@map("shopify_customers")
+}
+
+model AuditLog {
+  id          String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId String?    @map("workspace_id") @db.Uuid
+  userId      String     @map("user_id") @db.Uuid
+  action      String
+  entityType  String     @map("entity_type")
+  entityId    String?    @map("entity_id")
+  metadata    Json?
+  ipAddress   String?    @map("ip_address")
+  userAgent   String?    @map("user_agent")
+  createdAt   DateTime   @default(now()) @map("created_at")
+  user        User       @relation(fields: [userId], references: [id])
+  workspace   Workspace? @relation(fields: [workspaceId], references: [id])
+
+  @@index([workspaceId, createdAt])
+  @@index([userId, createdAt])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
+
+model Notification {
+  id          String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String           @map("user_id") @db.Uuid
+  workspaceId String?          @map("workspace_id") @db.Uuid
+  type        NotificationType
+  title       String
+  body        String?
+  actionUrl   String?          @map("action_url")
+  read        Boolean          @default(false)
+  metadata    Json?
+  createdAt   DateTime         @default(now()) @map("created_at")
+  readAt      DateTime?        @map("read_at")
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace   Workspace?       @relation(fields: [workspaceId], references: [id])
+
+  @@index([userId, read, createdAt])
+  @@index([workspaceId, createdAt])
+  @@map("notifications")
+}
+
+model google_ads_connections {
+  id                       String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspace_id             String                     @unique @db.Uuid
+  refresh_token            String
+  scopes                   String[]
+  customer_ids             String[]
+  login_customer_id        String?
+  google_email             String?
+  status                   ConnectionStatus           @default(CONNECTED)
+  last_sync_at             DateTime?
+  last_sync_error          String?
+  created_at               DateTime                   @default(now())
+  updated_at               DateTime
+  selected_customer_id     String?
+  workspaces               Workspace                  @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+  google_ads_daily_metrics google_ads_daily_metrics[]
+}
+
+model google_ads_daily_metrics {
+  id                     String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  connection_id          String                 @db.Uuid
+  customer_id            String
+  campaign_id            String
+  campaign_name          String
+  ad_group_id            String?
+  ad_group_name          String?
+  date                   DateTime               @db.Date
+  impressions            Int                    @default(0)
+  clicks                 Int                    @default(0)
+  spend                  Decimal                @default(0) @db.Decimal(12, 4)
+  conversions            Decimal                @default(0) @db.Decimal(12, 4)
+  conversion_value       Decimal                @default(0) @db.Decimal(12, 4)
+  ctr                    Decimal                @default(0) @db.Decimal(8, 4)
+  average_cpc            Decimal                @default(0) @db.Decimal(8, 4)
+  raw_json               Json?
+  created_at             DateTime               @default(now())
+  google_ads_connections google_ads_connections @relation(fields: [connection_id], references: [id], onDelete: Cascade)
+
+  @@unique([connection_id, customer_id, campaign_id, date])
+  @@index([connection_id, date])
+}
+
+model meta_ads_connections {
+  id                     String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspace_id           String                   @unique @db.Uuid
+  access_token           String
+  token_expires_at       DateTime?
+  scopes                 String[]
+  ad_account_ids         String[]
+  business_id            String?
+  meta_user_id           String?
+  status                 ConnectionStatus         @default(CONNECTED)
+  last_sync_at           DateTime?
+  last_sync_error        String?
+  created_at             DateTime                 @default(now())
+  updated_at             DateTime
+  selected_ad_account_id String?
+  workspaces             Workspace                @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+  meta_ads_daily_metrics meta_ads_daily_metrics[]
+}
+
+model meta_ads_daily_metrics {
+  id                   String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  connection_id        String               @db.Uuid
+  ad_account_id        String
+  campaign_id          String
+  campaign_name        String
+  adset_id             String?
+  adset_name           String?
+  date                 DateTime             @db.Date
+  impressions          Int                  @default(0)
+  clicks               Int                  @default(0)
+  spend                Decimal              @default(0) @db.Decimal(12, 4)
+  conversions          Int                  @default(0)
+  revenue              Decimal              @default(0) @db.Decimal(12, 4)
+  ctr                  Decimal              @default(0) @db.Decimal(8, 4)
+  cpc                  Decimal              @default(0) @db.Decimal(8, 4)
+  cpm                  Decimal              @default(0) @db.Decimal(8, 4)
+  raw_json             Json?
+  created_at           DateTime             @default(now())
+  meta_ads_connections meta_ads_connections @relation(fields: [connection_id], references: [id], onDelete: Cascade)
+
+  @@unique([connection_id, ad_account_id, campaign_id, date])
+  @@index([connection_id, date])
+}
+
+model oauth_states {
+  id            String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  provider      OAuthProvider
+  workspace_id  String        @db.Uuid
+  user_id       String        @db.Uuid
+  state_hash    String        @unique
+  code_verifier String?
+  expires_at    DateTime
+  created_at    DateTime      @default(now())
+
+  @@index([expires_at])
+  @@index([state_hash])
+}
 
 enum SystemRole {
   SUPERADMIN
@@ -55,177 +388,13 @@ enum NotificationType {
   SYNC_COMPLETED
   SYNC_FAILED
   SYSTEM
+  META_ADS_CONNECTED
+  META_ADS_DISCONNECTED
+  GOOGLE_ADS_CONNECTED
+  GOOGLE_ADS_DISCONNECTED
 }
 
-
-
-model User {
-  id         String     @id @db.Uuid
-  email      String     @unique
-  fullName   String?    @map("full_name")
-  avatarUrl  String?    @map("avatar_url")
-  jobRole    String?    @map("job_role")
-  systemRole SystemRole @default(USER) @map("system_role")
-
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  memberships     WorkspaceMember[]
-  invitationsSent Invitation[]      @relation("InvitedBy")
-  ownedWorkspaces Workspace[]       @relation("WorkspaceCreator")
-  auditLogs       AuditLog[]
-  notifications   Notification[]
-
-  @@map("users")
-}
-
-// ─── Workspace ──────────────────────────────────────────────────────────────
-// Each workspace represents a single brand/business tenant.
-
-model Workspace {
-  id      String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name    String
-  slug    String  @unique
-  logoUrl String? @map("logo_url")
-
-  industry       String? @map("industry")
-  monthlyRevenue String? @map("monthly_revenue")
-  storeUrl       String? @map("store_url")
-
-  plan SubscriptionPlan @default(FREE)
-
-  createdById String @map("created_by_id") @db.Uuid
-  createdBy   User   @relation("WorkspaceCreator", fields: [createdById], references: [id])
-
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  members            WorkspaceMember[]
-  invitations        Invitation[]
-  shopifyConnections ShopifyConnection[]
-  auditLogs          AuditLog[]
-  notifications      Notification[]
-
-  @@map("workspaces")
-}
-
-// ─── Workspace Member ───────────────────────────────────────────────────────
-// Junction table: assigns a role to a user within a workspace.
-
-model WorkspaceMember {
-  id          String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId      String        @map("user_id") @db.Uuid
-  workspaceId String        @map("workspace_id") @db.Uuid
-  role        WorkspaceRole @default(VIEWER)
-
-  joinedAt  DateTime @default(now()) @map("joined_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, workspaceId])
-  @@index([workspaceId])
-  @@map("workspace_members")
-}
-
-// ─── Invitation ─────────────────────────────────────────────────────────────
-// Invite users to a workspace. Tracks status and expiration.
-
-model Invitation {
-  id          String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  email       String
-  workspaceId String           @map("workspace_id") @db.Uuid
-  role        WorkspaceRole    @default(VIEWER)
-  status      InvitationStatus @default(PENDING)
-  token       String           @unique @default(dbgenerated("gen_random_uuid()"))
-
-  invitedById String    @map("invited_by_id") @db.Uuid
-  invitedBy   User      @relation("InvitedBy", fields: [invitedById], references: [id])
-  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-
-  expiresAt DateTime @map("expires_at")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  @@index([email, workspaceId])
-  @@index([token])
-  @@map("invitations")
-}
-
-// ─── Shopify Connection ─────────────────────────────────────────────────────
-// Each workspace can connect one or more Shopify stores.
-
-model ShopifyConnection {
-  id             String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  workspaceId    String           @map("workspace_id") @db.Uuid
-  shopDomain     String           @map("shop_domain")
-  shopifyStoreId String?          @map("shopify_store_id")
-  clientId       String           @map("client_id")
-  clientSecret   String           @map("client_secret")
-  accessToken    String?          @map("access_token")
-  tokenExpiresAt DateTime?        @map("token_expires_at")
-  scopes         String[]
-  status         ConnectionStatus @default(CONNECTED)
-
-  installedAt DateTime  @default(now()) @map("installed_at")
-  lastSyncAt  DateTime? @map("last_sync_at")
-  updatedAt   DateTime  @updatedAt @map("updated_at")
-
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-
-  @@unique([workspaceId, shopDomain])
-  @@map("shopify_connections")
-}
-
-// ─── Audit Log ──────────────────────────────────────────────────────────────
-// Immutable log of significant actions for compliance and debugging.
-
-model AuditLog {
-  id          String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  workspaceId String? @map("workspace_id") @db.Uuid
-  userId      String  @map("user_id") @db.Uuid
-
-  action     String
-  entityType String  @map("entity_type")
-  entityId   String? @map("entity_id")
-  metadata   Json?
-
-  ipAddress String? @map("ip_address")
-  userAgent String? @map("user_agent")
-
-  createdAt DateTime @default(now()) @map("created_at")
-
-  user      User       @relation(fields: [userId], references: [id])
-  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
-
-  @@index([workspaceId, createdAt])
-  @@index([userId, createdAt])
-  @@index([entityType, entityId])
-  @@map("audit_logs")
-}
-
-// ─── Notification ────────────────────────────────────────────────────────────
-// In-app notifications for users across all event types.
-
-model Notification {
-  id          String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId      String           @map("user_id") @db.Uuid
-  workspaceId String?          @map("workspace_id") @db.Uuid
-  type        NotificationType
-  title       String
-  body        String?
-  actionUrl   String?          @map("action_url")
-  read        Boolean          @default(false)
-  metadata    Json?
-
-  createdAt DateTime  @default(now()) @map("created_at")
-  readAt    DateTime? @map("read_at")
-
-  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
-
-  @@index([userId, read, createdAt])
-  @@index([workspaceId, createdAt])
-  @@map("notifications")
+enum OAuthProvider {
+  META
+  GOOGLE
 }

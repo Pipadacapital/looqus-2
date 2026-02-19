@@ -1,6 +1,8 @@
 'use client'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { toast } from 'sonner'
 import {
   IconPlugConnected,
   IconCheck,
@@ -47,7 +49,9 @@ export function DashboardContent({
   const [clientSecret, setClientSecret] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [connecting, setConnecting] = useState(false)
+  const [syncing, setSyncing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const router = useRouter()
 
   const canConnect =
     storeHandle.trim() && clientId.trim() && clientSecret.trim()
@@ -90,6 +94,31 @@ export function DashboardContent({
       setError('Network error. Please try again.')
     } finally {
       setConnecting(false)
+    }
+  }
+
+  const handleSync = async () => {
+    if (!shopifyConnection || syncing) return
+    setSyncing(true)
+    try {
+      const res = await fetch('/api/shopify/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connectionId: shopifyConnection.id }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        toast.error(data.error ?? 'Sync failed')
+        return
+      }
+      toast.success(
+        `Synced ${data.orders} orders, ${data.products} products, ${data.customers} customers`
+      )
+      router.refresh()
+    } catch {
+      toast.error('Sync failed. Please try again.')
+    } finally {
+      setSyncing(false)
     }
   }
 
@@ -155,9 +184,23 @@ export function DashboardContent({
                 </p>
               </div>
               <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" disabled>
-                  <IconRefresh className="mr-1.5 h-3.5 w-3.5" />
-                  Sync now
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleSync}
+                  disabled={syncing}
+                >
+                  {syncing ? (
+                    <>
+                      <IconLoader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                      Syncing...
+                    </>
+                  ) : (
+                    <>
+                      <IconRefresh className="mr-1.5 h-3.5 w-3.5" />
+                      Sync now
+                    </>
+                  )}
                 </Button>
                 <Button variant="outline" size="sm" asChild>
                   <a

@@ -65,12 +65,20 @@ const REVENUE_RANGES = [
 interface OnboardingFormProps {
   defaultFullName: string
   email: string
+  isNewWorkspace?: boolean
 }
 
-export function OnboardingForm({ defaultFullName, email }: OnboardingFormProps) {
+export function OnboardingForm({
+  defaultFullName,
+  email,
+  isNewWorkspace = false,
+}: OnboardingFormProps) {
   const [step, setStep] = useState(0)
   const [isPending, startTransition] = useTransition()
   const [error, setError] = useState<string | null>(null)
+
+  const stepsToShow = isNewWorkspace ? STEPS.slice(1) : STEPS
+  const contentStep = isNewWorkspace ? step + 1 : step
 
   const [fullName, setFullName] = useState(defaultFullName)
   const [role, setRole] = useState('')
@@ -90,6 +98,10 @@ export function OnboardingForm({ defaultFullName, email }: OnboardingFormProps) 
   }, [brandName, slugTouched])
 
   const canProceed = () => {
+    if (isNewWorkspace) {
+      if (step === 0) return brandName.trim().length > 0 && slug.trim().length > 0
+      return true
+    }
     if (step === 0) return fullName.trim().length > 0 && role.length > 0
     if (step === 1) return brandName.trim().length > 0 && slug.trim().length > 0
     return true
@@ -131,7 +143,7 @@ export function OnboardingForm({ defaultFullName, email }: OnboardingFormProps) 
       if (result?.error) {
         setError(result.error)
         if (result.error.includes('URL')) {
-          setStep(1)
+          setStep(isNewWorkspace ? 0 : 1)
         }
       }
     })
@@ -141,7 +153,7 @@ export function OnboardingForm({ defaultFullName, email }: OnboardingFormProps) 
     <div className="w-full">
       {/* Step indicator */}
       <div className="mb-8 flex items-center justify-center gap-2">
-        {STEPS.map((s, i) => {
+        {stepsToShow.map((s, i) => {
           const Icon = s.icon
           const isActive = i === step
           const isCompleted = i < step
@@ -181,7 +193,7 @@ export function OnboardingForm({ defaultFullName, email }: OnboardingFormProps) 
       {/* Step content */}
       <div className="rounded-xl border bg-card p-6 shadow-sm">
         {/* Step 1: Profile */}
-        {step === 0 && (
+        {contentStep === 0 && (
           <div className="space-y-6">
             <div>
               <h2 className="text-lg font-semibold">Tell us about yourself</h2>
@@ -236,7 +248,7 @@ export function OnboardingForm({ defaultFullName, email }: OnboardingFormProps) 
         )}
 
         {/* Step 2: Brand */}
-        {step === 1 && (
+        {contentStep === 1 && (
           <div className="space-y-6">
             <div>
               <h2 className="text-lg font-semibold">Set up your brand</h2>
@@ -329,7 +341,7 @@ export function OnboardingForm({ defaultFullName, email }: OnboardingFormProps) 
         )}
 
         {/* Step 3: Connect Shopify */}
-        {step === 2 && (
+        {contentStep === 2 && (
           <div className="space-y-6">
             <div>
               <h2 className="text-lg font-semibold">Connect your Shopify store</h2>
@@ -419,7 +431,7 @@ export function OnboardingForm({ defaultFullName, email }: OnboardingFormProps) 
             <div />
           )}
 
-          {step < STEPS.length - 1 ? (
+          {step < stepsToShow.length - 1 ? (
             <Button onClick={handleNext} disabled={!canProceed()}>
               Continue
               <IconArrowRight className="ml-1.5 h-4 w-4" />

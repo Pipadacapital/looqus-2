@@ -17,29 +17,34 @@ export default async function OnboardingPage() {
     where: { userId: user.id },
   })
 
-  if (membership) {
-    redirect('/dashboard')
-  }
-
   const fullName =
     user.user_metadata?.full_name ??
     user.user_metadata?.name ??
     ''
   const email = user.email ?? ''
+  const isNewWorkspace = !!membership
 
   return (
     <div className="flex min-h-svh items-center justify-center bg-background p-6">
       <div className="w-full max-w-xl">
         <div className="mb-6 text-center">
           <h1 className="text-2xl font-semibold tracking-tight">
-            Welcome to Shopify Analytics
+            {isNewWorkspace
+              ? 'Create a new workspace'
+              : 'Welcome to Shopify Analytics'}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Let&apos;s get you set up in a few quick steps.
+            {isNewWorkspace
+              ? 'Add another workspace to your account.'
+              : "Let's get you set up in a few quick steps."}
           </p>
         </div>
 
-        <OnboardingForm defaultFullName={fullName} email={email} />
+        <OnboardingForm
+          defaultFullName={fullName}
+          email={email}
+          isNewWorkspace={isNewWorkspace}
+        />
       </div>
     </div>
   )
