@@ -12,6 +12,7 @@ import {
   IconBrandMeta,
   IconBrandGoogle,
   IconUnlink,
+  IconTruck,
 } from '@tabler/icons-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -65,6 +66,15 @@ type GoogleConnectionInfo = {
   createdAt: string
 }
 
+type ShiprocketConnectionInfo = {
+  id: string
+  email: string
+  status: string
+  lastSyncAt: string | null
+  lastSyncError: string | null
+  createdAt: string
+}
+
 interface DashboardContentProps {
   workspaceSlug: string
   workspaceId: string
@@ -72,6 +82,7 @@ interface DashboardContentProps {
   shopifyConnection: ShopifyConnectionInfo | null
   metaConnection: MetaConnectionInfo | null
   googleConnection: GoogleConnectionInfo | null
+  shiprocketConnection: ShiprocketConnectionInfo | null
 }
 
 export function DashboardContent({
@@ -81,6 +92,7 @@ export function DashboardContent({
   shopifyConnection,
   metaConnection,
   googleConnection,
+  shiprocketConnection,
 }: DashboardContentProps) {
   const [storeHandle, setStoreHandle] = useState('')
   const [clientId, setClientId] = useState('')
@@ -94,6 +106,13 @@ export function DashboardContent({
   const [disconnecting, setDisconnecting] = useState<string | null>(null)
   const [selectingAccount, setSelectingAccount] = useState(false)
   const [refreshingAccounts, setRefreshingAccounts] = useState(false)
+
+  // Shiprocket connect form state
+  const [srDialogOpen, setSrDialogOpen] = useState(false)
+  const [srEmail, setSrEmail] = useState('')
+  const [srPassword, setSrPassword] = useState('')
+  const [srConnecting, setSrConnecting] = useState(false)
+  const [srError, setSrError] = useState<string | null>(null)
   const router = useRouter()
 
   const canConnect =
@@ -209,7 +228,58 @@ export function DashboardContent({
     }
   }
 
- 
+  const handleShiprocketConnect = async () => {
+    if (!srEmail.trim() || !srPassword.trim()) return
+    setSrConnecting(true)
+    setSrError(null)
+    try {
+      const res = await fetch('/api/integrations/shiprocket/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspaceId, email: srEmail.trim(), password: srPassword }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setSrError(data.error || 'Failed to connect Shiprocket')
+        return
+      }
+      setSrDialogOpen(false)
+      window.location.reload()
+    } catch {
+      setSrError('Network error. Please try again.')
+    } finally {
+      setSrConnecting(false)
+    }
+  }
+
+  const handleShiprocketDisconnect = async () => {
+    setDisconnecting('shiprocket')
+    try {
+      await fetch('/api/integrations/shiprocket/disconnect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspaceId }),
+      })
+      window.location.reload()
+    } finally {
+      setDisconnecting(null)
+    }
+  }
+
+  const handleShiprocketSync = async () => {
+    setSyncing('shiprocket')
+    try {
+      await fetch('/api/integrations/shiprocket/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspaceId }),
+      })
+      window.location.reload()
+    } finally {
+      setSyncing(null)
+    }
+  }
+
   return (
     <div className="flex flex-col gap-6 py-4 md:py-6">
       <div>
@@ -594,6 +664,139 @@ export function DashboardContent({
                   Connect Google Ads
                 </a>
               </Button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Shiprocket Connection Card */}
+      <div className="rounded-xl border bg-card shadow-sm">
+        <div className="flex items-center gap-3 border-b px-6 py-4">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#6E3FF3]/10">
+            <IconTruck className="h-5 w-5 text-[#6E3FF3]" />
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-medium">Shiprocket</p>
+            <p className="text-xs text-muted-foreground">
+              {shiprocketConnection
+                ? `Connected as ${shiprocketConnection.email}`
+                : 'Connect your Shiprocket account for shipping insights'}
+            </p>
+          </div>
+          {shiprocketConnection ? (
+            <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-600">
+              <IconCheck className="mr-1 h-3 w-3" />
+              Connected
+            </Badge>
+          ) : (
+            <Badge variant="secondary">Not connected</Badge>
+          )}
+        </div>
+
+        <div className="px-6 py-4">
+          {shiprocketConnection ? (
+            <div className="flex items-center justify-between">
+              <div className="space-y-1">
+                <p className="text-sm font-medium">{shiprocketConnection.email}</p>
+                <p className="text-xs text-muted-foreground">
+                  Connected{' '}
+                  {formatDistanceToNow(new Date(shiprocketConnection.createdAt), { addSuffix: true })}
+                  {shiprocketConnection.lastSyncAt && (
+                    <>{' · '}Last synced {formatDistanceToNow(new Date(shiprocketConnection.lastSyncAt), { addSuffix: true })}</>
+                  )}
+                </p>
+                {shiprocketConnection.lastSyncError && (
+                  <p className="text-xs text-destructive">{shiprocketConnection.lastSyncError}</p>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleShiprocketSync}
+                  disabled={syncing === 'shiprocket'}
+                >
+                  {syncing === 'shiprocket' ? (
+                    <IconLoader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <IconRefresh className="mr-1.5 h-3.5 w-3.5" />
+                  )}
+                  Sync now
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleShiprocketDisconnect}
+                  disabled={disconnecting === 'shiprocket'}
+                >
+                  <IconUnlink className="mr-1.5 h-3.5 w-3.5" />
+                  Disconnect
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center gap-4 py-4 text-center">
+              <div className="max-w-sm space-y-1">
+                <p className="text-sm font-medium">No Shiprocket account connected</p>
+                <p className="text-xs text-muted-foreground">
+                  Connect your Shiprocket account to pull in shipment, order, and delivery data.
+                </p>
+              </div>
+              <Dialog open={srDialogOpen} onOpenChange={setSrDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button>
+                    <IconTruck className="mr-1.5 h-4 w-4" />
+                    Connect Shiprocket
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="sm:max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>Connect Shiprocket</DialogTitle>
+                    <DialogDescription>
+                      Enter the email and password for your Shiprocket account.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="grid gap-4 py-2">
+                    <div className="grid gap-2">
+                      <Label htmlFor="sr-email">Email</Label>
+                      <Input
+                        id="sr-email"
+                        type="email"
+                        placeholder="you@example.com"
+                        value={srEmail}
+                        onChange={(e) => setSrEmail(e.target.value)}
+                        autoFocus
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="sr-password">Password</Label>
+                      <Input
+                        id="sr-password"
+                        type="password"
+                        placeholder="Your Shiprocket password"
+                        value={srPassword}
+                        onChange={(e) => setSrPassword(e.target.value)}
+                      />
+                    </div>
+                    {srError && <p className="text-sm text-destructive">{srError}</p>}
+                  </div>
+                  <DialogFooter>
+                    <Button variant="ghost" onClick={() => setSrDialogOpen(false)} disabled={srConnecting}>
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={handleShiprocketConnect}
+                      disabled={!srEmail.trim() || !srPassword.trim() || srConnecting}
+                    >
+                      {srConnecting ? (
+                        <><IconLoader2 className="mr-1.5 h-4 w-4 animate-spin" />Connecting...</>
+                      ) : (
+                        <><IconTruck className="mr-1.5 h-4 w-4" />Connect</>
+                      )}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
             </div>
           )}
         </div>

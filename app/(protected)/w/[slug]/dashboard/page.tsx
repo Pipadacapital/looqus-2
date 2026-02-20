@@ -56,6 +56,16 @@ export default async function DashboardPage({
           created_at: true,
         },
       },
+      shiprocketConnection: {
+        select: {
+          id: true,
+          email: true,
+          status: true,
+          lastSyncAt: true,
+          lastSyncError: true,
+          createdAt: true,
+        },
+      },
     },
   })
 
@@ -68,6 +78,10 @@ export default async function DashboardPage({
   const googleConnectionRaw = workspace.google_ads_connections
   const googleConnection =
     googleConnectionRaw?.status === 'CONNECTED' ? googleConnectionRaw : null
+
+  const shiprocketRaw = workspace.shiprocketConnection
+  const shiprocketConnection =
+    shiprocketRaw?.status === 'CONNECTED' ? shiprocketRaw : null
 
   return (
     <DashboardContent
@@ -110,6 +124,18 @@ export default async function DashboardPage({
               lastSyncAt: googleConnection.last_sync_at?.toISOString() ?? null,
               lastSyncError: googleConnection.last_sync_error,
               createdAt: googleConnection.created_at.toISOString(),
+            }
+          : null
+      }
+      shiprocketConnection={
+        shiprocketConnection
+          ? {
+              id: shiprocketConnection.id,
+              email: shiprocketConnection.email,
+              status: shiprocketConnection.status,
+              lastSyncAt: shiprocketConnection.lastSyncAt?.toISOString() ?? null,
+              lastSyncError: shiprocketConnection.lastSyncError,
+              createdAt: shiprocketConnection.createdAt.toISOString(),
             }
           : null
       }
