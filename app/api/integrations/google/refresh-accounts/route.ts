@@ -20,8 +20,8 @@ export async function POST(request: NextRequest) {
   const result = await requireWorkspaceAdmin(workspaceId)
   if ('error' in result) return result.error
 
-  const connection = await prisma.googleAdsConnection.findUnique({
-    where: { workspaceId },
+  const connection = await prisma.google_ads_connections.findUnique({
+    where: { workspace_id: workspaceId },
   })
 
   if (!connection || connection.status !== 'CONNECTED') {
@@ -39,7 +39,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const { accessToken } = await refreshGoogleAccessToken(connection.refreshToken)
+    const { accessToken } = await refreshGoogleAccessToken(connection.refresh_token)
 
     let customerIds: string[] = []
     let lastSyncError: string | null = null
@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Keep current selection if still valid, otherwise auto-select if exactly one
-    let selectedCustomerId = connection.selectedCustomerId
+    let selectedCustomerId = connection.selected_customer_id
     if (selectedCustomerId && !customerIds.includes(selectedCustomerId)) {
       selectedCustomerId = null
     }
@@ -74,13 +74,13 @@ export async function POST(request: NextRequest) {
       selectedCustomerId = customerIds[0]
     }
 
-    await prisma.googleAdsConnection.update({
+    await prisma.google_ads_connections.update({
       where: { id: connection.id },
       data: {
-        customerIds,
-        selectedCustomerId,
-        loginCustomerId,
-        lastSyncError,
+        customer_ids: customerIds,
+        selected_customer_id: selectedCustomerId,
+        login_customer_id: loginCustomerId,
+        last_sync_error: lastSyncError,
       },
     })
 

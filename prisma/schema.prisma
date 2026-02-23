@@ -200,43 +200,39 @@ model ShopifyCustomer {
   @@map("shopify_customers")
 }
 
-// ─── Shiprocket Connection ──────────────────────────────────────────────────
-
 model ShiprocketConnection {
-  id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  workspaceId     String           @unique @map("workspace_id") @db.Uuid
+  id              String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId     String               @unique @map("workspace_id") @db.Uuid
   email           String
   password        String
-  accessToken     String?          @map("access_token")
-  tokenObtainedAt DateTime?        @map("token_obtained_at")
-  status          ConnectionStatus @default(CONNECTED)
-  lastSyncAt      DateTime?        @map("last_sync_at")
-  lastSyncError   String?          @map("last_sync_error")
-  createdAt       DateTime         @default(now()) @map("created_at")
-  updatedAt       DateTime         @updatedAt @map("updated_at")
-
-  workspace  Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  orders     ShiprocketOrder[]
-  shipments  ShiprocketShipment[]
+  accessToken     String?              @map("access_token")
+  tokenObtainedAt DateTime?            @map("token_obtained_at")
+  status          ConnectionStatus     @default(CONNECTED)
+  lastSyncAt      DateTime?            @map("last_sync_at")
+  lastSyncError   String?              @map("last_sync_error")
+  createdAt       DateTime             @default(now()) @map("created_at")
+  updatedAt       DateTime             @updatedAt @map("updated_at")
+  workspace       Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  orders          ShiprocketOrder[]
+  shipments       ShiprocketShipment[]
 
   @@map("shiprocket_connections")
 }
 
 model ShiprocketOrder {
-  id               String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  connectionId     String              @map("connection_id") @db.Uuid
-  shiprocketId     String              @map("shiprocket_id")
-  channelOrderId   String?             @map("channel_order_id")
-  status           String?
-  statusCode       Int?                @map("status_code")
-  paymentMethod    String?             @map("payment_method")
-  total            Decimal?            @db.Decimal(12, 2)
-  orderDate        DateTime?           @map("order_date")
-  channelName      String?             @map("channel_name")
-  rawJson          Json?               @map("raw_json")
-  syncedAt         DateTime            @default(now()) @map("synced_at")
-
-  connection ShiprocketConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  id             String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  connectionId   String               @map("connection_id") @db.Uuid
+  shiprocketId   String               @map("shiprocket_id")
+  channelOrderId String?              @map("channel_order_id")
+  status         String?
+  statusCode     Int?                 @map("status_code")
+  paymentMethod  String?              @map("payment_method")
+  total          Decimal?             @db.Decimal(12, 2)
+  orderDate      DateTime?            @map("order_date")
+  channelName    String?              @map("channel_name")
+  rawJson        Json?                @map("raw_json")
+  syncedAt       DateTime             @default(now()) @map("synced_at")
+  connection     ShiprocketConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
   @@unique([connectionId, shiprocketId])
   @@index([connectionId, orderDate])
@@ -244,24 +240,23 @@ model ShiprocketOrder {
 }
 
 model ShiprocketShipment {
-  id              String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  connectionId    String              @map("connection_id") @db.Uuid
-  shipmentId      String              @map("shipment_id")
-  orderId         String?             @map("order_id")
-  status          String?
-  statusCode      Int?                @map("status_code")
-  courierName     String?             @map("courier_name")
-  awbCode         String?             @map("awb_code")
-  isCod           Boolean             @default(false) @map("is_cod")
-  codAmount       Decimal?            @map("cod_amount") @db.Decimal(12, 2)
-  shippedAt       DateTime?           @map("shipped_at")
-  deliveredAt     DateTime?           @map("delivered_at")
-  rtoInitiatedAt  DateTime?           @map("rto_initiated_at")
-  charges         Decimal?            @db.Decimal(12, 2)
-  rawJson         Json?               @map("raw_json")
-  syncedAt        DateTime            @default(now()) @map("synced_at")
-
-  connection ShiprocketConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  id             String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  connectionId   String               @map("connection_id") @db.Uuid
+  shipmentId     String               @map("shipment_id")
+  orderId        String?              @map("order_id")
+  status         String?
+  statusCode     Int?                 @map("status_code")
+  courierName    String?              @map("courier_name")
+  awbCode        String?              @map("awb_code")
+  isCod          Boolean              @default(false) @map("is_cod")
+  codAmount      Decimal?             @map("cod_amount") @db.Decimal(12, 2)
+  shippedAt      DateTime?            @map("shipped_at")
+  deliveredAt    DateTime?            @map("delivered_at")
+  rtoInitiatedAt DateTime?            @map("rto_initiated_at")
+  charges        Decimal?             @db.Decimal(12, 2)
+  rawJson        Json?                @map("raw_json")
+  syncedAt       DateTime             @default(now()) @map("synced_at")
+  connection     ShiprocketConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
   @@unique([connectionId, shipmentId])
   @@index([connectionId])

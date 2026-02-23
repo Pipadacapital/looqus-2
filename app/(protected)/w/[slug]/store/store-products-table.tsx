@@ -41,69 +41,52 @@ import {
   TableRow,
 } from '@/components/ui/table'
 
-export type OrderRow = {
+export type ProductRow = {
   id: string
-  orderNumber: string
-  name: string
-  email: string | null
-  totalPrice: string
-  currency: string
-  financialStatus: string
-  fulfillmentStatus: string | null
-  processedAt: string
-  cancelledAt: string | null
+  title: string
+  handle: string
+  vendor: string | null
+  productType: string | null
+  status: string
+  imageUrl: string | null
+  totalInventory: number | null
+  publishedAt: string | null
+  createdAt: string
 }
 
-type OrdersResponse = {
-  data: OrderRow[]
+type ProductsResponse = {
+  data: ProductRow[]
   total: number
   page: number
   pageSize: number
   totalPages: number
 }
 
-const FINANCIAL_OPTIONS = [
+const STATUS_OPTIONS = [
   { value: '', label: 'All' },
-  { value: 'PAID', label: 'Paid' },
-  { value: 'PENDING', label: 'Pending' },
-  { value: 'REFUNDED', label: 'Refunded' },
-  { value: 'PARTIALLY_REFUNDED', label: 'Partially refunded' },
+  { value: 'ACTIVE', label: 'Active' },
+  { value: 'DRAFT', label: 'Draft' },
+  { value: 'ARCHIVED', label: 'Archived' },
 ]
 
-const FULFILLMENT_OPTIONS = [
-  { value: '', label: 'All' },
-  { value: 'FULFILLED', label: 'Fulfilled' },
-  { value: 'UNFULFILLED', label: 'Unfulfilled' },
-  { value: 'PARTIALLY_FULFILLED', label: 'Partially fulfilled' },
-]
-
-function useOrdersParams() {
+function useProductsParams() {
   const searchParams = useSearchParams()
   const page = Number(searchParams.get('page')) || 1
   const pageSize = Number(searchParams.get('pageSize')) || 10
-  const sort = searchParams.get('sort') || 'processedAt'
-  const order = (searchParams.get('order') || 'desc') as 'asc' | 'desc'
+  const sort = searchParams.get('sort') || 'title'
+  const order = (searchParams.get('order') || 'asc') as 'asc' | 'desc'
   const search = searchParams.get('search') || ''
-  const financialStatus = searchParams.get('financialStatus') || ''
-  const fulfillmentStatus = searchParams.get('fulfillmentStatus') || ''
-  return {
-    page,
-    pageSize,
-    sort,
-    order,
-    search,
-    financialStatus,
-    fulfillmentStatus,
-  }
+  const status = searchParams.get('status') || ''
+  return { page, pageSize, sort, order, search, status }
 }
 
-export function StoreOrdersTable() {
+export function StoreProductsTable() {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const { current } = useWorkspace()
   const slug = current.slug
-  const params = useOrdersParams()
+  const params = useProductsParams()
   const [searchInput, setSearchInput] = useState(params.search)
   useEffect(() => {
     setSearchInput(params.search)
@@ -131,8 +114,8 @@ export function StoreOrdersTable() {
     [pathname, router, searchParams]
   )
 
-  const { data, isLoading, isError, error } = useQuery<OrdersResponse>({
-    queryKey: ['store', 'orders', slug, params],
+  const { data, isLoading, isError, error } = useQuery<ProductsResponse>({
+    queryKey: ['store', 'products', slug, params],
     queryFn: async () => {
       const q = new URLSearchParams()
       q.set('page', String(params.page))
@@ -140,68 +123,88 @@ export function StoreOrdersTable() {
       q.set('sort', params.sort)
       q.set('order', params.order)
       if (params.search) q.set('search', params.search)
-      if (params.financialStatus) q.set('financialStatus', params.financialStatus)
-      if (params.fulfillmentStatus) q.set('fulfillmentStatus', params.fulfillmentStatus)
-      const res = await fetch(`/api/workspaces/${slug}/store/orders?${q.toString()}`)
+      if (params.status) q.set('status', params.status)
+      const res = await fetch(`/api/workspaces/${slug}/store/products?${q.toString()}`)
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
-        throw new Error(err.error || 'Failed to load orders')
+        throw new Error(err.error || 'Failed to load products')
       }
       return res.json()
     },
   })
 
-  const columns = useMemo<ColumnDef<OrderRow>[]>(
+  const columns = useMemo<ColumnDef<ProductRow>[]>(
     () => [
       {
-        accessorKey: 'orderNumber',
-        header: 'Order',
+        accessorKey: 'imageUrl',
+        header: 'Product',
         cell: ({ row }) => (
-          <div className="font-medium">{row.original.name}</div>
-        ),
-      },
-      {
-        accessorKey: 'email',
-        header: 'Customer',
-        cell: ({ row }) => (
-          <span className="text-muted-foreground">
-            {row.original.email || '—'}
-          </span>
-        ),
-      },
-      {
-        accessorKey: 'totalPrice',
-        header: () => <div className="text-right">Total</div>,
-        cell: ({ row }) => (
-          <div className="text-right font-medium">
-            {row.original.currency} {Number(row.original.totalPrice).toFixed(2)}
+          <div className="flex items-center gap-3">
+            <div className="relative size-10 shrink-0 overflow-hidden rounded border bg-muted">
+              {row.original.imageUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={row.original.imageUrl}
+                  alt=""
+                  className="size-full object-cover"
+                />
+              ) : (
+                <div className="flex size-full items-center justify-center text-muted-foreground text-xs">
+                  —
+                </div>
+              )}
+            </div>
+            <div>
+              <div className="font-medium">{row.original.title}</div>
+              <div className="text-muted-foreground text-xs">{row.original.handle}</div>
+            </div>
           </div>
         ),
       },
       {
-        accessorKey: 'financialStatus',
-        header: 'Payment',
+        accessorKey: 'productType',
+        header: 'Type',
+        cell: ({ row }) => (
+          <span className="text-muted-foreground">
+            {row.original.productType || '—'}
+          </span>
+        ),
+      },
+      {
+        accessorKey: 'vendor',
+        header: 'Vendor',
+        cell: ({ row }) => (
+          <span className="text-muted-foreground">
+            {row.original.vendor || '—'}
+          </span>
+        ),
+      },
+      {
+        accessorKey: 'status',
+        header: 'Status',
         cell: ({ row }) => (
           <Badge variant="outline" className="capitalize">
-            {row.original.financialStatus?.replace(/_/g, ' ') ?? '—'}
+            {row.original.status?.toLowerCase() ?? '—'}
           </Badge>
         ),
       },
       {
-        accessorKey: 'fulfillmentStatus',
-        header: 'Fulfillment',
+        accessorKey: 'totalInventory',
+        header: () => <div className="text-right">Inventory</div>,
         cell: ({ row }) => (
-          <Badge variant="secondary" className="capitalize">
-            {row.original.fulfillmentStatus?.replace(/_/g, ' ') ?? '—'}
-          </Badge>
+          <div className="text-right">
+            {row.original.totalInventory != null ? row.original.totalInventory : '—'}
+          </div>
         ),
       },
       {
-        accessorKey: 'processedAt',
-        header: 'Date',
+        accessorKey: 'publishedAt',
+        header: 'Published',
         cell: ({ row }) => (
           <span className="text-muted-foreground whitespace-nowrap">
-            {format(new Date(row.original.processedAt), 'MMM d, yyyy')}
+            {row.original.publishedAt
+              ? format(new Date(row.original.publishedAt), 'MMM d, yyyy')
+              : '—'}
           </span>
         ),
       },
@@ -222,7 +225,7 @@ export function StoreOrdersTable() {
   if (isError) {
     return (
       <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-6 text-center text-destructive">
-        {error instanceof Error ? error.message : 'Failed to load orders'}
+        {error instanceof Error ? error.message : 'Failed to load products'}
       </div>
     )
   }
@@ -231,7 +234,7 @@ export function StoreOrdersTable() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3">
         <Input
-          placeholder="Search orders, email..."
+          placeholder="Search products, handle, vendor..."
           className="max-w-xs"
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
@@ -242,39 +245,16 @@ export function StoreOrdersTable() {
           }}
         />
         <Select
-          value={params.financialStatus || '__all__'}
+          value={params.status || '__all__'}
           onValueChange={(v) =>
-            updateParams({
-              financialStatus: v === '__all__' ? '' : v,
-              page: 1,
-            })
+            updateParams({ status: v === '__all__' ? '' : v, page: 1 })
           }
         >
-          <SelectTrigger className="w-[160px]">
-            <SelectValue placeholder="Payment" />
+          <SelectTrigger className="w-[140px]">
+            <SelectValue placeholder="Status" />
           </SelectTrigger>
           <SelectContent>
-            {FINANCIAL_OPTIONS.map((o) => (
-              <SelectItem key={o.value || '__all__'} value={o.value || '__all__'}>
-                {o.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select
-          value={params.fulfillmentStatus || '__all__'}
-          onValueChange={(v) =>
-            updateParams({
-              fulfillmentStatus: v === '__all__' ? '' : v,
-              page: 1,
-            })
-          }
-        >
-          <SelectTrigger className="w-[160px]">
-            <SelectValue placeholder="Fulfillment" />
-          </SelectTrigger>
-          <SelectContent>
-            {FULFILLMENT_OPTIONS.map((o) => (
+            {STATUS_OPTIONS.map((o) => (
               <SelectItem key={o.value || '__all__'} value={o.value || '__all__'}>
                 {o.label}
               </SelectItem>
@@ -297,11 +277,15 @@ export function StoreOrdersTable() {
                     {headerGroup.headers.map((header) => {
                       const colId = header.column.id
                       const apiSortField =
-                        colId === 'orderNumber' ? 'name' : colId
-                      const canSort =
-                        apiSortField === 'processedAt' ||
-                        apiSortField === 'totalPrice' ||
-                        apiSortField === 'name'
+                        colId === 'imageUrl' ? 'title' : colId
+                      const canSort = [
+                        'title',
+                        'productType',
+                        'status',
+                        'totalInventory',
+                        'publishedAt',
+                        'createdAt',
+                      ].includes(apiSortField)
                       const isSorted = params.sort === apiSortField
                       return (
                         <TableHead key={header.id}>
@@ -366,7 +350,7 @@ export function StoreOrdersTable() {
                       colSpan={columns.length}
                       className="h-24 text-center text-muted-foreground"
                     >
-                      No orders found.
+                      No products found.
                     </TableCell>
                   </TableRow>
                 )}
@@ -376,7 +360,7 @@ export function StoreOrdersTable() {
             {data && data.totalPages > 0 && (
               <div className="flex flex-wrap items-center justify-between gap-4 border-t px-4 py-3">
                 <p className="text-muted-foreground text-sm">
-                  {data.total} order{data.total !== 1 ? 's' : ''}
+                  {data.total} product{data.total !== 1 ? 's' : ''}
                 </p>
                 <div className="flex items-center gap-2">
                   <Select

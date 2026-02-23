@@ -2,6 +2,8 @@
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { StoreOrdersTable } from './store-orders-table'
+import { StoreProductsTable } from './store-products-table'
+import { StoreCustomersTable } from './store-customers-table'
 import { IconShoppingCart, IconPackage, IconUsers } from '@tabler/icons-react'
 
 export function StoreContent({
@@ -46,14 +48,10 @@ export function StoreContent({
           <StoreOrdersTable />
         </TabsContent>
         <TabsContent value="products" className="mt-6">
-          <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground">
-            Products table coming soon. Use the Orders tab for now.
-          </div>
+          <StoreProductsTable />
         </TabsContent>
         <TabsContent value="customers" className="mt-6">
-          <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground">
-            Customers table coming soon. Use the Orders tab for now.
-          </div>
+          <StoreCustomersTable />
         </TabsContent>
       </Tabs>
     </div>

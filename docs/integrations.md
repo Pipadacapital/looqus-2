@@ -72,6 +72,33 @@
 - **Developer token pending**: Test accounts work while your developer token is pending approval. For production data, you need an approved developer token.
 - **Scope errors**: Ensure the Google Ads API is enabled in your GCP project.
 
+### Google Ads vs Google AdSense
+
+- **Google Ads** (what we integrate): For *advertisers* who run campaigns. We pull ad spend, impressions, clicks, conversions, and conversion value. This is what tools like Triple Whale use for e‑commerce analytics and ROAS.
+- **Google AdSense**: For *publishers* who show ads on their site and earn revenue. It uses a different API and product. If you need publisher ad revenue (e.g. for a content site), that would be a separate integration.
+
+### Dashboard performance (Triple Whale–style)
+
+When Google Ads is connected and a customer is selected, the dashboard shows:
+
+- **Last 30 days**: Total spend, conversions, conversion value, ROAS
+- **Top campaigns by spend**: Table with spend, conversion value, and ROAS per campaign
+
+Data is read from `google_ads_daily_metrics`. Ensure cron or manual “Sync now” has run so metrics are populated.
+
+### Stored metrics and optional schema additions
+
+We currently store (in `google_ads_daily_metrics`):
+
+- Campaign-level: impressions, clicks, spend, conversions, conversion_value, ctr, average_cpc, date
+- ROAS is computed in the API as conversion_value / spend (not stored)
+
+Optional additions if you need them later:
+
+- **Ad group level**: Add GAQL for ad_group in sync and use existing `ad_group_id` / `ad_group_name` columns.
+- **View-through conversions**: Add a column and include `metrics.view_through_conversions` in the GAQL query.
+- **Video / Performance Max**: Add metrics like `metrics.video_views` and segment by campaign type if needed.
+
 ---
 
 ## Cron Sync

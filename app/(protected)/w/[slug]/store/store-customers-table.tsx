@@ -22,7 +22,6 @@ import {
 import { format } from 'date-fns'
 
 import { useWorkspace } from '@/hooks/use-workspace'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -41,69 +40,51 @@ import {
   TableRow,
 } from '@/components/ui/table'
 
-export type OrderRow = {
+export type CustomerRow = {
   id: string
-  orderNumber: string
-  name: string
   email: string | null
-  totalPrice: string
-  currency: string
-  financialStatus: string
-  fulfillmentStatus: string | null
-  processedAt: string
-  cancelledAt: string | null
+  firstName: string | null
+  lastName: string | null
+  ordersCount: number
+  totalSpent: string
+  currency: string | null
+  state: string | null
+  shopifyCreatedAt: string | null
+  createdAt: string
 }
 
-type OrdersResponse = {
-  data: OrderRow[]
+type CustomersResponse = {
+  data: CustomerRow[]
   total: number
   page: number
   pageSize: number
   totalPages: number
 }
 
-const FINANCIAL_OPTIONS = [
-  { value: '', label: 'All' },
-  { value: 'PAID', label: 'Paid' },
-  { value: 'PENDING', label: 'Pending' },
-  { value: 'REFUNDED', label: 'Refunded' },
-  { value: 'PARTIALLY_REFUNDED', label: 'Partially refunded' },
-]
-
-const FULFILLMENT_OPTIONS = [
-  { value: '', label: 'All' },
-  { value: 'FULFILLED', label: 'Fulfilled' },
-  { value: 'UNFULFILLED', label: 'Unfulfilled' },
-  { value: 'PARTIALLY_FULFILLED', label: 'Partially fulfilled' },
-]
-
-function useOrdersParams() {
+function useCustomersParams() {
   const searchParams = useSearchParams()
   const page = Number(searchParams.get('page')) || 1
   const pageSize = Number(searchParams.get('pageSize')) || 10
-  const sort = searchParams.get('sort') || 'processedAt'
-  const order = (searchParams.get('order') || 'desc') as 'asc' | 'desc'
+  const sort = searchParams.get('sort') || 'firstName'
+  const order = (searchParams.get('order') || 'asc') as 'asc' | 'desc'
   const search = searchParams.get('search') || ''
-  const financialStatus = searchParams.get('financialStatus') || ''
-  const fulfillmentStatus = searchParams.get('fulfillmentStatus') || ''
-  return {
-    page,
-    pageSize,
-    sort,
-    order,
-    search,
-    financialStatus,
-    fulfillmentStatus,
-  }
+  return { page, pageSize, sort, order, search }
 }
 
-export function StoreOrdersTable() {
+function displayName(row: CustomerRow): string {
+  const first = row.firstName?.trim()
+  const last = row.lastName?.trim()
+  if (first || last) return [first, last].filter(Boolean).join(' ')
+  return row.email || '—'
+}
+
+export function StoreCustomersTable() {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const { current } = useWorkspace()
   const slug = current.slug
-  const params = useOrdersParams()
+  const params = useCustomersParams()
   const [searchInput, setSearchInput] = useState(params.search)
   useEffect(() => {
     setSearchInput(params.search)
@@ -131,8 +112,8 @@ export function StoreOrdersTable() {
     [pathname, router, searchParams]
   )
 
-  const { data, isLoading, isError, error } = useQuery<OrdersResponse>({
-    queryKey: ['store', 'orders', slug, params],
+  const { data, isLoading, isError, error } = useQuery<CustomersResponse>({
+    queryKey: ['store', 'customers', slug, params],
     queryFn: async () => {
       const q = new URLSearchParams()
       q.set('page', String(params.page))
@@ -140,29 +121,34 @@ export function StoreOrdersTable() {
       q.set('sort', params.sort)
       q.set('order', params.order)
       if (params.search) q.set('search', params.search)
-      if (params.financialStatus) q.set('financialStatus', params.financialStatus)
-      if (params.fulfillmentStatus) q.set('fulfillmentStatus', params.fulfillmentStatus)
-      const res = await fetch(`/api/workspaces/${slug}/store/orders?${q.toString()}`)
+      const res = await fetch(`/api/workspaces/${slug}/store/customers?${q.toString()}`)
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
-        throw new Error(err.error || 'Failed to load orders')
+        throw new Error(err.error || 'Failed to load customers')
       }
       return res.json()
     },
   })
 
-  const columns = useMemo<ColumnDef<OrderRow>[]>(
+  const columns = useMemo<ColumnDef<CustomerRow>[]>(
     () => [
       {
-        accessorKey: 'orderNumber',
-        header: 'Order',
+        accessorKey: 'firstName',
+        header: 'Customer',
         cell: ({ row }) => (
-          <div className="font-medium">{row.original.name}</div>
+          <div>
+            <div className="font-medium">{displayName(row.original)}</div>
+            {row.original.email && (
+              <div className="text-muted-foreground text-xs">
+                {row.original.email}
+              </div>
+            )}
+          </div>
         ),
       },
       {
         accessorKey: 'email',
-        header: 'Customer',
+        header: 'Email',
         cell: ({ row }) => (
           <span className="text-muted-foreground">
             {row.original.email || '—'}
@@ -170,38 +156,38 @@ export function StoreOrdersTable() {
         ),
       },
       {
-        accessorKey: 'totalPrice',
-        header: () => <div className="text-right">Total</div>,
+        accessorKey: 'ordersCount',
+        header: () => <div className="text-right">Orders</div>,
+        cell: ({ row }) => (
+          <div className="text-right">{row.original.ordersCount}</div>
+        ),
+      },
+      {
+        accessorKey: 'totalSpent',
+        header: () => <div className="text-right">Total spent</div>,
         cell: ({ row }) => (
           <div className="text-right font-medium">
-            {row.original.currency} {Number(row.original.totalPrice).toFixed(2)}
+            {row.original.currency || ''} {Number(row.original.totalSpent).toFixed(2)}
           </div>
         ),
       },
       {
-        accessorKey: 'financialStatus',
-        header: 'Payment',
+        accessorKey: 'state',
+        header: 'State',
         cell: ({ row }) => (
-          <Badge variant="outline" className="capitalize">
-            {row.original.financialStatus?.replace(/_/g, ' ') ?? '—'}
-          </Badge>
+          <span className="text-muted-foreground capitalize">
+            {row.original.state || '—'}
+          </span>
         ),
       },
       {
-        accessorKey: 'fulfillmentStatus',
-        header: 'Fulfillment',
-        cell: ({ row }) => (
-          <Badge variant="secondary" className="capitalize">
-            {row.original.fulfillmentStatus?.replace(/_/g, ' ') ?? '—'}
-          </Badge>
-        ),
-      },
-      {
-        accessorKey: 'processedAt',
-        header: 'Date',
+        accessorKey: 'shopifyCreatedAt',
+        header: 'Created',
         cell: ({ row }) => (
           <span className="text-muted-foreground whitespace-nowrap">
-            {format(new Date(row.original.processedAt), 'MMM d, yyyy')}
+            {row.original.shopifyCreatedAt
+              ? format(new Date(row.original.shopifyCreatedAt), 'MMM d, yyyy')
+              : '—'}
           </span>
         ),
       },
@@ -222,7 +208,7 @@ export function StoreOrdersTable() {
   if (isError) {
     return (
       <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-6 text-center text-destructive">
-        {error instanceof Error ? error.message : 'Failed to load orders'}
+        {error instanceof Error ? error.message : 'Failed to load customers'}
       </div>
     )
   }
@@ -231,7 +217,7 @@ export function StoreOrdersTable() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3">
         <Input
-          placeholder="Search orders, email..."
+          placeholder="Search by name or email..."
           className="max-w-xs"
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
@@ -241,46 +227,6 @@ export function StoreOrdersTable() {
             }
           }}
         />
-        <Select
-          value={params.financialStatus || '__all__'}
-          onValueChange={(v) =>
-            updateParams({
-              financialStatus: v === '__all__' ? '' : v,
-              page: 1,
-            })
-          }
-        >
-          <SelectTrigger className="w-[160px]">
-            <SelectValue placeholder="Payment" />
-          </SelectTrigger>
-          <SelectContent>
-            {FINANCIAL_OPTIONS.map((o) => (
-              <SelectItem key={o.value || '__all__'} value={o.value || '__all__'}>
-                {o.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select
-          value={params.fulfillmentStatus || '__all__'}
-          onValueChange={(v) =>
-            updateParams({
-              fulfillmentStatus: v === '__all__' ? '' : v,
-              page: 1,
-            })
-          }
-        >
-          <SelectTrigger className="w-[160px]">
-            <SelectValue placeholder="Fulfillment" />
-          </SelectTrigger>
-          <SelectContent>
-            {FULFILLMENT_OPTIONS.map((o) => (
-              <SelectItem key={o.value || '__all__'} value={o.value || '__all__'}>
-                {o.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
       </div>
 
       <div className="min-h-[400px] rounded-lg border bg-card">
@@ -297,11 +243,14 @@ export function StoreOrdersTable() {
                     {headerGroup.headers.map((header) => {
                       const colId = header.column.id
                       const apiSortField =
-                        colId === 'orderNumber' ? 'name' : colId
-                      const canSort =
-                        apiSortField === 'processedAt' ||
-                        apiSortField === 'totalPrice' ||
-                        apiSortField === 'name'
+                        colId === 'firstName' ? 'firstName' : colId
+                      const canSort = [
+                        'firstName',
+                        'email',
+                        'ordersCount',
+                        'totalSpent',
+                        'shopifyCreatedAt',
+                      ].includes(apiSortField)
                       const isSorted = params.sort === apiSortField
                       return (
                         <TableHead key={header.id}>
@@ -366,7 +315,7 @@ export function StoreOrdersTable() {
                       colSpan={columns.length}
                       className="h-24 text-center text-muted-foreground"
                     >
-                      No orders found.
+                      No customers found.
                     </TableCell>
                   </TableRow>
                 )}
@@ -376,7 +325,7 @@ export function StoreOrdersTable() {
             {data && data.totalPages > 0 && (
               <div className="flex flex-wrap items-center justify-between gap-4 border-t px-4 py-3">
                 <p className="text-muted-foreground text-sm">
-                  {data.total} order{data.total !== 1 ? 's' : ''}
+                  {data.total} customer{data.total !== 1 ? 's' : ''}
                 </p>
                 <div className="flex items-center gap-2">
                   <Select

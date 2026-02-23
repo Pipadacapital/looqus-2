@@ -7,30 +7,30 @@ import {
 import { Decimal } from '@prisma/client/runtime/library'
 
 export async function syncGoogleAdsForConnection(connectionId: string, days = 30) {
-  const connection = await prisma.googleAdsConnection.findUnique({
+  const connection = await prisma.google_ads_connections.findUnique({
     where: { id: connectionId },
   })
 
   if (!connection || connection.status !== 'CONNECTED') return
 
   // Determine which customer to sync
-  let targetCustomer = connection.selectedCustomerId
-  if (!targetCustomer && connection.customerIds.length === 1) {
-    targetCustomer = connection.customerIds[0]
-    await prisma.googleAdsConnection.update({
+  let targetCustomer = connection.selected_customer_id
+  if (!targetCustomer && connection.customer_ids.length === 1) {
+    targetCustomer = connection.customer_ids[0]
+    await prisma.google_ads_connections.update({
       where: { id: connection.id },
-      data: { selectedCustomerId: targetCustomer },
+      data: { selected_customer_id: targetCustomer },
     })
   }
   if (!targetCustomer) {
-    await prisma.googleAdsConnection.update({
+    await prisma.google_ads_connections.update({
       where: { id: connection.id },
-      data: { lastSyncError: 'Multiple customer IDs available — please select one before syncing.' },
+      data: { last_sync_error: 'Multiple customer IDs available — please select one before syncing.' },
     })
     return
   }
 
-  const { accessToken } = await refreshGoogleAccessToken(connection.refreshToken)
+  const { accessToken } = await refreshGoogleAccessToken(connection.refresh_token)
 
   const until = new Date()
   const since = new Date()
@@ -87,40 +87,40 @@ export async function syncGoogleAdsForConnection(connectionId: string, days = 30
           rawJson: row,
         }
 
-        await prisma.googleAdsDailyMetric.upsert({
+        await prisma.google_ads_daily_metrics.upsert({
           where: {
-            connectionId_customerId_campaignId_date: {
-              connectionId: connection.id,
-              customerId,
-              campaignId: parsed.campaignId,
+            connection_id_customer_id_campaign_id_date: {
+              connection_id: connection.id,
+              customer_id: customerId,
+              campaign_id: parsed.campaignId,
               date: new Date(parsed.date),
             },
           },
           create: {
-            connectionId: connection.id,
-            customerId,
-            campaignId: parsed.campaignId,
-            campaignName: parsed.campaignName,
+            connection_id: connection.id,
+            customer_id: customerId,
+            campaign_id: parsed.campaignId,
+            campaign_name: parsed.campaignName,
             date: new Date(parsed.date),
             impressions: parsed.impressions,
             clicks: parsed.clicks,
             spend: new Decimal(parsed.spend),
             conversions: new Decimal(parsed.conversions),
-            conversionValue: new Decimal(parsed.conversionValue),
+            conversion_value: new Decimal(parsed.conversionValue),
             ctr: new Decimal(parsed.ctr),
-            averageCpc: new Decimal(parsed.averageCpc),
-            rawJson: parsed.rawJson as object,
+            average_cpc: new Decimal(parsed.averageCpc),
+            raw_json: parsed.rawJson as object,
           },
           update: {
-            campaignName: parsed.campaignName,
+            campaign_name: parsed.campaignName,
             impressions: parsed.impressions,
             clicks: parsed.clicks,
             spend: new Decimal(parsed.spend),
             conversions: new Decimal(parsed.conversions),
-            conversionValue: new Decimal(parsed.conversionValue),
+            conversion_value: new Decimal(parsed.conversionValue),
             ctr: new Decimal(parsed.ctr),
-            averageCpc: new Decimal(parsed.averageCpc),
-            rawJson: parsed.rawJson as object,
+            average_cpc: new Decimal(parsed.averageCpc),
+            raw_json: parsed.rawJson as object,
           },
         })
       }
@@ -129,11 +129,11 @@ export async function syncGoogleAdsForConnection(connectionId: string, days = 30
     }
   }
 
-  await prisma.googleAdsConnection.update({
+  await prisma.google_ads_connections.update({
     where: { id: connection.id },
     data: {
-      lastSyncAt: new Date(),
-      lastSyncError: errors.length > 0 ? errors.join('; ') : null,
+      last_sync_at: new Date(),
+      last_sync_error: errors.length > 0 ? errors.join('; ') : null,
     },
   })
 }
@@ -153,7 +153,7 @@ type GoogleGaqlRow = {
 }
 
 export async function syncAllGoogleAds(days = 30) {
-  const connections = await prisma.googleAdsConnection.findMany({
+  const connections = await prisma.google_ads_connections.findMany({
     where: { status: 'CONNECTED' },
     select: { id: true },
   })

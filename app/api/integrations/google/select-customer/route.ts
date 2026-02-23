@@ -21,9 +21,9 @@ export async function POST(request: NextRequest) {
   const result = await requireWorkspaceAdmin(workspaceId)
   if ('error' in result) return result.error
 
-  const connection = await prisma.googleAdsConnection.findUnique({
-    where: { workspaceId },
-    select: { id: true, customerIds: true, status: true },
+  const connection = await prisma.google_ads_connections.findUnique({
+    where: { workspace_id: workspaceId },
+    select: { id: true, customer_ids: true, status: true },
   })
 
   if (!connection || connection.status !== 'CONNECTED') {
@@ -33,16 +33,16 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  if (!connection.customerIds.includes(selectedCustomerId)) {
+  if (!connection.customer_ids.includes(selectedCustomerId)) {
     return NextResponse.json(
       { error: 'Selected customer ID is not in the list of connected customers' },
       { status: 400 }
     )
   }
 
-  await prisma.googleAdsConnection.update({
+  await prisma.google_ads_connections.update({
     where: { id: connection.id },
-    data: { selectedCustomerId },
+    data: { selected_customer_id: selectedCustomerId },
   })
 
   return NextResponse.json({ ok: true, selectedCustomerId })

@@ -20,8 +20,24 @@ export async function POST(request: NextRequest) {
   const auth = await requireWorkspaceAdmin(body.workspaceId)
   if ('error' in auth) return auth.error
 
-  const connection = await prisma.googleAdsConnection.findUnique({
-    where: { workspaceId: body.workspaceId },
+  const required = [
+    'GOOGLE_ADS_CLIENT_ID',
+    'GOOGLE_ADS_CLIENT_SECRET',
+    'GOOGLE_ADS_REDIRECT_URI',
+    'GOOGLE_ADS_DEVELOPER_TOKEN',
+  ] as const
+  const missing = required.filter((k) => !process.env[k])
+  if (missing.length > 0) {
+    return NextResponse.json(
+      {
+        error: 'Google Ads is not configured. Add these to .env: ' + missing.join(', '),
+      },
+      { status: 503 }
+    )
+  }
+
+  const connection = await prisma.google_ads_connections.findUnique({
+    where: { workspace_id: body.workspaceId },
     select: { id: true, status: true },
   })
 

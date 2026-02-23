@@ -48,19 +48,20 @@ export async function GET(request: NextRequest) {
 
   const developerToken = process.env.GOOGLE_ADS_DEVELOPER_TOKEN
   if (!developerToken) {
-    await prisma.googleAdsConnection.upsert({
-      where: { workspaceId: workspace.id },
+    await prisma.google_ads_connections.upsert({
+      where: { workspace_id: workspace.id },
       create: {
-        workspaceId: workspace.id,
-        refreshToken: '',
+        workspace_id: workspace.id,
+        refresh_token: '',
         scopes: [],
-        customerIds: [],
-        status: 'ERROR',
-        lastSyncError: 'GOOGLE_ADS_DEVELOPER_TOKEN is not configured on the server.',
+        customer_ids: [],
+        status: 'DISCONNECTED',
+        last_sync_error: 'GOOGLE_ADS_DEVELOPER_TOKEN is not configured on the server.',
+        updated_at: new Date(),
       },
       update: {
-        status: 'ERROR',
-        lastSyncError: 'GOOGLE_ADS_DEVELOPER_TOKEN is not configured on the server.',
+        status: 'DISCONNECTED',
+        last_sync_error: 'GOOGLE_ADS_DEVELOPER_TOKEN is not configured on the server.',
       },
     })
     return NextResponse.redirect(
@@ -107,28 +108,29 @@ export async function GET(request: NextRequest) {
     // Auto-select if exactly one customer
     const selectedCustomerId = customerIds.length === 1 ? customerIds[0] : null
 
-    await prisma.googleAdsConnection.upsert({
-      where: { workspaceId: workspace.id },
+    await prisma.google_ads_connections.upsert({
+      where: { workspace_id: workspace.id },
       create: {
-        workspaceId: workspace.id,
-        refreshToken,
+        workspace_id: workspace.id,
+        refresh_token: refreshToken,
         scopes: ['https://www.googleapis.com/auth/adwords'],
-        customerIds,
-        selectedCustomerId,
-        loginCustomerId,
-        googleEmail,
+        customer_ids: customerIds,
+        selected_customer_id: selectedCustomerId,
+        login_customer_id: loginCustomerId ?? null,
+        google_email: googleEmail,
         status: 'CONNECTED',
-        lastSyncError,
+        last_sync_error: lastSyncError,
+        updated_at: new Date(),
       },
       update: {
-        refreshToken,
+        refresh_token: refreshToken,
         scopes: ['https://www.googleapis.com/auth/adwords'],
-        customerIds,
-        selectedCustomerId,
-        loginCustomerId,
-        googleEmail,
+        customer_ids: customerIds,
+        selected_customer_id: selectedCustomerId,
+        login_customer_id: loginCustomerId ?? null,
+        google_email: googleEmail,
         status: 'CONNECTED',
-        lastSyncError,
+        last_sync_error: lastSyncError,
       },
     })
 

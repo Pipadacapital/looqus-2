@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import {
@@ -103,6 +103,7 @@ export function DashboardContent({
   const [error, setError] = useState<string | null>(null)
 
   const [syncing, setSyncing] = useState<string | null>(null)
+  const [shopifySyncing, setShopifySyncing] = useState(false)
   const [disconnecting, setDisconnecting] = useState<string | null>(null)
   const [selectingAccount, setSelectingAccount] = useState(false)
   const [refreshingAccounts, setRefreshingAccounts] = useState(false)
@@ -113,7 +114,74 @@ export function DashboardContent({
   const [srPassword, setSrPassword] = useState('')
   const [srConnecting, setSrConnecting] = useState(false)
   const [srError, setSrError] = useState<string | null>(null)
+
+  // Google Ads performance (Triple Whale–style)
+  type GoogleAdsSummary = {
+    impressions: number
+    clicks: number
+    spend: number
+    conversions: number
+    conversionValue: number
+    roas: number
+    from: string
+    to: string
+    days: number
+  }
+  type GoogleAdsCampaignRow = {
+    campaignId: string
+    campaignName: string
+    impressions: number
+    clicks: number
+    spend: number
+    conversions: number
+    conversionValue: number
+    roas: number
+  }
+  const [googleAdsMetrics, setGoogleAdsMetrics] = useState<{
+    summary: GoogleAdsSummary | null
+    byCampaign: GoogleAdsCampaignRow[]
+    loading: boolean
+    error: string | null
+  }>({ summary: null, byCampaign: [], loading: false, error: null })
+
   const router = useRouter()
+
+  const canFetchGoogleAds =
+    googleConnection &&
+    (googleConnection.customerIds.length === 0 ||
+      (googleConnection.customerIds.length > 1 && googleConnection.selectedCustomerId) ||
+      googleConnection.customerIds.length === 1)
+
+  useEffect(() => {
+    if (!canFetchGoogleAds || !workspaceSlug) return
+    setGoogleAdsMetrics((prev) => ({ ...prev, loading: true, error: null }))
+    fetch(`/api/workspaces/${workspaceSlug}/google-ads/metrics?days=30`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.error && !data.summary) {
+          setGoogleAdsMetrics({
+            summary: null,
+            byCampaign: [],
+            loading: false,
+            error: data.error,
+          })
+          return
+        }
+        setGoogleAdsMetrics({
+          summary: data.summary ?? null,
+          byCampaign: data.byCampaign ?? [],
+          loading: false,
+          error: null,
+        })
+      })
+      .catch(() => {
+        setGoogleAdsMetrics((prev) => ({
+          ...prev,
+          loading: false,
+          error: 'Failed to load Google Ads metrics',
+        }))
+      })
+  }, [workspaceSlug, googleConnection?.id, googleConnection?.selectedCustomerId])
 
   const canConnect =
     storeHandle.trim() && clientId.trim() && clientSecret.trim()
@@ -175,14 +243,41 @@ export function DashboardContent({
   const handleSync = async (provider: 'meta' | 'google') => {
     setSyncing(provider)
     try {
-      await fetch(`/api/integrations/${provider}/sync`, {
+      const res = await fetch(`/api/integrations/${provider}/sync`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workspaceId }),
       })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast.error(data.error || `Sync failed (${res.status})`)
+        return
+      }
+      toast.success('Sync started')
       window.location.reload()
     } finally {
       setSyncing(null)
+    }
+  }
+
+  const handleShopifySync = async () => {
+    if (!shopifyConnection?.id) return
+    setShopifySyncing(true)
+    try {
+      const res = await fetch('/api/shopify/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connectionId: shopifyConnection.id }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        toast.error(data.error || 'Shopify sync failed')
+        return
+      }
+      toast.success('Shopify sync started')
+      window.location.reload()
+    } finally {
+      setShopifySyncing(false)
     }
   }
 
@@ -335,10 +430,10 @@ export function DashboardContent({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={handleSync}
-                  disabled={syncing}
+                  onClick={handleShopifySync}
+                  disabled={shopifySyncing}
                 >
-                  {syncing ? (
+                  {shopifySyncing ? (
                     <>
                       <IconLoader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
                       Syncing...
@@ -610,6 +705,80 @@ export function DashboardContent({
               )}
               {googleConnection.googleEmail && (
                 <p className="text-xs text-muted-foreground">{googleConnection.googleEmail}</p>
+              )}
+              {/* Google Ads performance (Triple Whale–style) */}
+              {canFetchGoogleAds && (
+                <div className="rounded-lg border bg-muted/30 p-4 space-y-3">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                    Performance (last 30 days)
+                  </p>
+                  {googleAdsMetrics.loading ? (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <IconLoader2 className="h-4 w-4 animate-spin" />
+                      Loading metrics…
+                    </div>
+                  ) : googleAdsMetrics.error ? (
+                    <p className="text-sm text-muted-foreground">{googleAdsMetrics.error}</p>
+                  ) : googleAdsMetrics.summary ? (
+                    <>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        <div>
+                          <p className="text-xs text-muted-foreground">Spend</p>
+                          <p className="text-sm font-semibold">
+                            ₹{googleAdsMetrics.summary.spend.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground">Conversions</p>
+                          <p className="text-sm font-semibold">
+                            {googleAdsMetrics.summary.conversions.toLocaleString('en-IN', { maximumFractionDigits: 1 })}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground">Conversion value</p>
+                          <p className="text-sm font-semibold">
+                            ₹{googleAdsMetrics.summary.conversionValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-muted-foreground">ROAS</p>
+                          <p className="text-sm font-semibold">
+                            {googleAdsMetrics.summary.roas.toFixed(2)}x
+                          </p>
+                        </div>
+                      </div>
+                      {googleAdsMetrics.byCampaign.length > 0 && (
+                        <div className="border-t pt-3">
+                          <p className="text-xs font-medium text-muted-foreground mb-2">Top campaigns by spend</p>
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-xs">
+                              <thead>
+                                <tr className="border-b text-left text-muted-foreground">
+                                  <th className="py-1.5 font-medium">Campaign</th>
+                                  <th className="py-1.5 font-medium text-right">Spend</th>
+                                  <th className="py-1.5 font-medium text-right">Conv. value</th>
+                                  <th className="py-1.5 font-medium text-right">ROAS</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {googleAdsMetrics.byCampaign.slice(0, 5).map((c) => (
+                                  <tr key={c.campaignId} className="border-b border-border/50">
+                                    <td className="py-1.5 truncate max-w-[140px]" title={c.campaignName}>
+                                      {c.campaignName || c.campaignId}
+                                    </td>
+                                    <td className="py-1.5 text-right">₹{c.spend.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td>
+                                    <td className="py-1.5 text-right">₹{c.conversionValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td>
+                                    <td className="py-1.5 text-right">{c.roas.toFixed(2)}x</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  ) : null}
+                </div>
               )}
               <div className="flex items-center justify-between">
                 <div className="space-y-1">
