@@ -28,8 +28,14 @@ export function buildMetaAuthUrl(state: string): string {
 }
 
 export function appsecretProof(accessToken: string): string {
+  const secret = process.env.META_APP_SECRET
+  if (!secret || typeof secret !== 'string') {
+    throw new Error(
+      'META_APP_SECRET is not set. Add it to your .env to sync Meta Ads (used for appsecret_proof).'
+    )
+  }
   return crypto
-    .createHmac('sha256', META_APP_SECRET)
+    .createHmac('sha256', secret)
     .update(accessToken)
     .digest('hex')
 }

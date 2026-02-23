@@ -20,8 +20,8 @@ export async function POST(request: NextRequest) {
   const auth = await requireWorkspaceAdmin(body.workspaceId)
   if ('error' in auth) return auth.error
 
-  const connection = await prisma.metaAdsConnection.findUnique({
-    where: { workspaceId: body.workspaceId },
+  const connection = await prisma.meta_ads_connections.findUnique({
+    where: { workspace_id: body.workspaceId },
     select: { id: true, status: true },
   })
 

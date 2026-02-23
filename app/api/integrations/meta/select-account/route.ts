@@ -21,9 +21,9 @@ export async function POST(request: NextRequest) {
   const result = await requireWorkspaceAdmin(workspaceId)
   if ('error' in result) return result.error
 
-  const connection = await prisma.metaAdsConnection.findUnique({
-    where: { workspaceId },
-    select: { id: true, adAccountIds: true, status: true },
+  const connection = await prisma.meta_ads_connections.findUnique({
+    where: { workspace_id: workspaceId },
+    select: { id: true, ad_account_ids: true, status: true },
   })
 
   if (!connection || connection.status !== 'CONNECTED') {
@@ -33,16 +33,16 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  if (!connection.adAccountIds.includes(selectedAdAccountId)) {
+  if (!connection.ad_account_ids.includes(selectedAdAccountId)) {
     return NextResponse.json(
       { error: 'Selected ad account is not in the list of connected accounts' },
       { status: 400 }
     )
   }
 
-  await prisma.metaAdsConnection.update({
+  await prisma.meta_ads_connections.update({
     where: { id: connection.id },
-    data: { selectedAdAccountId },
+    data: { selected_ad_account_id: selectedAdAccountId, updated_at: new Date() },
   })
 
   return NextResponse.json({ ok: true, selectedAdAccountId })

@@ -3,25 +3,25 @@ import { fetchAdAccountInsights, type MetaInsightRow } from './meta'
 import { Decimal } from '@prisma/client/runtime/library'
 
 export async function syncMetaAdsForConnection(connectionId: string, days = 30) {
-  const connection = await prisma.metaAdsConnection.findUnique({
+  const connection = await prisma.meta_ads_connections.findUnique({
     where: { id: connectionId },
   })
 
   if (!connection || connection.status !== 'CONNECTED') return
 
   // Determine which account to sync
-  let targetAccount = connection.selectedAdAccountId
-  if (!targetAccount && connection.adAccountIds.length === 1) {
-    targetAccount = connection.adAccountIds[0]
-    await prisma.metaAdsConnection.update({
+  let targetAccount = connection.selected_ad_account_id
+  if (!targetAccount && connection.ad_account_ids.length === 1) {
+    targetAccount = connection.ad_account_ids[0]
+    await prisma.meta_ads_connections.update({
       where: { id: connection.id },
-      data: { selectedAdAccountId: targetAccount },
+      data: { selected_ad_account_id: targetAccount },
     })
   }
   if (!targetAccount) {
-    await prisma.metaAdsConnection.update({
+    await prisma.meta_ads_connections.update({
       where: { id: connection.id },
-      data: { lastSyncError: 'Multiple ad accounts available — please select one before syncing.' },
+      data: { last_sync_error: 'Multiple ad accounts available — please select one before syncing.' },
     })
     return
   }
@@ -38,29 +38,29 @@ export async function syncMetaAdsForConnection(connectionId: string, days = 30) 
   for (const adAccountId of [targetAccount]) {
     try {
       const rows: MetaInsightRow[] = await fetchAdAccountInsights(
-        connection.accessToken,
+        connection.access_token,
         adAccountId,
         sinceStr,
         untilStr
       )
 
       for (const row of rows) {
-        await prisma.metaAdsDailyMetric.upsert({
+        await prisma.meta_ads_daily_metrics.upsert({
           where: {
-            connectionId_adAccountId_campaignId_date: {
-              connectionId: connection.id,
-              adAccountId,
-              campaignId: row.campaignId,
+            connection_id_ad_account_id_campaign_id_date: {
+              connection_id: connection.id,
+              ad_account_id: adAccountId,
+              campaign_id: row.campaignId,
               date: new Date(row.date),
             },
           },
           create: {
-            connectionId: connection.id,
-            adAccountId,
-            campaignId: row.campaignId,
-            campaignName: row.campaignName,
-            adsetId: row.adsetId,
-            adsetName: row.adsetName,
+            connection_id: connection.id,
+            ad_account_id: adAccountId,
+            campaign_id: row.campaignId,
+            campaign_name: row.campaignName,
+            adset_id: row.adsetId,
+            adset_name: row.adsetName,
             date: new Date(row.date),
             impressions: row.impressions,
             clicks: row.clicks,
@@ -70,12 +70,12 @@ export async function syncMetaAdsForConnection(connectionId: string, days = 30) 
             ctr: new Decimal(row.ctr),
             cpc: new Decimal(row.cpc),
             cpm: new Decimal(row.cpm),
-            rawJson: row.rawJson as object,
+            raw_json: row.rawJson as object,
           },
           update: {
-            campaignName: row.campaignName,
-            adsetId: row.adsetId,
-            adsetName: row.adsetName,
+            campaign_name: row.campaignName,
+            adset_id: row.adsetId,
+            adset_name: row.adsetName,
             impressions: row.impressions,
             clicks: row.clicks,
             spend: new Decimal(row.spend),
@@ -84,7 +84,7 @@ export async function syncMetaAdsForConnection(connectionId: string, days = 30) 
             ctr: new Decimal(row.ctr),
             cpc: new Decimal(row.cpc),
             cpm: new Decimal(row.cpm),
-            rawJson: row.rawJson as object,
+            raw_json: row.rawJson as object,
           },
         })
       }
@@ -93,26 +93,64 @@ export async function syncMetaAdsForConnection(connectionId: string, days = 30) 
     }
   }
 
-  await prisma.metaAdsConnection.update({
+  await prisma.meta_ads_connections.update({
     where: { id: connection.id },
     data: {
-      lastSyncAt: new Date(),
-      lastSyncError: errors.length > 0 ? errors.join('; ') : null,
+      last_sync_at: new Date(),
+      last_sync_error: errors.length > 0 ? errors.join('; ') : null,
     },
   })
 }
 
-export async function syncAllMetaAds(days = 30) {
-  const connections = await prisma.metaAdsConnection.findMany({
+export type SyncAllMetaAdsResult = {
+  connectionId: string
+  workspaceId: string
+  workspaceName: string
+  status: 'ok' | 'failed'
+  error?: string
+}
+
+export async function syncAllMetaAds(days = 30): Promise<{
+  synced: number
+  failed: number
+  results: SyncAllMetaAdsResult[]
+}> {
+  const connections = await prisma.meta_ads_connections.findMany({
     where: { status: 'CONNECTED' },
-    select: { id: true },
+    select: {
+      id: true,
+      workspace_id: true,
+      workspaces: { select: { name: true } },
+    },
   })
+
+  const results: SyncAllMetaAdsResult[] = []
 
   for (const c of connections) {
     try {
       await syncMetaAdsForConnection(c.id, days)
+      results.push({
+        connectionId: c.id,
+        workspaceId: c.workspace_id,
+        workspaceName: c.workspaces?.name ?? 'Unknown',
+        status: 'ok',
+      })
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
       console.error(`Meta sync failed for connection ${c.id}:`, err)
+      results.push({
+        connectionId: c.id,
+        workspaceId: c.workspace_id,
+        workspaceName: c.workspaces?.name ?? 'Unknown',
+        status: 'failed',
+        error: message,
+      })
     }
+  }
+
+  return {
+    synced: results.filter((r) => r.status === 'ok').length,
+    failed: results.filter((r) => r.status === 'failed').length,
+    results,
   }
 }

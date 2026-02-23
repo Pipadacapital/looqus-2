@@ -19,9 +19,9 @@ export async function POST(request: NextRequest) {
   const auth = await requireWorkspaceAdmin(body.workspaceId)
   if ('error' in auth) return auth.error
 
-  await prisma.metaAdsConnection.updateMany({
-    where: { workspaceId: body.workspaceId, status: 'CONNECTED' },
-    data: { status: 'DISCONNECTED', accessToken: '' },
+  await prisma.meta_ads_connections.updateMany({
+    where: { workspace_id: body.workspaceId, status: 'CONNECTED' },
+    data: { status: 'DISCONNECTED', access_token: '', updated_at: new Date() },
   })
 
   return NextResponse.json({ success: true })

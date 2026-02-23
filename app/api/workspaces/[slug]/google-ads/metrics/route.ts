@@ -24,6 +24,7 @@ export async function GET(
     MAX_DAYS,
     Math.max(1, Number(searchParams.get('days')) || DEFAULT_DAYS)
   )
+  const view = searchParams.get('view') === 'daily' ? 'daily' : 'campaigns'
 
   const workspace = await prisma.workspace.findUnique({
     where: { slug },
@@ -60,17 +61,26 @@ export async function GET(
   const connection = workspace.google_ads_connections
   if (!connection) {
     return NextResponse.json(
-      { error: 'No Google Ads connection', summary: null, byCampaign: [] },
+      { error: 'No Google Ads connection', customerIds: [], activeCustomerId: null, totalDailyRows: 0, summary: null, byCampaign: [] },
       { status: 200 }
     )
   }
 
+  // Use selected customer, or first if only one, or first when multiple (so we always show some data)
+  const customerIds = connection.customer_ids ?? []
   const customerId =
     connection.selected_customer_id ??
-    (connection.customer_ids?.length === 1 ? connection.customer_ids[0] : null)
+    (customerIds.length >= 1 ? customerIds[0] : null)
   if (!customerId) {
     return NextResponse.json(
-      { error: 'Select a Google Ads customer first', summary: null, byCampaign: [] },
+      {
+        error: 'No Google Ads account linked yet. Connect from Dashboard.',
+        customerIds: [],
+        activeCustomerId: null,
+        totalDailyRows: 0,
+        summary: null,
+        byCampaign: [],
+      },
       { status: 200 }
     )
   }
@@ -145,7 +155,34 @@ export async function GET(
     (a, b) => b.spend - a.spend
   )
 
+  const dailyRows =
+    view === 'daily'
+      ? metrics.map((m) => {
+          const spend = Number(m.spend)
+          const conversionValue = Number(m.conversion_value)
+          return {
+            date: m.date.toISOString().slice(0, 10),
+            campaignId: m.campaign_id,
+            campaignName: m.campaign_name,
+            impressions: m.impressions,
+            clicks: m.clicks,
+            spend,
+            conversions: Number(m.conversions),
+            conversionValue,
+            roas: spend > 0 ? Math.round((conversionValue / spend) * 100) / 100 : 0,
+          }
+        }).sort((a, b) => {
+          const d = b.date.localeCompare(a.date)
+          if (d !== 0) return d
+          return b.spend - a.spend
+        })
+      : undefined
+
   return NextResponse.json({
+    customerIds,
+    activeCustomerId: customerId,
+    totalDailyRows: metrics.length,
+    view,
     summary: {
       impressions: totals.impressions,
       clicks: totals.clicks,
@@ -161,5 +198,6 @@ export async function GET(
       ...c,
       roas: c.spend > 0 ? Math.round((c.conversionValue / c.spend) * 100) / 100 : 0,
     })),
+    dailyRows,
   })
 }

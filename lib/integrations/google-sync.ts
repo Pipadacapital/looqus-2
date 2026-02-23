@@ -152,17 +152,55 @@ type GoogleGaqlRow = {
   segments?: { date?: string }
 }
 
-export async function syncAllGoogleAds(days = 30) {
+export type SyncAllGoogleAdsResult = {
+  connectionId: string
+  workspaceId: string
+  workspaceName: string
+  status: 'ok' | 'failed'
+  error?: string
+}
+
+export async function syncAllGoogleAds(days = 30): Promise<{
+  synced: number
+  failed: number
+  results: SyncAllGoogleAdsResult[]
+}> {
   const connections = await prisma.google_ads_connections.findMany({
     where: { status: 'CONNECTED' },
-    select: { id: true },
+    select: {
+      id: true,
+      workspace_id: true,
+      workspaces: { select: { name: true } },
+    },
   })
+
+  const results: SyncAllGoogleAdsResult[] = []
 
   for (const c of connections) {
     try {
       await syncGoogleAdsForConnection(c.id, days)
+      results.push({
+        connectionId: c.id,
+        workspaceId: c.workspace_id,
+        workspaceName: c.workspaces?.name ?? 'Unknown',
+        status: 'ok',
+      })
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
       console.error(`Google Ads sync failed for connection ${c.id}:`, err)
+      results.push({
+        connectionId: c.id,
+        workspaceId: c.workspace_id,
+        workspaceName: c.workspaces?.name ?? 'Unknown',
+        status: 'failed',
+        error: message,
+      })
     }
+  }
+
+  return {
+    synced: results.filter((r) => r.status === 'ok').length,
+    failed: results.filter((r) => r.status === 'failed').length,
+    results,
   }
 }

@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
 import { redirect } from 'next/navigation'
+import { getCurrentUserRole } from '@/lib/require-superadmin'
 import { DashboardContent } from './dashboard-content'
 
 export default async function DashboardPage({
@@ -71,6 +72,9 @@ export default async function DashboardPage({
 
   if (!workspace) redirect('/')
 
+  const role = await getCurrentUserRole()
+  const isSuperadmin = role === 'SUPERADMIN'
+
   const connection = workspace.shopifyConnections[0] ?? null
   const metaConnectionRaw = workspace.meta_ads_connections
   const metaConnection =
@@ -88,6 +92,7 @@ export default async function DashboardPage({
       workspaceSlug={slug}
       workspaceId={workspace.id}
       workspaceName={workspace.name}
+      isSuperadmin={isSuperadmin}
       shopifyConnection={
         connection
           ? {

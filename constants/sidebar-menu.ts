@@ -8,7 +8,10 @@ import {
   IconReport,
   IconSearch,
   IconSettings,
-  IconUsers,IconBuildingStore
+  IconUsers,
+  IconBuildingStore,
+  IconBrandGoogle,
+  IconBrandMeta,
 } from "@tabler/icons-react"
 
 export const sidebarMenuData = {
@@ -22,6 +25,16 @@ export const sidebarMenuData = {
       title: "Store",
       path: "store",
       icon: IconBuildingStore,
+    },
+    {
+      title: "Google Ads",
+      path: "google-ads",
+      icon: IconBrandGoogle,
+    },
+    {
+      title: "Meta Ads",
+      path: "meta-ads",
+      icon: IconBrandMeta,
     },
     {
       title: "Analytics",

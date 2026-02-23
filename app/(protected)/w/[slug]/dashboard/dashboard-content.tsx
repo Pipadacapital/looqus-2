@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import {
@@ -79,6 +80,7 @@ interface DashboardContentProps {
   workspaceSlug: string
   workspaceId: string
   workspaceName: string
+  isSuperadmin?: boolean
   shopifyConnection: ShopifyConnectionInfo | null
   metaConnection: MetaConnectionInfo | null
   googleConnection: GoogleConnectionInfo | null
@@ -89,6 +91,7 @@ export function DashboardContent({
   workspaceSlug,
   workspaceId,
   workspaceName,
+  isSuperadmin = false,
   shopifyConnection,
   metaConnection,
   googleConnection,
@@ -817,6 +820,14 @@ export function DashboardContent({
                     Disconnect
                   </Button>
                 </div>
+                {isSuperadmin && (
+                  <p className="text-xs text-muted-foreground mt-2">
+                    <Link href="/admin" className="text-primary underline underline-offset-2 hover:no-underline">
+                      Superadmin
+                    </Link>
+                    {' '}— sync all Google Ads, manage all users & workspaces.
+                  </p>
+                )}
               </div>
             </div>
           ) : (

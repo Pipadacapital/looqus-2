@@ -71,25 +71,28 @@ export async function GET(request: NextRequest) {
       // Non-critical
     }
 
-    await prisma.metaAdsConnection.upsert({
-      where: { workspaceId: workspace.id },
+    const now = new Date()
+    await prisma.meta_ads_connections.upsert({
+      where: { workspace_id: workspace.id },
       create: {
-        workspaceId: workspace.id,
-        accessToken,
-        tokenExpiresAt,
+        workspace_id: workspace.id,
+        access_token: accessToken,
+        token_expires_at: tokenExpiresAt,
         scopes: ['ads_management', 'ads_read', 'business_management', 'read_insights'],
-        adAccountIds,
-        metaUserId,
+        ad_account_ids: adAccountIds,
+        meta_user_id: metaUserId,
         status: 'CONNECTED',
+        updated_at: now,
       },
       update: {
-        accessToken,
-        tokenExpiresAt,
+        access_token: accessToken,
+        token_expires_at: tokenExpiresAt,
         scopes: ['ads_management', 'ads_read', 'business_management', 'read_insights'],
-        adAccountIds,
-        metaUserId,
+        ad_account_ids: adAccountIds,
+        meta_user_id: metaUserId,
         status: 'CONNECTED',
-        lastSyncError: null,
+        last_sync_error: null,
+        updated_at: now,
       },
     })
 
