@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import {
   IconPlugConnected,
@@ -147,8 +146,6 @@ export function DashboardContent({
     error: string | null
   }>({ summary: null, byCampaign: [], loading: false, error: null })
 
-  const router = useRouter()
-
   const canFetchGoogleAds =
     googleConnection &&
     (googleConnection.customerIds.length === 0 ||
@@ -184,7 +181,7 @@ export function DashboardContent({
           error: 'Failed to load Google Ads metrics',
         }))
       })
-  }, [workspaceSlug, googleConnection?.id, googleConnection?.selectedCustomerId])
+  }, [workspaceSlug, canFetchGoogleAds, googleConnection?.id, googleConnection?.selectedCustomerId])
 
   const canConnect =
     storeHandle.trim() && clientId.trim() && clientSecret.trim()

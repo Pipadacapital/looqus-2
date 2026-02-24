@@ -20,22 +20,22 @@ export async function createOAuthState(params: {
   codeVerifier?: string
 }) {
   // Clean up expired states for this provider + workspace
-  await prisma.oAuthState.deleteMany({
+  await prisma.oauth_states.deleteMany({
     where: {
       provider: params.provider,
-      workspaceId: params.workspaceId,
-      expiresAt: { lt: new Date() },
+      workspace_id: params.workspaceId,
+      expires_at: { lt: new Date() },
     },
   })
 
-  return prisma.oAuthState.create({
+  return prisma.oauth_states.create({
     data: {
       provider: params.provider,
-      workspaceId: params.workspaceId,
-      userId: params.userId,
-      stateHash: hashState(params.state),
-      codeVerifier: params.codeVerifier ?? null,
-      expiresAt: new Date(Date.now() + STATE_TTL_MS),
+      workspace_id: params.workspaceId,
+      user_id: params.userId,
+      state_hash: hashState(params.state),
+      code_verifier: params.codeVerifier ?? null,
+      expires_at: new Date(Date.now() + STATE_TTL_MS),
     },
   })
 }
@@ -46,19 +46,19 @@ export async function validateOAuthState(
 ) {
   const hash = hashState(state)
 
-  const record = await prisma.oAuthState.findUnique({
-    where: { stateHash: hash },
+  const record = await prisma.oauth_states.findUnique({
+    where: { state_hash: hash },
   })
 
   if (!record) return null
   if (record.provider !== provider) return null
-  if (record.expiresAt < new Date()) {
-    await prisma.oAuthState.delete({ where: { id: record.id } })
+  if (record.expires_at < new Date()) {
+    await prisma.oauth_states.delete({ where: { id: record.id } })
     return null
   }
 
   // Consume the state (one-time use)
-  await prisma.oAuthState.delete({ where: { id: record.id } })
+  await prisma.oauth_states.delete({ where: { id: record.id } })
 
   return record
 }

@@ -22,7 +22,7 @@ export async function createNotification(
       title: params.title,
       body: params.body,
       actionUrl: params.actionUrl,
-      metadata: params.metadata ?? undefined,
+      metadata: params.metadata as any | null,
     },
   })
 }
@@ -36,12 +36,12 @@ export async function createNotificationForMany(
   const result = await prisma.notification.createMany({
     data: userIds.map((userId) => ({
       userId,
-      workspaceId: params.workspaceId,
+      workspace_id: params.workspaceId,
       type: params.type,
       title: params.title,
       body: params.body,
-      actionUrl: params.actionUrl,
-      metadata: params.metadata ?? undefined,
+      action_url: params.actionUrl,
+      metadata: params.metadata as any | null,
     })),
   })
 

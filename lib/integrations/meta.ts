@@ -151,7 +151,7 @@ export async function fetchAdAccountInsights(
     }).toString()
 
   while (url) {
-    const res = await fetch(url)
+    const res: Response = await fetch(url)
     if (!res.ok) {
       const text = await res.text()
       throw new Error(`Meta insights fetch failed (${res.status}): ${text}`)

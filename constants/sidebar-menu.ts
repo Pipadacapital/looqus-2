@@ -4,7 +4,6 @@ import {
   IconDatabase,
   IconFileWord,
   IconHelp,
-  IconListDetails,
   IconReport,
   IconSearch,
   IconSettings,

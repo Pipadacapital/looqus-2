@@ -110,21 +110,6 @@ export async function GET(
     orderBy: { date: 'asc' },
   })
 
-  type Agg = {
-    campaignId: string
-    campaignName: string
-    adsetId: string | null
-    adsetName: string | null
-    impressions: number
-    clicks: number
-    spend: number
-    conversions: number
-    revenue: number
-    ctr: number
-    cpc: number
-    cpm: number
-  }
-
   const totals = {
     impressions: 0,
     clicks: 0,

@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
+import { Prisma } from '@prisma/client'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
 
@@ -18,7 +19,7 @@ export async function GET(request: NextRequest) {
   const limit = Math.min(Number(searchParams.get('limit') ?? 20), 50)
   const cursor = searchParams.get('cursor')
 
-  const where: Parameters<typeof prisma.notification.findMany>[0]['where'] = {
+  const where: Prisma.NotificationWhereInput = {
     userId: user.id,
     ...(workspaceId && { workspaceId }),
     ...(unreadOnly && { read: false }),

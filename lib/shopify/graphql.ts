@@ -55,7 +55,7 @@ export async function shopifyGraphQL<T>(params: {
       throw lastError
     }
 
-    if (json.extensions?.cost?.throttleStatus.currentlyAvailable < 10 && attempt < 2) {
+    if (json.extensions?.cost?.throttleStatus?.currentlyAvailable && json.extensions.cost.throttleStatus.currentlyAvailable < 10 && attempt < 2) {
       await new Promise((r) => setTimeout(r, 1000))
       continue
     }

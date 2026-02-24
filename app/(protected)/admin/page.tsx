@@ -1,6 +1,5 @@
 import Link from 'next/link'
 import { IconUsers, IconBuildingStore, IconBrandGoogle, IconArrowRight } from '@tabler/icons-react'
-import { Button } from '@/components/ui/button'
 
 export default function AdminPage() {
   return (

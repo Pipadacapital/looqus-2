@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useTransition } from 'react'
+import { useState, useTransition } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -91,19 +91,15 @@ export function OnboardingForm({
   const [shopifyClientId, setShopifyClientId] = useState('')
   const [shopifyClientSecret, setShopifyClientSecret] = useState('')
 
-  useEffect(() => {
-    if (!slugTouched) {
-      setSlug(toSlug(brandName))
-    }
-  }, [brandName, slugTouched])
+  const effectiveSlug = slugTouched ? slug : toSlug(brandName)
 
   const canProceed = () => {
     if (isNewWorkspace) {
-      if (step === 0) return brandName.trim().length > 0 && slug.trim().length > 0
+      if (step === 0) return brandName.trim().length > 0 && effectiveSlug.trim().length > 0
       return true
     }
     if (step === 0) return fullName.trim().length > 0 && role.length > 0
-    if (step === 1) return brandName.trim().length > 0 && slug.trim().length > 0
+    if (step === 1) return brandName.trim().length > 0 && effectiveSlug.trim().length > 0
     return true
   }
 
@@ -128,7 +124,7 @@ export function OnboardingForm({
         fullName: fullName.trim(),
         role,
         brandName: brandName.trim(),
-        slug: slug.trim().toLowerCase(),
+        slug: effectiveSlug.trim().toLowerCase(),
         industry,
         monthlyRevenue,
         storeUrl: storeUrl.trim(),
@@ -282,7 +278,7 @@ export function OnboardingForm({
                   id="slug"
                   placeholder="acme-inc"
                   className="rounded-l-none"
-                  value={slug}
+                  value={effectiveSlug}
                   onChange={(e) => {
                     setSlugTouched(true)
                     setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))

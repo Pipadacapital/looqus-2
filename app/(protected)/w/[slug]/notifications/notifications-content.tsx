@@ -42,7 +42,7 @@ interface NotificationsContentProps {
 }
 
 export function NotificationsContent({
-  workspaceSlug,
+  workspaceSlug: _workspaceSlug,
   workspaceId,
   initialNotifications,
 }: NotificationsContentProps) {

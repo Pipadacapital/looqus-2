@@ -36,7 +36,7 @@ export async function GET(request: NextRequest) {
   }
 
   const workspace = await prisma.workspace.findUnique({
-    where: { id: oauthRecord.workspaceId },
+    where: { id: oauthRecord.workspace_id },
     select: { slug: true, id: true },
   })
 
