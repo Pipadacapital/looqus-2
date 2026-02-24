@@ -2,12 +2,15 @@ import { prisma } from '@/lib/prisma'
 import { fetchAdAccountInsights, type MetaInsightRow } from './meta'
 import { Decimal } from '@prisma/client/runtime/library'
 
-export async function syncMetaAdsForConnection(connectionId: string, days = 30) {
+export async function syncMetaAdsForConnection(
+  connectionId: string,
+  days = 30
+): Promise<{ rowsSynced: number }> {
   const connection = await prisma.meta_ads_connections.findUnique({
     where: { id: connectionId },
   })
 
-  if (!connection || connection.status !== 'CONNECTED') return
+  if (!connection || connection.status !== 'CONNECTED') return { rowsSynced: 0 }
 
   // Determine which account to sync
   let targetAccount = connection.selected_ad_account_id
@@ -23,7 +26,7 @@ export async function syncMetaAdsForConnection(connectionId: string, days = 30) 
       where: { id: connection.id },
       data: { last_sync_error: 'Multiple ad accounts available — please select one before syncing.' },
     })
-    return
+    return { rowsSynced: 0 }
   }
 
   const until = new Date()
@@ -34,6 +37,7 @@ export async function syncMetaAdsForConnection(connectionId: string, days = 30) 
   const untilStr = until.toISOString().slice(0, 10)
 
   const errors: string[] = []
+  let rowsSynced = 0
 
   for (const adAccountId of [targetAccount]) {
     try {
@@ -87,6 +91,7 @@ export async function syncMetaAdsForConnection(connectionId: string, days = 30) 
             raw_json: row.rawJson as object,
           },
         })
+        rowsSynced++
       }
     } catch (err) {
       errors.push(`${adAccountId}: ${err instanceof Error ? err.message : String(err)}`)
@@ -100,6 +105,7 @@ export async function syncMetaAdsForConnection(connectionId: string, days = 30) 
       last_sync_error: errors.length > 0 ? errors.join('; ') : null,
     },
   })
+  return { rowsSynced }
 }
 
 export type SyncAllMetaAdsResult = {
@@ -108,6 +114,8 @@ export type SyncAllMetaAdsResult = {
   workspaceName: string
   status: 'ok' | 'failed'
   error?: string
+  /** Number of daily metric rows fetched and upserted (no duplicates; existing rows updated). */
+  rowsSynced?: number
 }
 
 export async function syncAllMetaAds(days = 30): Promise<{
@@ -128,12 +136,13 @@ export async function syncAllMetaAds(days = 30): Promise<{
 
   for (const c of connections) {
     try {
-      await syncMetaAdsForConnection(c.id, days)
+      const { rowsSynced } = await syncMetaAdsForConnection(c.id, days)
       results.push({
         connectionId: c.id,
         workspaceId: c.workspace_id,
         workspaceName: c.workspaces?.name ?? 'Unknown',
         status: 'ok',
+        rowsSynced,
       })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)

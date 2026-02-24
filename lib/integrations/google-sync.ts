@@ -6,12 +6,15 @@ import {
 } from './google'
 import { Decimal } from '@prisma/client/runtime/library'
 
-export async function syncGoogleAdsForConnection(connectionId: string, days = 30) {
+export async function syncGoogleAdsForConnection(
+  connectionId: string,
+  days = 30
+): Promise<{ rowsSynced: number }> {
   const connection = await prisma.google_ads_connections.findUnique({
     where: { id: connectionId },
   })
 
-  if (!connection || connection.status !== 'CONNECTED') return
+  if (!connection || connection.status !== 'CONNECTED') return { rowsSynced: 0 }
 
   // Determine which customer to sync
   let targetCustomer = connection.selected_customer_id
@@ -27,7 +30,7 @@ export async function syncGoogleAdsForConnection(connectionId: string, days = 30
       where: { id: connection.id },
       data: { last_sync_error: 'Multiple customer IDs available — please select one before syncing.' },
     })
-    return
+    return { rowsSynced: 0 }
   }
 
   const { accessToken } = await refreshGoogleAccessToken(connection.refresh_token)
@@ -40,6 +43,7 @@ export async function syncGoogleAdsForConnection(connectionId: string, days = 30
   const untilStr = until.toISOString().slice(0, 10)
 
   const errors: string[] = []
+  let rowsSynced = 0
 
   for (const customerId of [targetCustomer]) {
     try {
@@ -123,6 +127,7 @@ export async function syncGoogleAdsForConnection(connectionId: string, days = 30
             raw_json: parsed.rawJson as object,
           },
         })
+        rowsSynced++
       }
     } catch (err) {
       errors.push(`${customerId}: ${err instanceof Error ? err.message : String(err)}`)
@@ -136,6 +141,7 @@ export async function syncGoogleAdsForConnection(connectionId: string, days = 30
       last_sync_error: errors.length > 0 ? errors.join('; ') : null,
     },
   })
+  return { rowsSynced }
 }
 
 type GoogleGaqlRow = {
@@ -158,6 +164,8 @@ export type SyncAllGoogleAdsResult = {
   workspaceName: string
   status: 'ok' | 'failed'
   error?: string
+  /** Number of daily metric rows fetched and upserted (no duplicates; existing rows updated). */
+  rowsSynced?: number
 }
 
 export async function syncAllGoogleAds(days = 30): Promise<{
@@ -178,12 +186,13 @@ export async function syncAllGoogleAds(days = 30): Promise<{
 
   for (const c of connections) {
     try {
-      await syncGoogleAdsForConnection(c.id, days)
+      const { rowsSynced } = await syncGoogleAdsForConnection(c.id, days)
       results.push({
         connectionId: c.id,
         workspaceId: c.workspace_id,
         workspaceName: c.workspaces?.name ?? 'Unknown',
         status: 'ok',
+        rowsSynced,
       })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)

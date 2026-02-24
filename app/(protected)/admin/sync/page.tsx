@@ -42,6 +42,8 @@ type SyncResultRow = {
   workspaceName: string
   status: 'ok' | 'failed'
   error?: string
+  /** Daily metric rows fetched & upserted (existing rows updated, no duplicates). */
+  rowsSynced?: number
 }
 
 export default function AdminSyncPage() {
@@ -241,6 +243,15 @@ export default function AdminSyncPage() {
           <div className="rounded-xl border bg-card p-4 shadow-sm space-y-3">
             <p className="text-sm font-medium">
               Google Ads result: {lastResult.synced} synced, {lastResult.failed} failed (last {lastResult.days} days)
+              {lastResult.results.some((r) => typeof r.rowsSynced === 'number') && (
+                <span className="text-muted-foreground font-normal">
+                  {' '}
+                  · {lastResult.results.reduce((s, r) => s + (r.rowsSynced ?? 0), 0)} metric rows upserted
+                </span>
+              )}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Upsert = existing rows updated, no duplicate rows. Numbers show how many daily metric rows were fetched and written.
             </p>
             <ul className="space-y-2">
               {lastResult.results.map((r) => (
@@ -254,6 +265,11 @@ export default function AdminSyncPage() {
                     <IconX className="h-4 w-4 text-destructive shrink-0" />
                   )}
                   <span className="font-medium">{r.workspaceName}</span>
+                  {typeof r.rowsSynced === 'number' && (
+                    <span className="text-muted-foreground">
+                      — {r.rowsSynced} rows
+                    </span>
+                  )}
                   {r.error && (
                     <span className="text-muted-foreground truncate" title={r.error}>
                       — {r.error}
@@ -334,6 +350,15 @@ export default function AdminSyncPage() {
           <div className="rounded-xl border bg-card p-4 shadow-sm space-y-3">
             <p className="text-sm font-medium">
               Meta Ads result: {metaLastResult.synced} synced, {metaLastResult.failed} failed (last {metaLastResult.days} days)
+              {metaLastResult.results.some((r) => typeof r.rowsSynced === 'number') && (
+                <span className="text-muted-foreground font-normal">
+                  {' '}
+                  · {metaLastResult.results.reduce((s, r) => s + (r.rowsSynced ?? 0), 0)} metric rows upserted
+                </span>
+              )}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Upsert = existing rows updated, no duplicate rows. Numbers show how many daily metric rows were fetched and written.
             </p>
             <ul className="space-y-2">
               {metaLastResult.results.map((r) => (
@@ -347,6 +372,11 @@ export default function AdminSyncPage() {
                     <IconX className="h-4 w-4 text-destructive shrink-0" />
                   )}
                   <span className="font-medium">{r.workspaceName}</span>
+                  {typeof r.rowsSynced === 'number' && (
+                    <span className="text-muted-foreground">
+                      — {r.rowsSynced} rows
+                    </span>
+                  )}
                   {r.error && (
                     <span className="text-muted-foreground truncate" title={r.error}>
                       — {r.error}
