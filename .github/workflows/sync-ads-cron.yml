@@ -1,0 +1,17 @@
+name: Sync ads hourly
+
+on:
+  schedule:
+    # Every hour at minute 0 (00:00, 01:00, …)
+    - cron: '0 * * * *'
+  workflow_dispatch: # optional: allow manual run
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger sync
+        run: |
+          curl -sS -X POST \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.APP_URL }}/api/cron/sync-ads"
