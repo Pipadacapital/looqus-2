@@ -45,7 +45,7 @@ export default async function StoreCoqsPage({
           </Link>
         </Button>
         <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground">
-          Connect a Shopify store from the Dashboard to set product COQs.
+          Connect a Shopify store from the Dashboard to set product COGS.
         </div>
       </div>
     )
@@ -62,10 +62,11 @@ export default async function StoreCoqsPage({
         </Button>
       </div>
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Product COQs</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Product COGS</h1>
         <p className="text-muted-foreground text-sm">
-          Set cost of quality (COQ) for each product. You can add more targets
-          here later.
+          Set Cost of Goods Sold (COGS) for each product. Filter by status or
+          &quot;COGS not set&quot; to focus on products that need values. Use Enter in
+          the COGS field to save and jump to the next row.
         </p>
       </div>
       <CoqsContent />

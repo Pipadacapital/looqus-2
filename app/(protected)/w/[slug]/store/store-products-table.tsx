@@ -200,7 +200,7 @@ export function StoreProductsTable() {
       },
       {
         accessorKey: 'coq',
-        header: () => <div className="text-right">COQ</div>,
+        header: () => <div className="text-right">COGS</div>,
         cell: ({ row }) => (
           <div className="text-right text-muted-foreground">
             {row.original.coq != null ? Number(row.original.coq) : '—'}

@@ -14,15 +14,18 @@ export type ShopifyGraphQLResponse<T> = {
 /**
  * Executes a GraphQL query against the Shopify Admin GraphQL API.
  * Handles errors and optional rate-limit backoff.
+ * @param apiVersion - Optional API version (e.g. '2025-10'). Defaults to SHOPIFY_API_VERSION. Use 2025-10+ for shopifyqlQuery.
  */
 export async function shopifyGraphQL<T>(params: {
   shopDomain: string
   accessToken: string
   query: string
   variables?: Record<string, unknown>
+  apiVersion?: string
 }): Promise<T> {
-  const { shopDomain, accessToken, query, variables } = params
-  const url = `https://${shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`
+  const { shopDomain, accessToken, query, variables, apiVersion } = params
+  const version = apiVersion ?? SHOPIFY_API_VERSION
+  const url = `https://${shopDomain}/admin/api/${version}/graphql.json`
 
   const body: string = JSON.stringify({ query, variables })
   let lastError: Error | null = null

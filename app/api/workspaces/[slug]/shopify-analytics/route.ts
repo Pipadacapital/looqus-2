@@ -74,16 +74,31 @@ export async function GET(
     })
   }
 
+  // Work purely with date-only strings to avoid timezone off-by-one issues.
   const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const defaultTo = today
-  const defaultFrom = new Date(today)
-  defaultFrom.setDate(defaultFrom.getDate() - 29)
+  const todayStr = today.toISOString().slice(0, 10) // YYYY-MM-DD in UTC
+  const defaultFromDate = new Date(today)
+  defaultFromDate.setUTCDate(defaultFromDate.getUTCDate() - 29)
+  const defaultFromStr = defaultFromDate.toISOString().slice(0, 10)
 
-  const fromDate = fromParam ? new Date(fromParam) : defaultFrom
-  const toDate = toParam ? new Date(toParam) : defaultTo
-  fromDate.setHours(0, 0, 0, 0)
-  toDate.setHours(23, 59, 59, 999)
+  const fromStr = fromParam ?? defaultFromStr
+  const toStr = toParam ?? todayStr
+
+  // Construct UTC midnights from the date strings.
+  const fromDate = new Date(`${fromStr}T00:00:00.000Z`)
+  const toDate = new Date(`${toStr}T23:59:59.999Z`)
+
+  // Debug logging for date range and timezone behavior
+  // This helps verify that a UI range like 2025-02-20..2025-02-23
+  // is interpreted correctly on the server.
+  console.log('[shopify-analytics] incoming range', {
+    fromParam,
+    toParam,
+    resolvedFrom: fromStr,
+    resolvedTo: toStr,
+    fromDateISO: fromDate.toISOString(),
+    toDateISO: toDate.toISOString(),
+  })
 
   if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime()) || fromDate > toDate) {
     return NextResponse.json({ error: 'Invalid date range', daily: [], summary: null }, { status: 400 })
@@ -106,6 +121,11 @@ export async function GET(
       currency: true,
     },
   })
+
+  console.log(
+    '[shopify-analytics] daily rows',
+    daily.map((d) => d.date.toISOString())
+  )
 
   // Calculate COGS
   const products = await prisma.shopifyProduct.findMany({

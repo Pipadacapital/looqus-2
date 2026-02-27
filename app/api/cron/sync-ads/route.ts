@@ -55,12 +55,18 @@ export async function POST(request: NextRequest) {
       select: { id: true },
     })
     for (const c of connections) {
+      const today = new Date()
+      const to = today.toISOString().slice(0, 10)
+      const fromDate = new Date(today)
+      fromDate.setDate(fromDate.getDate() - (CRON_SYNC_DAYS - 1))
+      const from = fromDate.toISOString().slice(0, 10)
+
       await Promise.all([
         syncOrders(c.id),
         syncProducts(c.id),
         syncCustomers(c.id),
       ])
-      await syncShopifyAnalyticsFromOrders(c.id)
+      await syncShopifyAnalyticsFromOrders(c.id, from, to)
       await prisma.shopifyConnection.update({
         where: { id: c.id },
         data: { lastSyncAt: new Date() },

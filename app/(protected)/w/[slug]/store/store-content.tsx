@@ -111,7 +111,7 @@ export function StoreContent({
           <TabsTrigger value="coqs" asChild>
             <Link href={`/w/${slug}/store/coqs`} className="flex items-center gap-2">
               <IconTargetArrow className="size-4" />
-              Product COQs
+              Product COGS
             </Link>
           </TabsTrigger>
         </TabsList>

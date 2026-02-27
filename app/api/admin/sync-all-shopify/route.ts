@@ -70,6 +70,13 @@ export async function POST(request: Request) {
 
   for (const c of connections) {
     try {
+      // Define a reasonable window for analytics sync (last 365 days).
+      const today = new Date()
+      const to = today.toISOString().slice(0, 10)
+      const fromDate = new Date(today)
+      fromDate.setDate(fromDate.getDate() - 90)
+      const from = fromDate.toISOString().slice(0, 10)
+
       if (!analyticsOnly) {
         await Promise.all([
           syncOrders(c.id),
@@ -77,7 +84,7 @@ export async function POST(request: Request) {
           syncCustomers(c.id),
         ])
       }
-      const { daysUpserted } = await syncShopifyAnalyticsFromOrders(c.id)
+      const { daysUpserted } = await syncShopifyAnalyticsFromOrders(c.id, from, to)
       if (!analyticsOnly) {
         await prisma.shopifyConnection.update({
           where: { id: c.id },
