@@ -11,6 +11,8 @@ export interface ShopifyAnalyticsSummary {
   totalPackaging: number
   totalWebsiteCharges: number
   cm1: number
+  /** CM2 = CM1 - Total Ad spend (profit after ad spend). */
+  cm2?: number
   currency: string
   from: string
   to: string

@@ -140,7 +140,7 @@ export function AnalyticsContent({
             <div className="flex-1">
               <p className="text-sm font-medium">Date range</p>
               <p className="text-xs text-muted-foreground">
-                Select from / to dates or use presets (Yesterday, 2 days ago, 3 days ago, 7D, 30D, 90D).
+                Select from / to dates or use presets (Yesterday, 7D, 30D, 90D).
               </p>
             </div>
           </div>

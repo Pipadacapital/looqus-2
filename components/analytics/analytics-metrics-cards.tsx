@@ -58,6 +58,14 @@ export function AnalyticsMetricsCards({
       value: formatCurrency(summary.totalAdSpend ?? 0, 'INR'),
     },
     {
+      label: 'CM2',
+      value: formatCurrency(
+        (summary.cm2 ?? summary.cm1 - (summary.totalAdSpend ?? 0)),
+        summary.currency
+      ),
+      highlight: true,
+    },
+    {
       label: 'ACOS',
       value:
         summary.acos != null ? `${summary.acos.toFixed(1)}%` : '—',

@@ -375,6 +375,7 @@ export async function GET(
     totalPackaging,
     totalWebsiteCharges,
     cm1: totalCm1,
+    cm2: totalCm1 - totalAdSpend,
     currency: storeCurrency,
     from: fromDate.toISOString().slice(0, 10),
     to: toDate.toISOString().slice(0, 10),

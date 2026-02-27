@@ -13,8 +13,8 @@ const RANGE_PRESETS = [
 
 const SINGLE_DAY_PRESETS = [
   { type: 'single' as const, label: 'Yesterday', daysAgo: 1 },
-  { type: 'single' as const, label: '2 days ago', daysAgo: 2 },
-  { type: 'single' as const, label: '3 days ago', daysAgo: 3 },
+  // { type: 'single' as const, label: '2 days ago', daysAgo: 2 },
+  // { type: 'single' as const, label: '3 days ago', daysAgo: 3 },
 ]
 
 const PRESETS = [...SINGLE_DAY_PRESETS, ...RANGE_PRESETS]
