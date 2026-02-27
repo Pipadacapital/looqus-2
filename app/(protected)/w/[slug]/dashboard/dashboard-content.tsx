@@ -207,8 +207,8 @@ export function DashboardContent({
   const canFetchInsights = !!(metaConnection || googleConnection)
 
   // Shopify Analytics (daily net sales, orders, AOV) with date range
-  type ShopifyAnalyticsDailyRow = { date: string; netSales: number; ordersCount: number; aov: number; currency: string }
-  type ShopifyAnalyticsSummary = { totalNetSales: number; totalOrders: number; avgAov: number; currency: string; from: string; to: string }
+  type ShopifyAnalyticsDailyRow = { date: string; netSales: number; grossSales: number; totalTax: number; totalDiscount: number; ordersCount: number; aov: number; currency: string; cogs: number; shipping: number; packaging: number; websiteCharges: number; cm1: number }
+  type ShopifyAnalyticsSummary = { totalNetSales: number; totalGrossSales: number; totalTax: number; totalDiscount: number; totalOrders: number; avgAov: number; totalCogs: number; totalShipping: number; totalPackaging: number; totalWebsiteCharges: number; cm1: number; currency: string; from: string; to: string }
   const [analyticsFrom, setAnalyticsFrom] = useState<string>(() => format(subDays(new Date(), 29), 'yyyy-MM-dd'))
   const [analyticsTo, setAnalyticsTo] = useState<string>(() => format(new Date(), 'yyyy-MM-dd'))
   const [shopifyAnalytics, setShopifyAnalytics] = useState<{
@@ -787,12 +787,33 @@ export function DashboardContent({
               <p className="text-sm text-muted-foreground py-4">{shopifyAnalytics.error}</p>
             ) : shopifyAnalytics.summary ? (
               <>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                  <div className="rounded-lg border bg-muted/30 p-4">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Gross Sales</p>
+                    <p className="text-xl font-semibold mt-0.5">
+                      {shopifyAnalytics.summary.currency === 'INR' ? '₹' : '$'}
+                      {shopifyAnalytics.summary.totalGrossSales.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                    </p>
+                  </div>
                   <div className="rounded-lg border bg-muted/30 p-4">
                     <p className="text-xs text-muted-foreground uppercase tracking-wider">Net sales</p>
                     <p className="text-xl font-semibold mt-0.5">
                       {shopifyAnalytics.summary.currency === 'INR' ? '₹' : '$'}
                       {shopifyAnalytics.summary.totalNetSales.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border bg-muted/30 p-4">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Discounts</p>
+                    <p className="text-xl font-semibold mt-0.5">
+                      {shopifyAnalytics.summary.currency === 'INR' ? '₹' : '$'}
+                      {shopifyAnalytics.summary.totalDiscount.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border bg-muted/30 p-4">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Tax</p>
+                    <p className="text-xl font-semibold mt-0.5">
+                      {shopifyAnalytics.summary.currency === 'INR' ? '₹' : '$'}
+                      {shopifyAnalytics.summary.totalTax.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
                     </p>
                   </div>
                   <div className="rounded-lg border bg-muted/30 p-4">
@@ -802,10 +823,24 @@ export function DashboardContent({
                     </p>
                   </div>
                   <div className="rounded-lg border bg-muted/30 p-4">
-                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Avg. order value</p>
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider">COGS</p>
                     <p className="text-xl font-semibold mt-0.5">
                       {shopifyAnalytics.summary.currency === 'INR' ? '₹' : '$'}
-                      {shopifyAnalytics.summary.avgAov.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                      {shopifyAnalytics.summary.totalCogs.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border bg-muted/30 p-4">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Other Costs</p>
+                    <p className="text-xl font-semibold mt-0.5">
+                      {shopifyAnalytics.summary.currency === 'INR' ? '₹' : '$'}
+                      {(shopifyAnalytics.summary.totalShipping + shopifyAnalytics.summary.totalPackaging + shopifyAnalytics.summary.totalWebsiteCharges).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border bg-[#96bf48]/10 p-4">
+                    <p className="text-xs font-bold text-[#96bf48] uppercase tracking-wider">CM1</p>
+                    <p className="text-xl font-bold mt-0.5 text-[#96bf48]">
+                      {shopifyAnalytics.summary.currency === 'INR' ? '₹' : '$'}
+                      {shopifyAnalytics.summary.cm1.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
                     </p>
                   </div>
                 </div>

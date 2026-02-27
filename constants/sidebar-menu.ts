@@ -11,6 +11,7 @@ import {
   IconBuildingStore,
   IconBrandGoogle,
   IconBrandMeta,
+  IconReceipt,
 } from "@tabler/icons-react"
 
 export const sidebarMenuData = {
@@ -39,6 +40,11 @@ export const sidebarMenuData = {
       title: "Analytics",
       path: "analytics",
       icon: IconChartBar,
+    },
+    {
+      title: "Costs",
+      path: "settings/costs",
+      icon: IconReceipt,
     },
     {
       title: "Team",

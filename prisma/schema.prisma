@@ -46,6 +46,7 @@ model Workspace {
   shiprocketConnection   ShiprocketConnection?
   shopifyConnections     ShopifyConnection[]
   members                WorkspaceMember[]
+  costs                  WorkspaceCost[]
   createdBy              User                    @relation("WorkspaceCreator", fields: [createdById], references: [id])
 
   @@map("workspaces")
@@ -85,21 +86,37 @@ model Invitation {
   @@map("invitations")
 }
 
+model WorkspaceCost {
+  id            String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId   String            @map("workspace_id") @db.Uuid
+  costType      WorkspaceCostType @map("cost_type")
+  name          String?           @db.VarChar(120)
+  amount        Decimal           @db.Decimal(12, 2)
+  effectiveFrom DateTime          @map("effective_from") @db.Date
+  effectiveTo   DateTime?         @map("effective_to") @db.Date
+  currency      String?           @default("USD") @db.VarChar(3)
+  createdAt     DateTime          @default(now()) @map("created_at")
+  workspace     Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, costType, effectiveFrom, effectiveTo])
+  @@map("workspace_costs")
+}
+
 model ShopifyConnection {
-  id             String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  workspaceId    String            @map("workspace_id") @db.Uuid
-  shopDomain     String            @map("shop_domain")
-  shopifyStoreId String?           @map("shopify_store_id")
-  accessToken    String?           @map("access_token")
+  id             String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId    String                  @map("workspace_id") @db.Uuid
+  shopDomain     String                  @map("shop_domain")
+  shopifyStoreId String?                 @map("shopify_store_id")
+  accessToken    String?                 @map("access_token")
   scopes         String[]
-  status         ConnectionStatus  @default(CONNECTED)
-  installedAt    DateTime          @default(now()) @map("installed_at")
-  lastSyncAt     DateTime?         @map("last_sync_at")
-  updatedAt      DateTime          @updatedAt @map("updated_at")
-  clientId       String            @map("client_id")
-  clientSecret   String            @map("client_secret")
-  tokenExpiresAt DateTime?         @map("token_expires_at")
-  workspace      Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  status         ConnectionStatus        @default(CONNECTED)
+  installedAt    DateTime                @default(now()) @map("installed_at")
+  lastSyncAt     DateTime?               @map("last_sync_at")
+  updatedAt      DateTime                @updatedAt @map("updated_at")
+  clientId       String                  @map("client_id")
+  clientSecret   String                  @map("client_secret")
+  tokenExpiresAt DateTime?               @map("token_expires_at")
+  workspace      Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   analyticsDaily ShopifyAnalyticsDaily[]
   customers      ShopifyCustomer[]
   lineItems      ShopifyLineItem[]
@@ -111,18 +128,18 @@ model ShopifyConnection {
 }
 
 model ShopifyAnalyticsDaily {
-  id             String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  connectionId   String            @map("connection_id") @db.Uuid
-  date           DateTime          @db.Date
-  netSales       Decimal           @map("net_sales") @db.Decimal(12, 2)
-  grossSales     Decimal           @map("gross_sales") @db.Decimal(12, 2)
-  ordersCount    Int               @map("orders_count")
-  aov            Decimal           @db.Decimal(12, 2)
-  totalTax       Decimal           @map("total_tax") @db.Decimal(12, 2)
-  totalDiscount  Decimal          @map("total_discount") @db.Decimal(12, 2)
-  currency       String
-  updatedAt      DateTime          @updatedAt @map("updated_at")
-  connection     ShopifyConnection  @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  id            String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  connectionId  String            @map("connection_id") @db.Uuid
+  date          DateTime          @db.Date
+  netSales      Decimal           @map("net_sales") @db.Decimal(12, 2)
+  grossSales    Decimal           @map("gross_sales") @db.Decimal(12, 2)
+  ordersCount   Int               @map("orders_count")
+  aov           Decimal           @db.Decimal(12, 2)
+  totalTax      Decimal           @map("total_tax") @db.Decimal(12, 2)
+  totalDiscount Decimal           @map("total_discount") @db.Decimal(12, 2)
+  currency      String
+  updatedAt     DateTime          @updatedAt @map("updated_at")
+  connection    ShopifyConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
   @@unique([connectionId, date])
   @@index([connectionId, date])
@@ -478,4 +495,12 @@ enum NotificationType {
 enum OAuthProvider {
   META
   GOOGLE
+}
+
+enum WorkspaceCostType {
+  SHIPPING
+  PACKAGING
+  PAYMENT_GATEWAY
+  WEBSITE
+  CUSTOM
 }
