@@ -45,6 +45,8 @@ export async function GET(
         select: { id: true },
         take: 1,
       },
+      meta_ads_connections: { select: { id: true } },
+      google_ads_connections: { select: { id: true } },
     },
   })
 
@@ -91,14 +93,7 @@ export async function GET(
   // Debug logging for date range and timezone behavior
   // This helps verify that a UI range like 2025-02-20..2025-02-23
   // is interpreted correctly on the server.
-  console.log('[shopify-analytics] incoming range', {
-    fromParam,
-    toParam,
-    resolvedFrom: fromStr,
-    resolvedTo: toStr,
-    fromDateISO: fromDate.toISOString(),
-    toDateISO: toDate.toISOString(),
-  })
+
 
   if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime()) || fromDate > toDate) {
     return NextResponse.json({ error: 'Invalid date range', daily: [], summary: null }, { status: 400 })
@@ -119,13 +114,12 @@ export async function GET(
       ordersCount: true,
       aov: true,
       currency: true,
+      sessions: true,
+      conversionRate: true,
     },
   })
 
-  console.log(
-    '[shopify-analytics] daily rows',
-    daily.map((d) => d.date.toISOString())
-  )
+  
 
   // Calculate COGS
   const products = await prisma.shopifyProduct.findMany({
@@ -179,6 +173,149 @@ export async function GET(
   const totalOrders = daily.reduce((sum, d) => sum + d.ordersCount, 0)
   const storeCurrency = daily[0]?.currency ?? 'USD'
 
+  // Prepaid orders %: orders with financial status "Paid" (prepaid) vs total
+  const orderCounts = await prisma.shopifyOrder.groupBy({
+    by: ['financialStatus'],
+    where: {
+      connectionId,
+      processedAt: { gte: fromDate, lte: toDate },
+    },
+    _count: { id: true },
+  })
+  let prepaidOrdersCount = 0
+  let ordersTotalForPrepaid = 0
+  for (const g of orderCounts) {
+    ordersTotalForPrepaid += g._count.id
+    if (g.financialStatus?.toLowerCase() === 'paid') prepaidOrdersCount += g._count.id
+  }
+  const prepaidPercentage =
+    ordersTotalForPrepaid > 0
+      ? Math.round((prepaidOrdersCount / ordersTotalForPrepaid) * 10000) / 100
+      : null
+
+  // Sessions and conversion rate (from daily rows that have them)
+  let totalSessions: number | null = null
+  let conversionRatePeriod: number | null = null
+  const dailyWithSessions = daily.filter((d) => d.sessions != null && Number(d.sessions) > 0)
+  if (dailyWithSessions.length > 0) {
+    totalSessions = dailyWithSessions.reduce((s, d) => s + (d.sessions ?? 0), 0)
+    const sumConv = dailyWithSessions.reduce(
+      (s, d) => s + (d.conversionRate != null ? Number(d.conversionRate) : 0),
+      0
+    )
+    conversionRatePeriod =
+      dailyWithSessions.length > 0 ? sumConv / dailyWithSessions.length : null
+  } else {
+    const anyConversion = daily.filter((d) => d.conversionRate != null)
+    if (anyConversion.length > 0) {
+      conversionRatePeriod =
+        anyConversion.reduce((s, d) => s + Number(d.conversionRate!), 0) /
+        anyConversion.length
+    }
+  }
+
+  // Ad spend for the date range (Meta + Google)
+  let metaAdSpend = 0
+  let googleAdSpend = 0
+  const metaConnectionId = workspace.meta_ads_connections?.id
+  const googleConnectionId = workspace.google_ads_connections?.id
+
+  if (metaConnectionId) {
+    const metaAgg = await prisma.meta_ads_daily_metrics.aggregate({
+      where: {
+        connection_id: metaConnectionId,
+        date: { gte: fromDate, lte: toDate },
+      },
+      _sum: { spend: true },
+    })
+    metaAdSpend = Number(metaAgg._sum.spend ?? 0)
+  }
+
+  const metaAdRows = metaConnectionId
+    ? await prisma.meta_ads_daily_metrics.findMany({
+        where: {
+          connection_id: metaConnectionId,
+          date: { gte: fromDate, lte: toDate },
+        },
+        select: {
+          date: true,
+          ad_account_id: true,
+          campaign_id: true,
+          campaign_name: true,
+          spend: true,
+        },
+        orderBy: { date: 'asc' },
+      })
+    : []
+
+  console.log('[shopify-analytics] Meta Ads – date range & spend', {
+    from: fromStr,
+    to: toStr,
+    connectionId: metaConnectionId ?? null,
+    totalSpend: metaAdSpend,
+    rowCount: metaAdRows.length,
+  })
+  console.log('[shopify-analytics] Meta Ads – all rows in date range', {
+    from: fromStr,
+    to: toStr,
+    rows: metaAdRows.map((r) => ({
+      date: r.date.toISOString().slice(0, 10),
+      ad_account_id: r.ad_account_id,
+      campaign_id: r.campaign_id,
+      campaign_name: r.campaign_name,
+      spend: Number(r.spend),
+    })),
+  })
+
+  if (googleConnectionId) {
+    const googleAgg = await prisma.google_ads_daily_metrics.aggregate({
+      where: {
+        connection_id: googleConnectionId,
+        date: { gte: fromDate, lte: toDate },
+      },
+      _sum: { spend: true },
+    })
+    googleAdSpend = Number(googleAgg._sum.spend ?? 0)
+  }
+
+  const googleAdRows = googleConnectionId
+    ? await prisma.google_ads_daily_metrics.findMany({
+        where: {
+          connection_id: googleConnectionId,
+          date: { gte: fromDate, lte: toDate },
+        },
+        select: {
+          date: true,
+          customer_id: true,
+          campaign_id: true,
+          campaign_name: true,
+          spend: true,
+        },
+        orderBy: { date: 'asc' },
+      })
+    : []
+
+  console.log('[shopify-analytics] Google Ads – date range & spend', {
+    from: fromStr,
+    to: toStr,
+    connectionId: googleConnectionId ?? null,
+    totalSpend: googleAdSpend,
+    rowCount: googleAdRows.length,
+  })
+  console.log('[shopify-analytics] Google Ads – all rows in date range', {
+    from: fromStr,
+    to: toStr,
+    rows: googleAdRows.map((r) => ({
+      date: r.date.toISOString().slice(0, 10),
+      customer_id: r.customer_id,
+      campaign_id: r.campaign_id,
+      campaign_name: r.campaign_name,
+      spend: Number(r.spend),
+    })),
+  })
+
+  const totalAdSpend = metaAdSpend + googleAdSpend
+
   let totalShipping = 0
   let totalPackaging = 0
   let totalWebsiteCharges = 0
@@ -202,7 +339,7 @@ export async function GET(
         
         if (cost.costType === 'SHIPPING') dayShippingInfo += valInStoreCurrency
         else if (cost.costType === 'PACKAGING') dayPackagingInfo += valInStoreCurrency
-        else if (cost.costType === 'PAYMENT_GATEWAY' || cost.costType === 'CUSTOM' || cost.costType === 'WEBSITE') dayWebsiteInfo += valInStoreCurrency 
+        else if (cost.costType === 'WEBSITE') dayWebsiteInfo += valInStoreCurrency 
       }
     }
 
@@ -241,6 +378,16 @@ export async function GET(
     currency: storeCurrency,
     from: fromDate.toISOString().slice(0, 10),
     to: toDate.toISOString().slice(0, 10),
+    prepaidPercentage,
+    totalSessions,
+    conversionRate: conversionRatePeriod,
+    metaAdSpend: metaAdSpend,
+    googleAdSpend: googleAdSpend,
+    totalAdSpend: totalAdSpend,
+    acos:
+      totalNetSales > 0
+        ? Math.round((totalAdSpend / totalNetSales) * 10000) / 100
+        : null,
   }
 
   return NextResponse.json({
@@ -265,6 +412,8 @@ export async function GET(
         websiteCharges: dCosts.website,
         cm1,
         currency: d.currency,
+        sessions: d.sessions ?? null,
+        conversionRate: d.conversionRate != null ? Number(d.conversionRate) : null,
       }
     }),
     summary,

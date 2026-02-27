@@ -26,6 +26,27 @@ export async function GET(
   )
   const view = searchParams.get('view') === 'daily' ? 'daily' : 'campaigns'
 
+  let since: Date
+  let toDate: Date
+  const fromStr = searchParams.get('from')
+  const toStr = searchParams.get('to')
+  if (fromStr && toStr) {
+    // Use UTC boundaries so the same calendar day is used regardless of server timezone (matches shopify-analytics).
+    since = new Date(`${fromStr}T00:00:00.000Z`)
+    toDate = new Date(`${toStr}T23:59:59.999Z`)
+    if (Number.isNaN(since.getTime()) || Number.isNaN(toDate.getTime()) || since > toDate) {
+      toDate = new Date()
+      since = new Date()
+      since.setUTCDate(since.getUTCDate() - days)
+      since.setUTCHours(0, 0, 0, 0)
+    }
+  } else {
+    toDate = new Date()
+    since = new Date()
+    since.setUTCDate(since.getUTCDate() - days)
+    since.setUTCHours(0, 0, 0, 0)
+  }
+
   const workspace = await prisma.workspace.findUnique({
     where: { slug },
     select: {
@@ -85,15 +106,11 @@ export async function GET(
     )
   }
 
-  const since = new Date()
-  since.setDate(since.getDate() - days)
-  since.setHours(0, 0, 0, 0)
-
   const metrics = await prisma.google_ads_daily_metrics.findMany({
     where: {
       connection_id: connection.id,
       customer_id: customerId,
-      date: { gte: since },
+      date: { gte: since, lte: toDate },
     },
     orderBy: { date: 'asc' },
   })
@@ -191,8 +208,8 @@ export async function GET(
       conversionValue: totals.conversionValue,
       roas: Math.round(roas * 100) / 100,
       from: since.toISOString().slice(0, 10),
-      to: new Date().toISOString().slice(0, 10),
-      days,
+      to: toDate.toISOString().slice(0, 10),
+      days: Math.round((toDate.getTime() - since.getTime()) / (24 * 60 * 60 * 1000)) + 1,
     },
     byCampaign: byCampaignList.map((c) => ({
       ...c,

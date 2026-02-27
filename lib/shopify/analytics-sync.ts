@@ -27,12 +27,90 @@ const SHOPIFY_ANALYTICS_QUERY = `
  * Builds ShopifyQL for daily sales metrics using the sales dataset.
  * Uses SINCE/UNTIL with yyyy-MM-dd. TIMESERIES day returns one row per day.
  */
+/**
+ * Builds ShopifyQL for daily sessions and conversion rate using the sessions dataset.
+ */
+function buildSessionsQl(from: string, to: string): string {
+  return `FROM sessions
+  SHOW sessions, conversion_rate
+  TIMESERIES day
+  SINCE ${from} UNTIL ${to}
+  ORDER BY day`
+}
+
 function buildShopifyAnalyticsQl(from: string, to: string): string {
   return `FROM sales
   SHOW gross_sales, net_sales, discounts, taxes, orders
   TIMESERIES day
   SINCE ${from} UNTIL ${to}
   ORDER BY day`
+}
+
+/**
+ * Fetches daily sessions and conversion_rate from ShopifyQL sessions dataset
+ * and updates existing shopify_analytics_daily rows (does not create new rows).
+ * Run after syncShopifyAnalyticsFromOrders so daily rows exist.
+ */
+export async function syncShopifySessionsFromShopifyQL(
+  connectionId: string,
+  from: string,
+  to: string
+): Promise<{ daysUpdated: number }> {
+  const conn = await prisma.shopifyConnection.findUnique({
+    where: { id: connectionId },
+    select: { shopDomain: true, accessToken: true },
+  })
+
+  if (!conn?.accessToken) {
+    throw new Error('Connection not found or missing access token')
+  }
+
+  const shopifyql = buildSessionsQl(from, to)
+
+  const data: {
+    shopifyqlQuery: {
+      tableData: ShopifyQlTableData | null
+      parseErrors: string[]
+    }
+  } = await shopifyGraphQL({
+    shopDomain: conn.shopDomain,
+    accessToken: conn.accessToken,
+    query: SHOPIFY_ANALYTICS_QUERY,
+    variables: { shopifyql },
+    apiVersion: '2025-10',
+  })
+
+  if (data.shopifyqlQuery.parseErrors?.length) {
+    throw new Error(
+      `ShopifyQL parse errors: ${data.shopifyqlQuery.parseErrors.join('; ')}`
+    )
+  }
+
+  const table = data.shopifyqlQuery.tableData
+  if (!table?.rows?.length) {
+    return { daysUpdated: 0 }
+  }
+
+  let daysUpdated = 0
+  for (const row of table.rows) {
+    const dayStr = String(row['day'] ?? '')
+    const sessions = Number(row['sessions'] ?? 0)
+    const conversionRate =
+      row['conversion_rate'] != null ? Number(row['conversion_rate']) : null
+
+    const date = new Date(`${dayStr}T00:00:00.000Z`)
+
+    const result = await prisma.shopifyAnalyticsDaily.updateMany({
+      where: { connectionId, date },
+      data: {
+        sessions: sessions || null,
+        conversionRate: conversionRate != null ? conversionRate : null,
+      },
+    })
+    if (result.count > 0) daysUpdated++
+  }
+
+  return { daysUpdated }
 }
 
 /**

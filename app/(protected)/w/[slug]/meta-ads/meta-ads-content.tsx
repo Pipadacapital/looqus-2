@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { format, subDays } from 'date-fns'
 import {
   flexRender,
   getCoreRowModel,
@@ -35,6 +36,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Input } from '@/components/ui/input'
+import { DateRangeFilter } from '@/components/analytics'
 
 export type MetaAdsCampaignRow = {
   campaignId: string
@@ -114,7 +116,8 @@ export function MetaAdsContent({
 }) {
   const { current } = useWorkspace()
   const slug = current.slug
-  const [days, setDays] = useState(30)
+  const [dateFrom, setDateFrom] = useState<string>(() => format(subDays(new Date(), 29), 'yyyy-MM-dd'))
+  const [dateTo, setDateTo] = useState<string>(() => format(new Date(), 'yyyy-MM-dd'))
   const [search, setSearch] = useState('')
   const [view, setView] = useState<'campaigns' | 'adsets' | 'daily'>('campaigns')
   const [selectingAccount, setSelectingAccount] = useState(false)
@@ -124,10 +127,10 @@ export function MetaAdsContent({
   const groupByParam = view === 'adsets' ? 'adset' : 'campaign'
 
   const { data, isLoading, isError, error, refetch } = useQuery<MetricsResponse>({
-    queryKey: ['meta-ads', 'metrics', slug, days, viewParam, groupByParam],
+    queryKey: ['meta-ads', 'metrics', slug, dateFrom, dateTo, viewParam, groupByParam],
     queryFn: async () => {
       const res = await fetch(
-        `/api/workspaces/${slug}/meta-ads/metrics?days=${days}&view=${viewParam}&groupBy=${groupByParam}`
+        `/api/workspaces/${slug}/meta-ads/metrics?from=${dateFrom}&to=${dateTo}&view=${viewParam}&groupBy=${groupByParam}`
       )
       const json = await res.json()
       if (!res.ok) throw new Error(json.error || 'Failed to load')
@@ -494,7 +497,7 @@ export function MetaAdsContent({
                 {formatCurrency(summary.spend)}
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Last {summary.days} days
+                {summary.from} – {summary.to}
               </p>
             </div>
             <div className="rounded-xl border bg-card p-4 shadow-sm">
@@ -505,7 +508,7 @@ export function MetaAdsContent({
                 {formatCurrency(summary.revenue)}
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Last {summary.days} days
+                {summary.from} – {summary.to}
               </p>
             </div>
             <div className="rounded-xl border bg-card p-4 shadow-sm">
@@ -516,7 +519,7 @@ export function MetaAdsContent({
                 {summary.roas.toFixed(2)}x
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Last {summary.days} days
+                {summary.from} – {summary.to}
               </p>
             </div>
             <div className="rounded-xl border bg-card p-4 shadow-sm">
@@ -527,7 +530,7 @@ export function MetaAdsContent({
                 {formatNumber(summary.impressions)}
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Last {summary.days} days
+                {summary.from} – {summary.to}
               </p>
             </div>
             <div className="rounded-xl border bg-card p-4 shadow-sm">
@@ -538,7 +541,7 @@ export function MetaAdsContent({
                 {formatNumber(summary.clicks)}
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Last {summary.days} days
+                {summary.from} – {summary.to}
               </p>
             </div>
             <div className="rounded-xl border bg-card p-4 shadow-sm">
@@ -549,12 +552,20 @@ export function MetaAdsContent({
                 {formatNumber(summary.conversions, 2)}
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Last {summary.days} days
+                {summary.from} – {summary.to}
               </p>
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
+            <DateRangeFilter
+              from={dateFrom}
+              to={dateTo}
+              onFromChange={setDateFrom}
+              onToChange={setDateTo}
+              fromId="meta-ads-from"
+              toId="meta-ads-to"
+            />
             {adAccountIds.length > 1 && (
               <Select
                 value={activeAdAccountId ?? ''}
@@ -590,16 +601,6 @@ export function MetaAdsContent({
                 <SelectItem value="campaigns">Campaign totals</SelectItem>
                 <SelectItem value="adsets">Ad set totals</SelectItem>
                 <SelectItem value="daily">Daily breakdown</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={String(days)} onValueChange={(v) => setDays(Number(v))}>
-              <SelectTrigger className="w-[130px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="7">Last 7 days</SelectItem>
-                <SelectItem value="30">Last 30 days</SelectItem>
-                <SelectItem value="90">Last 90 days</SelectItem>
               </SelectContent>
             </Select>
             <Input

@@ -126,7 +126,7 @@ export function CostsContent({ slug }: { slug: string }) {
   const costTypeLabels: Record<WorkspaceCostType, string> = {
     SHIPPING: 'Shipping',
     PACKAGING: 'Packaging',
-    PAYMENT_GATEWAY: 'Payment Gateway',
+    // PAYMENT_GATEWAY: 'Payment Gateway',
     WEBSITE: 'Website Charge',
     CUSTOM: 'Custom',
   }
@@ -227,8 +227,9 @@ export function CostsContent({ slug }: { slug: string }) {
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
+                          <SelectItem value="INR">INR (₹)</SelectItem>
                             <SelectItem value="USD">USD ($)</SelectItem>
-                            <SelectItem value="INR">INR (₹)</SelectItem>
+                          
                             <SelectItem value="EUR">EUR (€)</SelectItem>
                             <SelectItem value="GBP">GBP (£)</SelectItem>
                             <SelectItem value="AUD">AUD (A$)</SelectItem>

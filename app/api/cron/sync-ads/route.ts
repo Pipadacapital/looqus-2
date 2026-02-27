@@ -5,7 +5,7 @@ import { syncAllMetaAds } from '@/lib/integrations/meta-sync'
 import { syncAllGoogleAds } from '@/lib/integrations/google-sync'
 import { syncAllShiprocket } from '@/lib/integrations/shiprocket-sync'
 import { syncOrders, syncProducts, syncCustomers } from '@/lib/shopify/sync'
-import { syncShopifyAnalyticsFromOrders } from '@/lib/shopify/analytics-sync'
+import { syncShopifyAnalyticsFromOrders, syncShopifySessionsFromShopifyQL } from '@/lib/shopify/analytics-sync'
 import { prisma } from '@/lib/prisma'
 
 /**
@@ -67,6 +67,11 @@ export async function POST(request: NextRequest) {
         syncCustomers(c.id),
       ])
       await syncShopifyAnalyticsFromOrders(c.id, from, to)
+      try {
+        await syncShopifySessionsFromShopifyQL(c.id, from, to)
+      } catch {
+        // Sessions/conversion optional
+      }
       await prisma.shopifyConnection.update({
         where: { id: c.id },
         data: { lastSyncAt: new Date() },

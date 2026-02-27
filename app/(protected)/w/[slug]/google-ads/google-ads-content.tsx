@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { format, subDays } from 'date-fns'
 import {
   flexRender,
   getCoreRowModel,
@@ -35,6 +36,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Input } from '@/components/ui/input'
+import { DateRangeFilter } from '@/components/analytics'
 
 export type GoogleAdsCampaignRow = {
   campaignId: string
@@ -104,7 +106,8 @@ export function GoogleAdsContent({
 }) {
   const { current } = useWorkspace()
   const slug = current.slug
-  const [days, setDays] = useState(30)
+  const [dateFrom, setDateFrom] = useState<string>(() => format(subDays(new Date(), 29), 'yyyy-MM-dd'))
+  const [dateTo, setDateTo] = useState<string>(() => format(new Date(), 'yyyy-MM-dd'))
   const [search, setSearch] = useState('')
   const [view, setView] = useState<'campaigns' | 'daily'>('campaigns')
   const [selectingCustomer, setSelectingCustomer] = useState(false)
@@ -113,10 +116,10 @@ export function GoogleAdsContent({
   ])
 
   const { data, isLoading, isError, error, refetch } = useQuery<MetricsResponse>({
-    queryKey: ['google-ads', 'metrics', slug, days, view],
+    queryKey: ['google-ads', 'metrics', slug, dateFrom, dateTo, view],
     queryFn: async () => {
       const res = await fetch(
-        `/api/workspaces/${slug}/google-ads/metrics?days=${days}&view=${view}`
+        `/api/workspaces/${slug}/google-ads/metrics?from=${dateFrom}&to=${dateTo}&view=${view}`
       )
       const json = await res.json()
       if (!res.ok) throw new Error(json.error || 'Failed to load')
@@ -405,7 +408,7 @@ export function GoogleAdsContent({
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Spend</p>
               <p className="mt-1 text-xl font-semibold tabular-nums">{formatCurrency(summary.spend)}</p>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Last {summary.days} days
+                {summary.from} – {summary.to}
               </p>
             </div>
             <div className="rounded-xl border bg-card p-4 shadow-sm">
@@ -414,7 +417,7 @@ export function GoogleAdsContent({
                 {formatNumber(summary.conversions, 2)}
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Last {summary.days} days
+                {summary.from} – {summary.to}
               </p>
             </div>
             <div className="rounded-xl border bg-card p-4 shadow-sm">
@@ -423,19 +426,27 @@ export function GoogleAdsContent({
                 {formatCurrency(summary.conversionValue)}
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Last {summary.days} days
+                {summary.from} – {summary.to}
               </p>
             </div>
             <div className="rounded-xl border bg-card p-4 shadow-sm">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">ROAS</p>
               <p className="mt-1 text-xl font-semibold tabular-nums">{summary.roas.toFixed(2)}x</p>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Last {summary.days} days
+                {summary.from} – {summary.to}
               </p>
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
+            <DateRangeFilter
+              from={dateFrom}
+              to={dateTo}
+              onFromChange={setDateFrom}
+              onToChange={setDateTo}
+              fromId="google-ads-from"
+              toId="google-ads-to"
+            />
             {customerIds.length > 0 && (
               <Select
                 value={activeCustomerId ?? ''}
@@ -463,16 +474,6 @@ export function GoogleAdsContent({
               <SelectContent>
                 <SelectItem value="campaigns">Campaign totals</SelectItem>
                 <SelectItem value="daily">Daily breakdown (all rows)</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={String(days)} onValueChange={(v) => setDays(Number(v))}>
-              <SelectTrigger className="w-[130px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="7">Last 7 days</SelectItem>
-                <SelectItem value="30">Last 30 days</SelectItem>
-                <SelectItem value="90">Last 90 days</SelectItem>
               </SelectContent>
             </Select>
             <Input

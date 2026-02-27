@@ -4,7 +4,7 @@ import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { requireSuperadmin } from '@/lib/require-superadmin'
 import { syncOrders, syncProducts, syncCustomers } from '@/lib/shopify/sync'
-import { syncShopifyAnalyticsFromOrders } from '@/lib/shopify/analytics-sync'
+import { syncShopifyAnalyticsFromOrders, syncShopifySessionsFromShopifyQL } from '@/lib/shopify/analytics-sync'
 
 type SyncResultRow = {
   connectionId: string
@@ -85,6 +85,11 @@ export async function POST(request: Request) {
         ])
       }
       const { daysUpserted } = await syncShopifyAnalyticsFromOrders(c.id, from, to)
+      try {
+        await syncShopifySessionsFromShopifyQL(c.id, from, to)
+      } catch {
+        // Sessions/conversion may fail if ShopifyQL sessions dataset is unavailable; continue
+      }
       if (!analyticsOnly) {
         await prisma.shopifyConnection.update({
           where: { id: c.id },
