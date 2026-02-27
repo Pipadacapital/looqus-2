@@ -13,6 +13,9 @@ import {
   IconBrandGoogle,
   IconUnlink,
   IconTruck,
+  IconBrain,
+  IconSend,
+  IconChartLine,
 } from '@tabler/icons-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -34,7 +37,22 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
-import { formatDistanceToNow } from 'date-fns'
+import { formatDistanceToNow, format, subDays } from 'date-fns'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import {
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from '@/components/ui/chart'
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+} from 'recharts'
 
 type ShopifyConnectionInfo = {
   id: string
@@ -73,6 +91,25 @@ type ShiprocketConnectionInfo = {
   lastSyncAt: string | null
   lastSyncError: string | null
   createdAt: string
+}
+
+function TrendPill({ value }: { value: number }) {
+  const s = value >= 0 ? `+${value}%` : `${value}%`
+  const positive = value > 0
+  const negative = value < 0
+  return (
+    <span
+      className={
+        positive
+          ? 'text-emerald-600 dark:text-emerald-400 font-medium'
+          : negative
+            ? 'text-red-600 dark:text-red-400 font-medium'
+            : 'text-muted-foreground'
+      }
+    >
+      {s}
+    </span>
+  )
 }
 
 interface DashboardContentProps {
@@ -146,6 +183,119 @@ export function DashboardContent({
     error: string | null
   }>({ summary: null, byCampaign: [], loading: false, error: null })
 
+  // Analytics Insights (AI insights, trend, anomalies, recommendations)
+  type AiInsight = {
+    insight_type: string
+    title: string
+    reason: string
+    recommendation: string
+    confidence: number
+  }
+  type TrendMeta = { spendPctChange: number; revenuePctChange: number; roasPctChange: number }
+  type TrendGoogle = { spendPctChange: number; conversionValuePctChange: number; roasPctChange: number }
+  type Anomaly = { type: string; source: string; description: string; date?: string; campaign?: string; value?: number; priorValue?: number }
+  type Recommendation = { title: string; text: string }
+  const [aiInsights, setAiInsights] = useState<{
+    insights: AiInsight[]
+    trend: { meta?: TrendMeta; google?: TrendGoogle } | null
+    anomalies: Anomaly[]
+    recommendations: Recommendation[]
+    modelUsed: string | null
+    loading: boolean
+    error: string | null
+  }>({ insights: [], trend: null, anomalies: [], recommendations: [], modelUsed: null, loading: false, error: null })
+  const canFetchInsights = !!(metaConnection || googleConnection)
+
+  // Shopify Analytics (daily net sales, orders, AOV) with date range
+  type ShopifyAnalyticsDailyRow = { date: string; netSales: number; ordersCount: number; aov: number; currency: string }
+  type ShopifyAnalyticsSummary = { totalNetSales: number; totalOrders: number; avgAov: number; currency: string; from: string; to: string }
+  const [analyticsFrom, setAnalyticsFrom] = useState<string>(() => format(subDays(new Date(), 29), 'yyyy-MM-dd'))
+  const [analyticsTo, setAnalyticsTo] = useState<string>(() => format(new Date(), 'yyyy-MM-dd'))
+  const [shopifyAnalytics, setShopifyAnalytics] = useState<{
+    daily: ShopifyAnalyticsDailyRow[]
+    summary: ShopifyAnalyticsSummary | null
+    loading: boolean
+    error: string | null
+  }>({ daily: [], summary: null, loading: false, error: null })
+
+  // AI chat (same context as insights) — streaming + Markdown
+  type ChatMessage = { role: 'user' | 'assistant'; content: string }
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
+  const [chatInput, setChatInput] = useState('')
+  const [chatLoading, setChatLoading] = useState(false)
+  const [streamingContent, setStreamingContent] = useState('')
+
+  const handleChatSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const msg = chatInput.trim()
+    if (!msg || chatLoading || !workspaceSlug) return
+    setChatInput('')
+    setChatMessages((prev) => [...prev, { role: 'user', content: msg }])
+    setChatMessages((prev) => [...prev, { role: 'assistant', content: '' }])
+    setStreamingContent('')
+    setChatLoading(true)
+    try {
+      const res = await fetch(`/api/workspaces/${workspaceSlug}/insights/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg, stream: true }),
+      })
+      if (!res.ok || !res.body) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || 'Request failed')
+      }
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let fullContent = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+        for (const line of lines) {
+          if (!line.trim()) continue
+          try {
+            const data = JSON.parse(line) as { delta?: string; done?: boolean; error?: string }
+            if (data.error) {
+              fullContent = `Error: ${data.error}`
+              break
+            }
+            if (typeof data.delta === 'string') {
+              fullContent += data.delta
+              setStreamingContent(fullContent)
+            }
+          } catch {
+            // skip malformed line
+          }
+        }
+      }
+      setChatMessages((prev) => {
+        const next = [...prev]
+        if (next.length > 0 && next[next.length - 1].role === 'assistant') {
+          next[next.length - 1] = { role: 'assistant', content: fullContent || next[next.length - 1].content }
+        }
+        return next
+      })
+      setStreamingContent('')
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : 'Failed to send. Check Ollama is running.'
+      setChatMessages((prev) => {
+        const next = [...prev]
+        if (next.length > 0 && next[next.length - 1].role === 'assistant' && next[next.length - 1].content === '') {
+          next[next.length - 1] = { role: 'assistant', content: errMsg }
+        } else {
+          next.push({ role: 'assistant', content: errMsg })
+        }
+        return next
+      })
+      setStreamingContent('')
+    } finally {
+      setChatLoading(false)
+    }
+  }
+
   const canFetchGoogleAds =
     googleConnection &&
     (googleConnection.customerIds.length === 0 ||
@@ -182,6 +332,53 @@ export function DashboardContent({
         }))
       })
   }, [workspaceSlug, canFetchGoogleAds, googleConnection?.id, googleConnection?.selectedCustomerId])
+
+  useEffect(() => {
+    if (!shopifyConnection?.id || !workspaceSlug || !analyticsFrom || !analyticsTo) return
+    setShopifyAnalytics((prev) => ({ ...prev, loading: true, error: null }))
+    fetch(`/api/workspaces/${workspaceSlug}/shopify-analytics?from=${analyticsFrom}&to=${analyticsTo}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.error) {
+          setShopifyAnalytics({ daily: [], summary: null, loading: false, error: data.error })
+          return
+        }
+        setShopifyAnalytics({
+          daily: data.daily ?? [],
+          summary: data.summary ?? null,
+          loading: false,
+          error: null,
+        })
+      })
+      .catch(() => {
+        setShopifyAnalytics((prev) => ({ ...prev, loading: false, error: 'Failed to load analytics' }))
+      })
+  }, [workspaceSlug, shopifyConnection?.id, analyticsFrom, analyticsTo])
+
+  useEffect(() => {
+    if (!canFetchInsights || !workspaceSlug) return
+    setAiInsights((prev) => ({ ...prev, loading: true, error: null }))
+    fetch(`/api/workspaces/${workspaceSlug}/insights?days=30`)
+      .then((res) => res.json())
+      .then((data) => {
+        setAiInsights({
+          insights: data.insights ?? [],
+          trend: data.trend ?? null,
+          anomalies: data.anomalies ?? [],
+          recommendations: data.recommendations ?? [],
+          modelUsed: data.modelUsed ?? null,
+          loading: false,
+          error: data.error ?? null,
+        })
+      })
+      .catch(() => {
+        setAiInsights((prev) => ({
+          ...prev,
+          loading: false,
+          error: 'Failed to load AI insights',
+        }))
+      })
+  }, [workspaceSlug, canFetchInsights])
 
   const canConnect =
     storeHandle.trim() && clientId.trim() && clientSecret.trim()
@@ -522,6 +719,164 @@ export function DashboardContent({
         </div>
       </div>
 
+      {/* Shopify Analytics — net sales, orders, AOV with date range & graph */}
+      {shopifyConnection && (
+        <div className="rounded-xl border bg-card shadow-sm">
+          <div className="flex items-center gap-3 border-b px-6 py-4">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#96bf48]/10">
+              <IconChartLine className="h-5 w-5 text-[#96bf48]" />
+            </div>
+            <div className="flex-1">
+              <p className="text-sm font-medium">Shopify Analytics</p>
+              <p className="text-xs text-muted-foreground">
+                Net sales, orders, and AOV by day. Use date filters or presets below.
+              </p>
+            </div>
+          </div>
+          <div className="px-6 py-4 space-y-4">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-2">
+                <Label htmlFor="analytics-from" className="text-xs whitespace-nowrap">From</Label>
+                <Input
+                  id="analytics-from"
+                  type="date"
+                  value={analyticsFrom}
+                  onChange={(e) => setAnalyticsFrom(e.target.value)}
+                  className="w-[140px]"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <Label htmlFor="analytics-to" className="text-xs whitespace-nowrap">To</Label>
+                <Input
+                  id="analytics-to"
+                  type="date"
+                  value={analyticsTo}
+                  onChange={(e) => setAnalyticsTo(e.target.value)}
+                  className="w-[140px]"
+                />
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  { label: '7D', days: 7 },
+                  { label: '30D', days: 30 },
+                  { label: '90D', days: 90 },
+                ].map(({ label, days }) => (
+                  <Button
+                    key={label}
+                    variant="outline"
+                    size="sm"
+                    className="h-8"
+                    onClick={() => {
+                      const to = new Date()
+                      const from = subDays(to, days - 1)
+                      setAnalyticsFrom(format(from, 'yyyy-MM-dd'))
+                      setAnalyticsTo(format(to, 'yyyy-MM-dd'))
+                    }}
+                  >
+                    {label}
+                  </Button>
+                ))}
+              </div>
+            </div>
+
+            {shopifyAnalytics.loading ? (
+              <div className="flex items-center justify-center py-12">
+                <IconLoader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              </div>
+            ) : shopifyAnalytics.error ? (
+              <p className="text-sm text-muted-foreground py-4">{shopifyAnalytics.error}</p>
+            ) : shopifyAnalytics.summary ? (
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="rounded-lg border bg-muted/30 p-4">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Net sales</p>
+                    <p className="text-xl font-semibold mt-0.5">
+                      {shopifyAnalytics.summary.currency === 'INR' ? '₹' : '$'}
+                      {shopifyAnalytics.summary.totalNetSales.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border bg-muted/30 p-4">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Orders</p>
+                    <p className="text-xl font-semibold mt-0.5">
+                      {shopifyAnalytics.summary.totalOrders.toLocaleString('en-IN')}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border bg-muted/30 p-4">
+                    <p className="text-xs text-muted-foreground uppercase tracking-wider">Avg. order value</p>
+                    <p className="text-xl font-semibold mt-0.5">
+                      {shopifyAnalytics.summary.currency === 'INR' ? '₹' : '$'}
+                      {shopifyAnalytics.summary.avgAov.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                    </p>
+                  </div>
+                </div>
+
+                {shopifyAnalytics.daily.length > 0 ? (
+                  <div className="rounded-lg border bg-muted/20 p-4">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">Net sales over time</p>
+                    <ChartContainer
+                      config={{
+                        netSales: { label: 'Net sales', color: '#96bf48' },
+                        ordersCount: { label: 'Orders', color: 'hsl(var(--chart-2))' },
+                      } satisfies ChartConfig}
+                      className="h-[280px] w-full"
+                    >
+                      <AreaChart
+                        data={shopifyAnalytics.daily.map((d) => ({
+                          ...d,
+                          dateLabel: format(new Date(d.date), 'MMM d'),
+                        }))}
+                        margin={{ top: 8, right: 8, left: 8, bottom: 8 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                        <XAxis
+                          dataKey="dateLabel"
+                          tickLine={false}
+                          axisLine={false}
+                          tickMargin={8}
+                        />
+                        <YAxis
+                          tickLine={false}
+                          axisLine={false}
+                          tickMargin={8}
+                          tickFormatter={(v) => `${shopifyAnalytics.summary?.currency === 'INR' ? '₹' : '$'}${(v / 1000).toFixed(0)}k`}
+                        />
+                        <ChartTooltip
+                          content={
+                            <ChartTooltipContent
+                              formatter={(v) => [
+                                `${shopifyAnalytics.summary?.currency === 'INR' ? '₹' : '$'}${Number(v).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`,
+                                'Net sales',
+                              ]}
+                              labelFormatter={(_, payload) => payload?.[0]?.payload?.date ? format(new Date(payload[0].payload.date), 'MMM d, yyyy') : ''}
+                            />
+                          }
+                        />
+                        <Area
+                          type="monotone"
+                          dataKey="netSales"
+                          stroke="var(--color-netSales)"
+                          fill="var(--color-netSales)"
+                          fillOpacity={0.3}
+                          strokeWidth={2}
+                        />
+                      </AreaChart>
+                    </ChartContainer>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground py-6 text-center">
+                    No daily data for this range. Sync Shopify from the card above or run &quot;Refresh analytics&quot; in Admin.
+                  </p>
+                )}
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground py-4">
+                No analytics data yet. Sync your Shopify store above, then refresh analytics from Admin if needed.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Meta Ads Connection Card */}
       <div className="rounded-xl border bg-card shadow-sm">
         <div className="flex items-center gap-3 border-b px-6 py-4">
@@ -845,6 +1200,203 @@ export function DashboardContent({
           )}
         </div>
       </div>
+
+      {/* Analytics Insights — latest insights, trend, anomalies, recommendations */}
+      {canFetchInsights && (
+        <div className="rounded-xl border bg-card shadow-sm">
+          <div className="flex items-center gap-3 border-b px-6 py-4">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-500/10">
+              <IconBrain className="h-5 w-5 text-violet-600" />
+            </div>
+            <div className="flex-1">
+              <p className="text-sm font-medium">Analytics Insights</p>
+              <p className="text-xs text-muted-foreground">
+                AI intelligence: latest insights, trend, anomalies, recommendations (Ollama)
+              </p>
+            </div>
+          </div>
+          <div className="px-6 py-4 space-y-6">
+            {aiInsights.loading ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+                <IconLoader2 className="h-4 w-4 animate-spin" />
+                Generating insights…
+              </div>
+            ) : aiInsights.error ? (
+              <p className="text-sm text-muted-foreground py-2">{aiInsights.error}</p>
+            ) : (
+              <>
+                {/* Trend analysis */}
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+                    Trend analysis (vs prior period)
+                  </p>
+                  {aiInsights.trend && (aiInsights.trend.meta || aiInsights.trend.google) ? (
+                    <div className="rounded-lg border bg-muted/20 p-3 flex flex-wrap gap-4">
+                      {aiInsights.trend.meta && (
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium text-muted-foreground">Meta Ads</p>
+                          <p className="text-sm">
+                            Spend <TrendPill value={aiInsights.trend.meta.spendPctChange} /> · Revenue <TrendPill value={aiInsights.trend.meta.revenuePctChange} /> · ROAS <TrendPill value={aiInsights.trend.meta.roasPctChange} />
+                          </p>
+                        </div>
+                      )}
+                      {aiInsights.trend.google && (
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium text-muted-foreground">Google Ads</p>
+                          <p className="text-sm">
+                            Spend <TrendPill value={aiInsights.trend.google.spendPctChange} /> · Conv. value <TrendPill value={aiInsights.trend.google.conversionValuePctChange} /> · ROAS <TrendPill value={aiInsights.trend.google.roasPctChange} />
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No trend data (need current + prior period metrics).</p>
+                  )}
+                </div>
+
+                {/* Anomalies */}
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+                    Anomalies
+                  </p>
+                  {aiInsights.anomalies.length > 0 ? (
+                    <ul className="space-y-2">
+                      {aiInsights.anomalies.map((a, i) => (
+                        <li key={i} className="rounded-lg border border-amber-200 dark:border-amber-900 bg-amber-50/50 dark:bg-amber-950/30 px-3 py-2 text-sm">
+                          <span className="text-xs font-medium text-amber-700 dark:text-amber-400 uppercase">{a.type.replace(/_/g, ' ')}</span>
+                          <span className="text-muted-foreground ml-1">({a.source})</span>
+                          <p className="mt-0.5">{a.description}</p>
+                          {(a.date || a.campaign) && (
+                            <p className="text-xs text-muted-foreground">{[a.date, a.campaign].filter(Boolean).join(' · ')}</p>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No anomalies detected.</p>
+                  )}
+                </div>
+
+                {/* Recommendations */}
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+                    Recommendations
+                  </p>
+                  {aiInsights.recommendations.length > 0 ? (
+                    <ul className="space-y-2">
+                      {aiInsights.recommendations.map((r, i) => (
+                        <li key={i} className="rounded-lg border bg-muted/20 p-3">
+                          {r.title && <p className="text-sm font-medium mb-0.5">{r.title}</p>}
+                          <p className="text-sm text-muted-foreground">{r.text}</p>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No recommendations yet. Generate insights above.</p>
+                  )}
+                </div>
+
+                {/* Latest AI insights */}
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+                    Latest AI insights
+                  </p>
+                  {aiInsights.insights.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      No insights yet. Ensure Ollama is running (e.g. <code className="text-xs bg-muted px-1 rounded">ollama run llama3.2</code>). You can still use trend, anomalies, and chat below.
+                    </p>
+                  ) : (
+                    <div className="space-y-3">
+                      {aiInsights.modelUsed && (
+                        <p className="text-xs text-muted-foreground">Model: {aiInsights.modelUsed}</p>
+                      )}
+                      <ul className="space-y-3">
+                        {aiInsights.insights.map((insight, i) => (
+                          <li key={i} className="rounded-lg border bg-muted/30 p-3 space-y-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                                {insight.insight_type.replace(/_/g, ' ')}
+                              </span>
+                              <span className="text-xs text-muted-foreground">
+                                {(insight.confidence * 100).toFixed(0)}% confidence
+                              </span>
+                            </div>
+                            {insight.title && (
+                              <p className="text-sm font-medium">{insight.title}</p>
+                            )}
+                            <p className="text-sm text-muted-foreground">{insight.reason}</p>
+                            <p className="text-sm">
+                              <span className="text-muted-foreground">Recommendation: </span>
+                              {insight.recommendation}
+                            </p>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+
+            {/* AI Chat — ask about metrics & insights (always shown when AI Insights card is visible) */}
+            <div className="border-t pt-4 mt-4 space-y-3">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                Ask about your data
+              </p>
+              <div className="rounded-lg border bg-muted/20 min-h-[120px] max-h-[280px] overflow-y-auto flex flex-col">
+                {chatMessages.length === 0 ? (
+                  <p className="text-sm text-muted-foreground p-3">
+                    e.g. &quot;Why is my ROAS low?&quot;, &quot;Which campaign should I focus on?&quot;, &quot;Summarize my ad performance&quot;
+                  </p>
+                ) : (
+                  <div className="p-3 space-y-3">
+                    {chatMessages.map((m, i) => {
+                      const isLastAssistant = i === chatMessages.length - 1 && m.role === 'assistant'
+                      const text = isLastAssistant && streamingContent ? m.content + streamingContent : m.content
+                      const showCursor = isLastAssistant && chatLoading
+                      return (
+                        <div
+                          key={i}
+                          className={
+                            m.role === 'user'
+                              ? 'ml-4 text-sm bg-violet-500/10 text-violet-800 dark:text-violet-200 rounded-lg px-3 py-2'
+                              : 'mr-4 text-sm bg-muted rounded-lg px-3 py-2 prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-ul:my-1 prose-li:my-0'
+                          }
+                        >
+                          {m.role === 'user' ? (
+                            m.content
+                          ) : (
+                            <>
+                              <ReactMarkdown remarkPlugins={[remarkGfm]}>{text || '…'}</ReactMarkdown>
+                              {showCursor && <span className="inline-block w-2 h-4 ml-0.5 bg-violet-500 animate-pulse" aria-hidden />}
+                            </>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+              <form onSubmit={handleChatSubmit} className="flex gap-2">
+                <Input
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  placeholder="Ask about ROAS, campaigns, spend..."
+                  className="flex-1"
+                  disabled={chatLoading}
+                />
+                <Button type="submit" size="icon" disabled={chatLoading || !chatInput.trim()}>
+                  {chatLoading ? (
+                    <IconLoader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <IconSend className="h-4 w-4" />
+                  )}
+                </Button>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Shiprocket Connection Card */}
       <div className="rounded-xl border bg-card shadow-sm">

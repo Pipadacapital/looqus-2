@@ -51,6 +51,7 @@ export type ProductRow = {
   imageUrl: string | null
   totalInventory: number | null
   publishedAt: string | null
+  coq: number | null
   createdAt: string
 }
 
@@ -198,6 +199,15 @@ export function StoreProductsTable() {
         ),
       },
       {
+        accessorKey: 'coq',
+        header: () => <div className="text-right">COQ</div>,
+        cell: ({ row }) => (
+          <div className="text-right text-muted-foreground">
+            {row.original.coq != null ? Number(row.original.coq) : '—'}
+          </div>
+        ),
+      },
+      {
         accessorKey: 'publishedAt',
         header: 'Published',
         cell: ({ row }) => (
@@ -286,6 +296,7 @@ export function StoreProductsTable() {
                         'totalInventory',
                         'publishedAt',
                         'createdAt',
+                        'coq',
                       ].includes(apiSortField)
                       const isSorted = params.sort === apiSortField
                       return (

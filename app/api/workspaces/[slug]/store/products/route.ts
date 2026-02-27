@@ -3,7 +3,7 @@ import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
 import { Prisma } from '@prisma/client'
 
-const SORT_FIELDS = ['title', 'productType', 'status', 'totalInventory', 'publishedAt', 'createdAt'] as const
+const SORT_FIELDS = ['title', 'productType', 'status', 'totalInventory', 'publishedAt', 'createdAt', 'coq'] as const
 const ORDER_VALUES = ['asc', 'desc'] as const
 
 export async function GET(
@@ -27,6 +27,7 @@ export async function GET(
   const order = (searchParams.get('order') || 'asc') as 'asc' | 'desc'
   const search = (searchParams.get('search') || '').trim()
   const statusFilter = searchParams.get('status') || ''
+  const coqFilter = searchParams.get('coqFilter') || ''
 
   const workspace = await prisma.workspace.findUnique({
     where: { slug },
@@ -85,6 +86,11 @@ export async function GET(
   if (statusFilter) {
     where.status = statusFilter
   }
+  if (coqFilter === 'set') {
+    where.coq = { not: null }
+  } else if (coqFilter === 'not_set') {
+    where.coq = null
+  }
 
   const orderBy: Prisma.ShopifyProductOrderByWithRelationInput =
     sortField === 'title'
@@ -97,7 +103,9 @@ export async function GET(
             ? { totalInventory: orderDir }
             : sortField === 'publishedAt'
               ? { publishedAt: orderDir }
-              : { createdAt: orderDir }
+              : sortField === 'coq'
+                ? { coq: orderDir }
+                : { createdAt: orderDir }
 
   const [products, total] = await Promise.all([
     prisma.shopifyProduct.findMany({
@@ -115,6 +123,7 @@ export async function GET(
         imageUrl: true,
         totalInventory: true,
         publishedAt: true,
+        coq: true,
         createdAt: true,
       },
     }),
@@ -134,6 +143,7 @@ export async function GET(
       imageUrl: p.imageUrl,
       totalInventory: p.totalInventory,
       publishedAt: p.publishedAt?.toISOString() ?? null,
+      coq: p.coq != null ? Number(p.coq) : null,
       createdAt: p.createdAt.toISOString(),
     })),
     total,

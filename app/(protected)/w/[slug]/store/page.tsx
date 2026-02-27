@@ -22,7 +22,7 @@ export default async function StorePage({
     include: {
       shopifyConnections: {
         where: { status: 'CONNECTED' },
-        select: { id: true },
+        select: { id: true, lastSyncAt: true },
         take: 1,
       },
     },
@@ -31,6 +31,13 @@ export default async function StorePage({
   if (!workspace) redirect('/')
 
   const hasConnection = workspace.shopifyConnections.length > 0
+  const connection = workspace.shopifyConnections[0] ?? null
 
-  return <StoreContent hasConnection={hasConnection} />
+  return (
+    <StoreContent
+      hasConnection={hasConnection}
+      connectionId={connection?.id ?? null}
+      lastSyncAt={connection?.lastSyncAt?.toISOString() ?? null}
+    />
+  )
 }

@@ -73,6 +73,59 @@ export async function syncShiprocketForConnection(connectionId: string) {
   })
 }
 
+export type SyncAllShiprocketResult = {
+  connectionId: string
+  workspaceId: string
+  workspaceName: string
+  status: 'ok' | 'failed'
+  error?: string
+}
+
+export async function syncAllShiprocket(): Promise<{
+  synced: number
+  failed: number
+  results: SyncAllShiprocketResult[]
+}> {
+  const connections = await prisma.shiprocketConnection.findMany({
+    where: { status: 'CONNECTED' },
+    select: {
+      id: true,
+      workspaceId: true,
+      workspace: { select: { name: true } },
+    },
+  })
+
+  const results: SyncAllShiprocketResult[] = []
+
+  for (const c of connections) {
+    try {
+      await syncShiprocketForConnection(c.id)
+      results.push({
+        connectionId: c.id,
+        workspaceId: c.workspaceId,
+        workspaceName: c.workspace?.name ?? 'Unknown',
+        status: 'ok',
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error(`Shiprocket sync failed for connection ${c.id}:`, err)
+      results.push({
+        connectionId: c.id,
+        workspaceId: c.workspaceId,
+        workspaceName: c.workspace?.name ?? 'Unknown',
+        status: 'failed',
+        error: message,
+      })
+    }
+  }
+
+  return {
+    synced: results.filter((r) => r.status === 'ok').length,
+    failed: results.filter((r) => r.status === 'failed').length,
+    results,
+  }
+}
+
 async function upsertOrder(connectionId: string, order: ShiprocketOrderRow) {
   const shiprocketId = String(order.id)
   await prisma.shiprocketOrder.upsert({

@@ -100,6 +100,7 @@ model ShopifyConnection {
   clientSecret   String            @map("client_secret")
   tokenExpiresAt DateTime?         @map("token_expires_at")
   workspace      Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  analyticsDaily ShopifyAnalyticsDaily[]
   customers      ShopifyCustomer[]
   lineItems      ShopifyLineItem[]
   orders         ShopifyOrder[]
@@ -107,6 +108,25 @@ model ShopifyConnection {
 
   @@unique([workspaceId, shopDomain])
   @@map("shopify_connections")
+}
+
+model ShopifyAnalyticsDaily {
+  id             String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  connectionId   String            @map("connection_id") @db.Uuid
+  date           DateTime          @db.Date
+  netSales       Decimal           @map("net_sales") @db.Decimal(12, 2)
+  grossSales     Decimal           @map("gross_sales") @db.Decimal(12, 2)
+  ordersCount    Int               @map("orders_count")
+  aov            Decimal           @db.Decimal(12, 2)
+  totalTax       Decimal           @map("total_tax") @db.Decimal(12, 2)
+  totalDiscount  Decimal          @map("total_discount") @db.Decimal(12, 2)
+  currency       String
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+  connection     ShopifyConnection  @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@unique([connectionId, date])
+  @@index([connectionId, date])
+  @@map("shopify_analytics_daily")
 }
 
 model ShopifyOrder {
@@ -169,6 +189,7 @@ model ShopifyProduct {
   imageUrl       String?           @map("image_url")
   totalInventory Int?              @map("total_inventory")
   publishedAt    DateTime?         @map("published_at")
+  coq            Decimal?          @map("coq") @db.Decimal(12, 4)
   createdAt      DateTime          @default(now()) @map("created_at")
   updatedAt      DateTime          @updatedAt @map("updated_at")
   connection     ShopifyConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
