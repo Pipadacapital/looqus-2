@@ -11,6 +11,10 @@ export interface AnalyticsMetricsCardsProps {
 const otherCosts = (s: ShopifyAnalyticsSummary) =>
   s.totalShipping + s.totalPackaging + s.totalWebsiteCharges
 
+const materialMargin = (s: ShopifyAnalyticsSummary) => s.totalNetSales - s.totalCogs
+const materialMarginPercent = (s: ShopifyAnalyticsSummary) =>
+  s.totalNetSales > 0 ? (materialMargin(s) / s.totalNetSales) * 100 : 0
+
 export function AnalyticsMetricsCards({
   summary,
   className,
@@ -25,6 +29,16 @@ export function AnalyticsMetricsCards({
       value: summary.totalOrders.toLocaleString('en-IN'),
     },
     { label: 'COGS', value: formatCurrency(summary.totalCogs, summary.currency) },
+    {
+      label: 'Material Margin',
+      value: formatCurrency(materialMargin(summary), summary.currency),
+      highlight: true,
+    },
+    {
+      label: 'Material Margin %',
+      value: `${materialMarginPercent(summary).toFixed(1)}%`,
+      highlight: true,
+    },
     {
       label: 'Other costs',
       value: formatCurrency(otherCosts(summary), summary.currency),
