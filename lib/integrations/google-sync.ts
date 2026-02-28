@@ -16,19 +16,27 @@ export async function syncGoogleAdsForConnection(
 
   if (!connection || connection.status !== 'CONNECTED') return { rowsSynced: 0 }
 
-  // Determine which customer to sync
-  let targetCustomer = connection.selected_customer_id
-  if (!targetCustomer && connection.customer_ids.length === 1) {
-    targetCustomer = connection.customer_ids[0]
+  // Determine which customers to sync (multi-select with legacy fallback)
+  let targetCustomers = connection.selected_customer_ids?.length
+    ? connection.selected_customer_ids
+    : connection.selected_customer_id
+      ? [connection.selected_customer_id]
+      : []
+
+  if (targetCustomers.length === 0 && connection.customer_ids.length === 1) {
+    targetCustomers = [connection.customer_ids[0]]
     await prisma.google_ads_connections.update({
       where: { id: connection.id },
-      data: { selected_customer_id: targetCustomer },
+      data: {
+        selected_customer_ids: targetCustomers,
+        selected_customer_id: targetCustomers[0],
+      },
     })
   }
-  if (!targetCustomer) {
+  if (targetCustomers.length === 0) {
     await prisma.google_ads_connections.update({
       where: { id: connection.id },
-      data: { last_sync_error: 'Multiple customer IDs available — please select one before syncing.' },
+      data: { last_sync_error: 'Select accounts under manager to sync.' },
     })
     return { rowsSynced: 0 }
   }
@@ -45,7 +53,7 @@ export async function syncGoogleAdsForConnection(
   const errors: string[] = []
   let rowsSynced = 0
 
-  for (const customerId of [targetCustomer]) {
+  for (const customerId of targetCustomers) {
     try {
       const query = `
         SELECT

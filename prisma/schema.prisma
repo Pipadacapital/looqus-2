@@ -47,6 +47,7 @@ model Workspace {
   shopifyConnections     ShopifyConnection[]
   members                WorkspaceMember[]
   costs                  WorkspaceCost[]
+  miscExpenses           WorkspaceMiscExpense[]
   createdBy              User                    @relation("WorkspaceCreator", fields: [createdById], references: [id])
 
   @@map("workspaces")
@@ -92,6 +93,7 @@ model WorkspaceCost {
   costType      WorkspaceCostType @map("cost_type")
   name          String?           @db.VarChar(120)
   amount        Decimal           @db.Decimal(12, 2)
+  isPercent     Boolean           @default(false) @map("is_percent")
   effectiveFrom DateTime          @map("effective_from") @db.Date
   effectiveTo   DateTime?         @map("effective_to") @db.Date
   currency      String?           @default("USD") @db.VarChar(3)
@@ -100,6 +102,21 @@ model WorkspaceCost {
 
   @@index([workspaceId, costType, effectiveFrom, effectiveTo])
   @@map("workspace_costs")
+}
+
+model WorkspaceMiscExpense {
+  id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId        String    @map("workspace_id") @db.Uuid
+  name               String    @db.VarChar(200)
+  amount             Decimal   @db.Decimal(12, 2)
+  currency           String    @default("INR") @db.VarChar(3)
+  effectiveStartDate DateTime  @map("effective_start_date") @db.Date
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+  workspace          Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, effectiveStartDate])
+  @@map("workspace_misc_expenses")
 }
 
 model ShopifyConnection {
@@ -241,20 +258,22 @@ model ShopifyCustomer {
 }
 
 model ShiprocketConnection {
-  id              String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  workspaceId     String               @unique @map("workspace_id") @db.Uuid
-  email           String
-  password        String
-  accessToken     String?              @map("access_token")
-  tokenObtainedAt DateTime?            @map("token_obtained_at")
-  status          ConnectionStatus     @default(CONNECTED)
-  lastSyncAt      DateTime?            @map("last_sync_at")
-  lastSyncError   String?              @map("last_sync_error")
-  createdAt       DateTime             @default(now()) @map("created_at")
-  updatedAt       DateTime             @updatedAt @map("updated_at")
-  workspace       Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  orders          ShiprocketOrder[]
-  shipments       ShiprocketShipment[]
+  id                 String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId        String               @unique @map("workspace_id") @db.Uuid
+  email              String
+  password           String
+  accessToken        String?              @map("access_token")
+  tokenObtainedAt    DateTime?            @map("token_obtained_at")
+  status             ConnectionStatus     @default(CONNECTED)
+  channels           Json?
+  selectedChannelIds String[]             @map("selected_channel_ids")
+  lastSyncAt         DateTime?            @map("last_sync_at")
+  lastSyncError      String?              @map("last_sync_error")
+  createdAt          DateTime             @default(now()) @map("created_at")
+  updatedAt          DateTime             @updatedAt @map("updated_at")
+  workspace          Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  orders             ShiprocketOrder[]
+  shipments          ShiprocketShipment[]
 
   @@map("shiprocket_connections")
 }
@@ -263,6 +282,7 @@ model ShiprocketOrder {
   id             String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   connectionId   String               @map("connection_id") @db.Uuid
   shiprocketId   String               @map("shiprocket_id")
+  channelId      String?              @map("channel_id")
   channelOrderId String?              @map("channel_order_id")
   status         String?
   statusCode     Int?                 @map("status_code")
@@ -280,26 +300,34 @@ model ShiprocketOrder {
 }
 
 model ShiprocketShipment {
-  id             String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  connectionId   String               @map("connection_id") @db.Uuid
-  shipmentId     String               @map("shipment_id")
-  orderId        String?              @map("order_id")
-  status         String?
-  statusCode     Int?                 @map("status_code")
-  courierName    String?              @map("courier_name")
-  awbCode        String?              @map("awb_code")
-  isCod          Boolean              @default(false) @map("is_cod")
-  codAmount      Decimal?             @map("cod_amount") @db.Decimal(12, 2)
-  shippedAt      DateTime?            @map("shipped_at")
-  deliveredAt    DateTime?            @map("delivered_at")
-  rtoInitiatedAt DateTime?            @map("rto_initiated_at")
-  charges        Decimal?             @db.Decimal(12, 2)
-  rawJson        Json?                @map("raw_json")
-  syncedAt       DateTime             @default(now()) @map("synced_at")
-  connection     ShiprocketConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  id                   String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  connectionId         String               @map("connection_id") @db.Uuid
+  shipmentId           String               @map("shipment_id")
+  orderId              String?              @map("order_id")
+  channelOrderId       String?              @map("channel_order_id")
+  status               String?
+  statusCode           Int?                 @map("status_code")
+  courierName          String?              @map("courier_name")
+  awbCode              String?              @map("awb_code")
+  isCod                Boolean              @default(false) @map("is_cod")
+  codAmount            Decimal?             @map("cod_amount") @db.Decimal(12, 2)
+  paymentMethod        String?              @map("payment_method")
+  shippedAt            DateTime?            @map("shipped_at")
+  deliveredAt          DateTime?            @map("delivered_at")
+  rtoInitiatedAt       DateTime?            @map("rto_initiated_at")
+  charges              Decimal?             @db.Decimal(12, 2)
+  trackingStatusCode   Int?                 @map("tracking_status_code")
+  trackingStatus       String?              @map("tracking_status")
+  trackingUpdatedAt    DateTime?            @map("tracking_updated_at")
+  shiprocketCreatedAt  DateTime?            @map("shiprocket_created_at")
+  shopifyOrderName     String?              @map("shopify_order_name")
+  rawJson              Json?                @map("raw_json")
+  syncedAt             DateTime             @default(now()) @map("synced_at")
+  connection           ShiprocketConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
   @@unique([connectionId, shipmentId])
-  @@index([connectionId])
+  @@index([connectionId, trackingStatusCode])
+  @@index([connectionId, shiprocketCreatedAt])
   @@map("shiprocket_shipments")
 }
 
@@ -357,6 +385,7 @@ model google_ads_connections {
   created_at               DateTime                   @default(now())
   updated_at               DateTime
   selected_customer_id     String?
+  selected_customer_ids    String[]
   workspaces               Workspace                  @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
   google_ads_daily_metrics google_ads_daily_metrics[]
 }
@@ -399,9 +428,10 @@ model meta_ads_connections {
   last_sync_error        String?
   created_at             DateTime                 @default(now())
   updated_at             DateTime
-  selected_ad_account_id String?
-  workspaces             Workspace                @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
-  meta_ads_daily_metrics meta_ads_daily_metrics[]
+  selected_ad_account_id  String?
+  selected_ad_account_ids String[]
+  workspaces              Workspace                @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+  meta_ads_daily_metrics  meta_ads_daily_metrics[]
 }
 
 model meta_ads_daily_metrics {

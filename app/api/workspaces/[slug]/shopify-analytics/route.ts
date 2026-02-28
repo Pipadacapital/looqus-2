@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
+import { eachDayOfInterval, getDaysInMonth } from 'date-fns'
 
 // MVP Exchange Rates (Fallback to standard if a live API isn't used)
 const EXCHANGE_RATES: Record<string, number> = {
@@ -45,8 +46,23 @@ export async function GET(
         select: { id: true },
         take: 1,
       },
-      meta_ads_connections: { select: { id: true } },
-      google_ads_connections: { select: { id: true } },
+      meta_ads_connections: {
+        select: {
+          id: true,
+          selected_ad_account_ids: true,
+          selected_ad_account_id: true,
+        },
+      },
+      google_ads_connections: {
+        select: {
+          id: true,
+          selected_customer_ids: true,
+          selected_customer_id: true,
+        },
+      },
+      shiprocketConnection: {
+        select: { id: true, status: true },
+      },
     },
   })
 
@@ -166,6 +182,14 @@ export async function GET(
     },
   })
 
+  // Misc expenses for CM3: include if effectiveStartDate <= rangeEnd
+  const miscExpenses = await prisma.workspaceMiscExpense.findMany({
+    where: {
+      workspaceId: workspace.id,
+      effectiveStartDate: { lte: toDate },
+    },
+  })
+
   const totalNetSales = daily.reduce((sum, d) => sum + Number(d.netSales), 0)
   const totalGrossSales = daily.reduce((sum, d) => sum + Number(d.grossSales), 0)
   const totalTax = daily.reduce((sum, d) => sum + Number(d.totalTax), 0)
@@ -214,18 +238,35 @@ export async function GET(
     }
   }
 
-  // Ad spend for the date range (Meta + Google)
+  // Ad spend for the date range (Meta + Google) — scoped to selected accounts
   let metaAdSpend = 0
   let googleAdSpend = 0
-  const metaConnectionId = workspace.meta_ads_connections?.id
-  const googleConnectionId = workspace.google_ads_connections?.id
+  const metaConn = workspace.meta_ads_connections
+  const googleConn = workspace.google_ads_connections
+  const metaConnectionId = metaConn?.id
+  const googleConnectionId = googleConn?.id
+
+  const metaSelectedIds = metaConn?.selected_ad_account_ids?.length
+    ? metaConn.selected_ad_account_ids
+    : metaConn?.selected_ad_account_id
+      ? [metaConn.selected_ad_account_id]
+      : undefined
+
+  const googleSelectedIds = googleConn?.selected_customer_ids?.length
+    ? googleConn.selected_customer_ids
+    : googleConn?.selected_customer_id
+      ? [googleConn.selected_customer_id]
+      : undefined
 
   if (metaConnectionId) {
+    const metaWhere: Record<string, unknown> = {
+      connection_id: metaConnectionId,
+      date: { gte: fromDate, lte: toDate },
+    }
+    if (metaSelectedIds) metaWhere.ad_account_id = { in: metaSelectedIds }
+
     const metaAgg = await prisma.meta_ads_daily_metrics.aggregate({
-      where: {
-        connection_id: metaConnectionId,
-        date: { gte: fromDate, lte: toDate },
-      },
+      where: metaWhere as Parameters<typeof prisma.meta_ads_daily_metrics.aggregate>[0]['where'],
       _sum: { spend: true },
     })
     metaAdSpend = Number(metaAgg._sum.spend ?? 0)
@@ -236,6 +277,7 @@ export async function GET(
         where: {
           connection_id: metaConnectionId,
           date: { gte: fromDate, lte: toDate },
+          ...(metaSelectedIds ? { ad_account_id: { in: metaSelectedIds } } : {}),
         },
         select: {
           date: true,
@@ -252,27 +294,20 @@ export async function GET(
     from: fromStr,
     to: toStr,
     connectionId: metaConnectionId ?? null,
+    selectedAccounts: metaSelectedIds ?? 'all',
     totalSpend: metaAdSpend,
     rowCount: metaAdRows.length,
   })
-  console.log('[shopify-analytics] Meta Ads – all rows in date range', {
-    from: fromStr,
-    to: toStr,
-    rows: metaAdRows.map((r) => ({
-      date: r.date.toISOString().slice(0, 10),
-      ad_account_id: r.ad_account_id,
-      campaign_id: r.campaign_id,
-      campaign_name: r.campaign_name,
-      spend: Number(r.spend),
-    })),
-  })
 
   if (googleConnectionId) {
+    const googleWhere: Record<string, unknown> = {
+      connection_id: googleConnectionId,
+      date: { gte: fromDate, lte: toDate },
+    }
+    if (googleSelectedIds) googleWhere.customer_id = { in: googleSelectedIds }
+
     const googleAgg = await prisma.google_ads_daily_metrics.aggregate({
-      where: {
-        connection_id: googleConnectionId,
-        date: { gte: fromDate, lte: toDate },
-      },
+      where: googleWhere as Parameters<typeof prisma.google_ads_daily_metrics.aggregate>[0]['where'],
       _sum: { spend: true },
     })
     googleAdSpend = Number(googleAgg._sum.spend ?? 0)
@@ -283,6 +318,7 @@ export async function GET(
         where: {
           connection_id: googleConnectionId,
           date: { gte: fromDate, lte: toDate },
+          ...(googleSelectedIds ? { customer_id: { in: googleSelectedIds } } : {}),
         },
         select: {
           date: true,
@@ -299,22 +335,77 @@ export async function GET(
     from: fromStr,
     to: toStr,
     connectionId: googleConnectionId ?? null,
+    selectedCustomers: googleSelectedIds ?? 'all',
     totalSpend: googleAdSpend,
     rowCount: googleAdRows.length,
   })
-  console.log('[shopify-analytics] Google Ads – all rows in date range', {
-    from: fromStr,
-    to: toStr,
-    rows: googleAdRows.map((r) => ({
-      date: r.date.toISOString().slice(0, 10),
-      customer_id: r.customer_id,
-      campaign_id: r.campaign_id,
-      campaign_name: r.campaign_name,
-      spend: Number(r.spend),
-    })),
-  })
 
   const totalAdSpend = metaAdSpend + googleAdSpend
+
+  // ── RTO metrics (from Shiprocket tracking) ────────────────────────
+  const RTO_STATUS_CODES = [9, 10, 14, 20, 40, 41, 46]
+  let rtoOrders = 0
+  let rtoPercent: number | null = null
+  let rtoValue = 0
+  let rtoMapped = 0
+  let rtoUnmapped = 0
+  let totalShipmentsInRange = 0
+
+  const srConn = workspace.shiprocketConnection
+  if (srConn?.status === 'CONNECTED') {
+    const allShipments = await prisma.shiprocketShipment.findMany({
+      where: {
+        connectionId: srConn.id,
+        shippedAt: { gte: fromDate, lte: toDate },
+      },
+      select: {
+        trackingStatusCode: true,
+        statusCode: true,
+        channelOrderId: true,
+        orderId: true,
+      },
+    })
+
+    totalShipmentsInRange = allShipments.length
+
+    const rtoShipments = allShipments.filter((s) => {
+      const code = s.trackingStatusCode ?? s.statusCode
+      return code != null && RTO_STATUS_CODES.includes(code)
+    })
+    rtoOrders = rtoShipments.length
+    rtoPercent =
+      totalShipmentsInRange > 0
+        ? Math.round((rtoOrders / totalShipmentsInRange) * 10000) / 100
+        : null
+
+    const channelIds = rtoShipments
+      .map((s) => s.channelOrderId)
+      .filter((id): id is string => id != null && id !== '')
+
+    if (channelIds.length > 0) {
+      const cleanIds = channelIds.map((id) => id.replace(/^#/, ''))
+
+      const matchedOrders = await prisma.shopifyOrder.findMany({
+        where: {
+          connectionId,
+          OR: [
+            { orderNumber: { in: cleanIds } },
+            { name: { in: channelIds } },
+          ],
+        },
+        select: { totalPrice: true },
+      })
+
+      rtoValue = matchedOrders.reduce(
+        (sum, o) => sum + Number(o.totalPrice),
+        0
+      )
+      rtoMapped = matchedOrders.length
+      rtoUnmapped = rtoOrders - rtoMapped
+    } else {
+      rtoUnmapped = rtoOrders
+    }
+  }
 
   let totalShipping = 0
   let totalPackaging = 0
@@ -324,37 +415,42 @@ export async function GET(
   for (const d of daily) {
     const dateStr = d.date.toISOString().slice(0, 10)
     const ordersCount = d.ordersCount
+    const dayGrossSales = Number(d.grossSales)
 
-    let dayShippingInfo = 0
-    let dayPackagingInfo = 0
-    let dayWebsiteInfo = 0
+    let dayShippingPerOrder = 0
+    let dayPackagingPerOrder = 0
+    let dayWebsiteCharge = 0
 
     for (const cost of workspaceCosts) {
       const costFromStr = cost.effectiveFrom.toISOString().slice(0, 10)
       const costToStr = cost.effectiveTo ? cost.effectiveTo.toISOString().slice(0, 10) : '9999-12-31'
       
       if (dateStr >= costFromStr && dateStr <= costToStr) {
-        // Convert Workspace Cost currency to Shopify target currency
-        const valInStoreCurrency = convertCurrency(Number(cost.amount), cost.currency || 'USD', storeCurrency)
-        
-        if (cost.costType === 'SHIPPING') dayShippingInfo += valInStoreCurrency
-        else if (cost.costType === 'PACKAGING') dayPackagingInfo += valInStoreCurrency
-        else if (cost.costType === 'WEBSITE') dayWebsiteInfo += valInStoreCurrency 
+        if (cost.costType === 'SHIPPING') {
+          dayShippingPerOrder += convertCurrency(Number(cost.amount), cost.currency || 'USD', storeCurrency)
+        } else if (cost.costType === 'PACKAGING') {
+          dayPackagingPerOrder += convertCurrency(Number(cost.amount), cost.currency || 'USD', storeCurrency)
+        } else if (cost.costType === 'WEBSITE') {
+          if (cost.isPercent) {
+            dayWebsiteCharge += (Number(cost.amount) / 100) * dayGrossSales
+          } else {
+            dayWebsiteCharge += convertCurrency(Number(cost.amount), cost.currency || 'USD', storeCurrency) * ordersCount
+          }
+        }
       }
     }
 
-    const dayShipping = dayShippingInfo * ordersCount
-    const dayPackaging = dayPackagingInfo * ordersCount
-    const dayWebsite = dayWebsiteInfo * ordersCount
+    const dayShipping = dayShippingPerOrder * ordersCount
+    const dayPackaging = dayPackagingPerOrder * ordersCount
 
     totalShipping += dayShipping
     totalPackaging += dayPackaging
-    totalWebsiteCharges += dayWebsite
+    totalWebsiteCharges += dayWebsiteCharge
 
     dailyCosts.set(dateStr, {
       shipping: dayShipping,
       packaging: dayPackaging,
-      website: dayWebsite,
+      website: dayWebsiteCharge,
     })
   }
 
@@ -362,6 +458,22 @@ export async function GET(
   // If COGS needs conversion later, it can be applied around the `coqMap`.
 
   const totalCm1 = totalNetSales - totalCogs - totalShipping - totalPackaging - totalWebsiteCharges
+  const totalCm2 = totalCm1 - totalAdSpend
+
+  const miscExpensesTotal = miscExpenses.reduce((sum, e) => {
+    const monthlyAmt = convertCurrency(Number(e.amount), e.currency || 'INR', storeCurrency)
+    const expStart = new Date(e.effectiveStartDate)
+    const applyFrom = expStart > fromDate ? expStart : fromDate
+    if (applyFrom > toDate) return sum
+
+    const overlapStart = new Date(`${applyFrom.toISOString().slice(0, 10)}T00:00:00.000Z`)
+    const overlapEnd = new Date(`${toDate.toISOString().slice(0, 10)}T00:00:00.000Z`)
+
+    const days = eachDayOfInterval({ start: overlapStart, end: overlapEnd })
+    const contribution = days.reduce((s, d) => s + monthlyAmt / getDaysInMonth(d), 0)
+    return sum + contribution
+  }, 0)
+  const totalCm3 = totalCm2 - miscExpensesTotal
 
   const summary = {
     totalNetSales,
@@ -375,7 +487,9 @@ export async function GET(
     totalPackaging,
     totalWebsiteCharges,
     cm1: totalCm1,
-    cm2: totalCm1 - totalAdSpend,
+    cm2: totalCm2,
+    miscExpensesTotal,
+    cm3: totalCm3,
     currency: storeCurrency,
     from: fromDate.toISOString().slice(0, 10),
     to: toDate.toISOString().slice(0, 10),
@@ -389,6 +503,12 @@ export async function GET(
       totalNetSales > 0
         ? Math.round((totalAdSpend / totalNetSales) * 10000) / 100
         : null,
+    rtoOrders,
+    rtoPercent,
+    rtoValue,
+    rtoMapped,
+    rtoUnmapped,
+    totalShipmentsInRange,
   }
 
   return NextResponse.json({

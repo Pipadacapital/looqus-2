@@ -28,6 +28,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
   DialogContent,
@@ -66,6 +67,7 @@ type MetaConnectionInfo = {
   id: string
   adAccountIds: string[]
   selectedAdAccountId: string | null
+  selectedAdAccountIds: string[]
   metaUserId: string | null
   status: string
   lastSyncAt: string | null
@@ -77,6 +79,7 @@ type GoogleConnectionInfo = {
   id: string
   customerIds: string[]
   selectedCustomerId: string | null
+  selectedCustomerIds: string[]
   googleEmail: string | null
   status: string
   lastSyncAt: string | null
@@ -208,7 +211,7 @@ export function DashboardContent({
 
   // Shopify Analytics (daily net sales, orders, AOV) with date range
   type ShopifyAnalyticsDailyRow = { date: string; netSales: number; grossSales: number; totalTax: number; totalDiscount: number; ordersCount: number; aov: number; currency: string; cogs: number; shipping: number; packaging: number; websiteCharges: number; cm1: number }
-  type ShopifyAnalyticsSummary = { totalNetSales: number; totalGrossSales: number; totalTax: number; totalDiscount: number; totalOrders: number; avgAov: number; totalCogs: number; totalShipping: number; totalPackaging: number; totalWebsiteCharges: number; cm1: number; currency: string; from: string; to: string }
+  type ShopifyAnalyticsSummary = { totalNetSales: number; totalGrossSales: number; totalTax: number; totalDiscount: number; totalOrders: number; avgAov: number; totalCogs: number; totalShipping: number; totalPackaging: number; totalWebsiteCharges: number; cm1: number; cm2?: number; miscExpensesTotal?: number; cm3?: number; currency: string; from: string; to: string; rtoOrders?: number; rtoPercent?: number | null; rtoValue?: number; rtoMapped?: number; rtoUnmapped?: number; totalShipmentsInRange?: number }
   const [analyticsFrom, setAnalyticsFrom] = useState<string>(() => format(subDays(new Date(), 29), 'yyyy-MM-dd'))
   const [analyticsTo, setAnalyticsTo] = useState<string>(() => format(new Date(), 'yyyy-MM-dd'))
   const [shopifyAnalytics, setShopifyAnalytics] = useState<{
@@ -478,28 +481,68 @@ export function DashboardContent({
     }
   }
 
-  const handleSelectMetaAccount = async (selectedAdAccountId: string) => {
+  const getEffectiveMetaSelection = (): string[] => {
+    if (metaConnection?.selectedAdAccountIds?.length) return metaConnection.selectedAdAccountIds
+    if (metaConnection?.selectedAdAccountId) return [metaConnection.selectedAdAccountId]
+    return []
+  }
+
+  const getEffectiveGoogleSelection = (): string[] => {
+    if (googleConnection?.selectedCustomerIds?.length) return googleConnection.selectedCustomerIds
+    if (googleConnection?.selectedCustomerId) return [googleConnection.selectedCustomerId]
+    return []
+  }
+
+  const handleToggleMetaAccount = async (accountId: string, checked: boolean) => {
+    if (!metaConnection) return
+    const current = getEffectiveMetaSelection()
+    const next = checked
+      ? [...current, accountId]
+      : current.filter((id) => id !== accountId)
+    if (next.length === 0) {
+      toast.error('At least one ad account must be selected')
+      return
+    }
     setSelectingAccount(true)
     try {
-      await fetch('/api/integrations/meta/select-account', {
+      const res = await fetch('/api/integrations/meta/select-accounts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workspaceId, selectedAdAccountId }),
+        body: JSON.stringify({ workspaceId, selectedAdAccountIds: next }),
       })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        toast.error(data.error || 'Failed to update selection')
+        return
+      }
       window.location.reload()
     } finally {
       setSelectingAccount(false)
     }
   }
 
-  const handleSelectGoogleCustomer = async (selectedCustomerId: string) => {
+  const handleToggleGoogleCustomer = async (customerId: string, checked: boolean) => {
+    if (!googleConnection) return
+    const current = getEffectiveGoogleSelection()
+    const next = checked
+      ? [...current, customerId]
+      : current.filter((id) => id !== customerId)
+    if (next.length === 0) {
+      toast.error('At least one customer must be selected')
+      return
+    }
     setSelectingAccount(true)
     try {
-      await fetch('/api/integrations/google/select-customer', {
+      const res = await fetch('/api/integrations/google/select-customers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workspaceId, selectedCustomerId }),
+        body: JSON.stringify({ workspaceId, selectedCustomerIds: next }),
       })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        toast.error(data.error || 'Failed to update selection')
+        return
+      }
       window.location.reload()
     } finally {
       setSelectingAccount(false)
@@ -843,6 +886,15 @@ export function DashboardContent({
                       {shopifyAnalytics.summary.cm1.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
                     </p>
                   </div>
+                  {shopifyAnalytics.summary.cm3 != null && (
+                    <div className="rounded-lg border bg-[#96bf48]/10 p-4">
+                      <p className="text-xs font-bold text-[#96bf48] uppercase tracking-wider">CM3</p>
+                      <p className="text-xl font-bold mt-0.5 text-[#96bf48]">
+                        {shopifyAnalytics.summary.currency === 'INR' ? '₹' : '$'}
+                        {shopifyAnalytics.summary.cm3.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 {shopifyAnalytics.daily.length > 0 ? (
@@ -939,29 +991,37 @@ export function DashboardContent({
         <div className="px-6 py-4">
           {metaConnection ? (
             <div className="space-y-3">
-              {metaConnection.adAccountIds.length > 1 && (
-                <div className="flex items-center gap-3">
-                  <Label className="text-xs whitespace-nowrap">Active account</Label>
-                  <Select
-                    value={metaConnection.selectedAdAccountId ?? ''}
-                    onValueChange={handleSelectMetaAccount}
-                    disabled={selectingAccount}
-                  >
-                    <SelectTrigger className="h-8 w-64 text-xs">
-                      <SelectValue placeholder="Select an ad account" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {metaConnection.adAccountIds.map((id) => (
-                        <SelectItem key={id} value={id} className="text-xs">
+              {metaConnection.adAccountIds.length >= 1 && (
+                <div className="space-y-1.5">
+                  <Label className="text-xs">
+                    Ad accounts ({getEffectiveMetaSelection().length}/{metaConnection.adAccountIds.length} selected)
+                  </Label>
+                  <div className="flex flex-wrap gap-2">
+                    {metaConnection.adAccountIds.map((id) => {
+                      const selected = getEffectiveMetaSelection().includes(id)
+                      return (
+                        <label
+                          key={id}
+                          className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs cursor-pointer transition-colors ${
+                            selected
+                              ? 'border-primary bg-primary/5 text-primary'
+                              : 'border-border text-muted-foreground hover:border-primary/40'
+                          }`}
+                        >
+                          <Checkbox
+                            checked={selected}
+                            disabled={selectingAccount}
+                            onCheckedChange={(checked) =>
+                              handleToggleMetaAccount(id, !!checked)
+                            }
+                            className="h-3.5 w-3.5"
+                          />
                           {id}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                        </label>
+                      )
+                    })}
+                  </div>
                 </div>
-              )}
-              {metaConnection.adAccountIds.length === 1 && (
-                <p className="text-sm font-medium">{metaConnection.adAccountIds[0]}</p>
               )}
               <div className="flex items-center justify-between">
                 <div className="space-y-1">
@@ -981,7 +1041,7 @@ export function DashboardContent({
                     variant="outline"
                     size="sm"
                     onClick={() => handleSync('meta')}
-                    disabled={syncing === 'meta' || (metaConnection.adAccountIds.length > 1 && !metaConnection.selectedAdAccountId)}
+                    disabled={syncing === 'meta' || (metaConnection.adAccountIds.length > 1 && getEffectiveMetaSelection().length === 0)}
                   >
                     {syncing === 'meta' ? (
                       <IconLoader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
@@ -1048,29 +1108,37 @@ export function DashboardContent({
         <div className="px-6 py-4">
           {googleConnection ? (
             <div className="space-y-3">
-              {googleConnection.customerIds.length > 1 && (
-                <div className="flex items-center gap-3">
-                  <Label className="text-xs whitespace-nowrap">Active customer</Label>
-                  <Select
-                    value={googleConnection.selectedCustomerId ?? ''}
-                    onValueChange={handleSelectGoogleCustomer}
-                    disabled={selectingAccount}
-                  >
-                    <SelectTrigger className="h-8 w-64 text-xs">
-                      <SelectValue placeholder="Select a customer ID" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {googleConnection.customerIds.map((id) => (
-                        <SelectItem key={id} value={id} className="text-xs">
+              {googleConnection.customerIds.length >= 1 && (
+                <div className="space-y-1.5">
+                  <Label className="text-xs">
+                    Customer IDs ({getEffectiveGoogleSelection().length}/{googleConnection.customerIds.length} selected)
+                  </Label>
+                  <div className="flex flex-wrap gap-2">
+                    {googleConnection.customerIds.map((id) => {
+                      const selected = getEffectiveGoogleSelection().includes(id)
+                      return (
+                        <label
+                          key={id}
+                          className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs cursor-pointer transition-colors ${
+                            selected
+                              ? 'border-primary bg-primary/5 text-primary'
+                              : 'border-border text-muted-foreground hover:border-primary/40'
+                          }`}
+                        >
+                          <Checkbox
+                            checked={selected}
+                            disabled={selectingAccount}
+                            onCheckedChange={(checked) =>
+                              handleToggleGoogleCustomer(id, !!checked)
+                            }
+                            className="h-3.5 w-3.5"
+                          />
                           {id}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                        </label>
+                      )
+                    })}
+                  </div>
                 </div>
-              )}
-              {googleConnection.customerIds.length === 1 && (
-                <p className="text-sm font-medium">Customer ID: {googleConnection.customerIds[0]}</p>
               )}
               {googleConnection.customerIds.length === 0 && (
                 <div className="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-900 dark:bg-amber-950">
@@ -1188,7 +1256,7 @@ export function DashboardContent({
                     variant="outline"
                     size="sm"
                     onClick={() => handleSync('google')}
-                    disabled={syncing === 'google' || googleConnection.customerIds.length === 0 || (googleConnection.customerIds.length > 1 && !googleConnection.selectedCustomerId)}
+                    disabled={syncing === 'google' || googleConnection.customerIds.length === 0 || (googleConnection.customerIds.length > 1 && getEffectiveGoogleSelection().length === 0)}
                   >
                     {syncing === 'google' ? (
                       <IconLoader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />

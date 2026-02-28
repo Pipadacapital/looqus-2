@@ -8,6 +8,7 @@ const createCostSchema = z.object({
   costType: z.nativeEnum(WorkspaceCostType),
   name: z.string().optional(),
   amount: z.number(),
+  isPercent: z.boolean().default(false),
   effectiveFrom: z.string().transform((str) => new Date(str)),
   effectiveTo: z.string().optional().transform((str) => str ? new Date(str) : null),
   currency: z.string().default('USD'),
@@ -75,10 +76,9 @@ export async function POST(
     return NextResponse.json({ error: 'Workspace not found' }, { status: 404 })
   }
 
-  // Only owners and admins can manage costs
   const role = workspace.members[0].role
-  if (role !== 'OWNER' && role !== 'ADMIN') {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  if (role !== 'OWNER') {
+    return NextResponse.json({ error: 'Only owners can manage costs.' }, { status: 403 })
   }
 
   try {
@@ -109,9 +109,10 @@ export async function POST(
         costType: body.costType,
         name: body.name,
         amount: body.amount,
+        isPercent: body.isPercent,
         effectiveFrom: body.effectiveFrom,
         effectiveTo: body.effectiveTo,
-        currency: body.currency,
+        currency: body.isPercent ? null : body.currency,
       },
     })
 
@@ -122,4 +123,43 @@ export async function POST(
     }
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 })
   }
+}
+
+export async function DELETE(
+  request: NextRequest,
+  context: { params: Promise<{ slug: string }> }
+) {
+  const { slug } = await context.params
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const workspace = await prisma.workspace.findUnique({
+    where: { slug },
+    include: { members: { where: { userId: user.id } } },
+  })
+
+  if (!workspace || workspace.members.length === 0) {
+    return NextResponse.json({ error: 'Workspace not found' }, { status: 404 })
+  }
+
+  if (workspace.members[0].role !== 'OWNER') {
+    return NextResponse.json({ error: 'Only owners can delete costs.' }, { status: 403 })
+  }
+
+  const { id } = await request.json() as { id: string }
+  if (!id) {
+    return NextResponse.json({ error: 'Missing cost id' }, { status: 400 })
+  }
+
+  await prisma.workspaceCost.deleteMany({
+    where: { id, workspaceId: workspace.id },
+  })
+
+  return NextResponse.json({ success: true })
 }

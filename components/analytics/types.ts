@@ -13,6 +13,10 @@ export interface ShopifyAnalyticsSummary {
   cm1: number
   /** CM2 = CM1 - Total Ad spend (profit after ad spend). */
   cm2?: number
+  /** Total miscellaneous expenses in the period. */
+  miscExpensesTotal?: number
+  /** CM3 = CM2 - Miscellaneous Expenses. */
+  cm3?: number
   currency: string
   from: string
   to: string
@@ -30,6 +34,18 @@ export interface ShopifyAnalyticsSummary {
   totalAdSpend?: number
   /** ACOS (Advertising Cost of Sales) = (Total Ad spend / Total Revenue) × 100. Uses net sales as revenue. */
   acos?: number | null
+  /** Count of shipments with an RTO tracking status in the period. */
+  rtoOrders?: number
+  /** RTO shipments / total shipments × 100. */
+  rtoPercent?: number | null
+  /** Sum of Shopify order values for RTO-mapped shipments. */
+  rtoValue?: number
+  /** How many RTO shipments were successfully mapped to a Shopify order. */
+  rtoMapped?: number
+  /** How many RTO shipments could not be mapped (missing channel_order_id). */
+  rtoUnmapped?: number
+  /** Total shipments shipped in the period. */
+  totalShipmentsInRange?: number
 }
 
 export function formatCurrency(

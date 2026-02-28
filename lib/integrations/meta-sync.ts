@@ -12,19 +12,27 @@ export async function syncMetaAdsForConnection(
 
   if (!connection || connection.status !== 'CONNECTED') return { rowsSynced: 0 }
 
-  // Determine which account to sync
-  let targetAccount = connection.selected_ad_account_id
-  if (!targetAccount && connection.ad_account_ids.length === 1) {
-    targetAccount = connection.ad_account_ids[0]
+  // Determine which accounts to sync (multi-select with legacy fallback)
+  let targetAccounts = connection.selected_ad_account_ids?.length
+    ? connection.selected_ad_account_ids
+    : connection.selected_ad_account_id
+      ? [connection.selected_ad_account_id]
+      : []
+
+  if (targetAccounts.length === 0 && connection.ad_account_ids.length === 1) {
+    targetAccounts = [connection.ad_account_ids[0]]
     await prisma.meta_ads_connections.update({
       where: { id: connection.id },
-      data: { selected_ad_account_id: targetAccount },
+      data: {
+        selected_ad_account_ids: targetAccounts,
+        selected_ad_account_id: targetAccounts[0],
+      },
     })
   }
-  if (!targetAccount) {
+  if (targetAccounts.length === 0) {
     await prisma.meta_ads_connections.update({
       where: { id: connection.id },
-      data: { last_sync_error: 'Multiple ad accounts available — please select one before syncing.' },
+      data: { last_sync_error: 'Select accounts under manager to sync.' },
     })
     return { rowsSynced: 0 }
   }
@@ -39,7 +47,7 @@ export async function syncMetaAdsForConnection(
   const errors: string[] = []
   let rowsSynced = 0
 
-  for (const adAccountId of [targetAccount]) {
+  for (const adAccountId of targetAccounts) {
     try {
       const rows: MetaInsightRow[] = await fetchAdAccountInsights(
         connection.access_token,

@@ -81,6 +81,7 @@ export type ShiprocketOrderRow = {
 export type ShiprocketShipmentRow = {
   id: number
   order_id: string | null
+  channel_order_id: string | null
   status: string | null
   status_code: number | null
   courier_name: string | null
@@ -94,15 +95,89 @@ export type ShiprocketShipmentRow = {
   [key: string]: unknown
 }
 
+// Shiprocket status codes that indicate RTO (Return to Origin)
+export const RTO_STATUS_CODES = new Set([9, 10, 14, 20, 40, 41, 46])
+
+// Terminal statuses — no need to re-fetch tracking for these
+export const TERMINAL_STATUS_CODES = new Set([7, 8, 10, 12])
+
+export type ShiprocketTrackingResult = {
+  statusCode: number | null
+  statusText: string | null
+  channelOrderId: string | null
+}
+
+export async function fetchShipmentTracking(
+  token: string,
+  shipmentId: string
+): Promise<ShiprocketTrackingResult> {
+  const res = await fetch(
+    `${SHIPROCKET_BASE}/courier/track/shipment/${shipmentId}`,
+    { headers: authHeaders(token) }
+  )
+
+  if (!res.ok) {
+    if (res.status === 404 || res.status === 422) {
+      return { statusCode: null, statusText: null, channelOrderId: null }
+    }
+    const text = await res.text().catch(() => '')
+    throw new Error(`Tracking fetch failed (${res.status}): ${text.slice(0, 200)}`)
+  }
+
+  const data = await res.json()
+  const td = data?.tracking_data
+
+  const shipmentTrack = td?.shipment_track?.[0]
+  const statusCode =
+    typeof td?.shipment_status === 'number'
+      ? td.shipment_status
+      : typeof shipmentTrack?.current_status_id === 'number'
+        ? shipmentTrack.current_status_id
+        : null
+  const statusText =
+    shipmentTrack?.current_status ?? td?.shipment_status_text ?? null
+  const channelOrderId =
+    shipmentTrack?.channel_order_id ?? shipmentTrack?.order_id_string ?? null
+
+  return { statusCode, statusText, channelOrderId }
+}
+
+export type ShiprocketChannel = {
+  id: number
+  name: string
+  [key: string]: unknown
+}
+
+export async function fetchShiprocketChannels(
+  token: string
+): Promise<ShiprocketChannel[]> {
+  const res = await fetch(`${SHIPROCKET_BASE}/channels`, {
+    headers: authHeaders(token),
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(`Shiprocket channels fetch failed (${res.status}): ${text.slice(0, 200)}`)
+  }
+  const data = await res.json()
+  const raw: unknown[] = data?.data ?? data ?? []
+  if (!Array.isArray(raw)) return []
+  return raw.filter(
+    (c): c is ShiprocketChannel =>
+      c != null && typeof c === 'object' && 'id' in c && 'name' in c
+  )
+}
+
 export async function fetchShiprocketOrders(
   token: string,
   page = 1,
-  perPage = 200
+  perPage = 200,
+  channelId?: string
 ): Promise<{ orders: ShiprocketOrderRow[]; hasMore: boolean }> {
   const params = new URLSearchParams({
     page: String(page),
     per_page: String(perPage),
   })
+  if (channelId) params.set('channel_id', channelId)
 
   const res = await fetch(`${SHIPROCKET_BASE}/orders?${params}`, {
     headers: authHeaders(token),

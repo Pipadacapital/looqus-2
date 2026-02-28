@@ -80,11 +80,44 @@ export function AnalyticsMetricsCards({
       highlight: true,
     },
     {
+      label: 'Misc. expenses',
+      value: formatCurrency(summary.miscExpensesTotal ?? 0, summary.currency),
+    },
+    {
+      label: 'CM3',
+      value: formatCurrency(
+        summary.cm3 ?? (summary.cm2 ?? summary.cm1 - (summary.totalAdSpend ?? 0)) - (summary.miscExpensesTotal ?? 0),
+        summary.currency
+      ),
+      highlight: true,
+    },
+    {
       label: 'ACOS',
       value:
         summary.acos != null ? `${summary.acos.toFixed(1)}%` : '—',
     },
   ]
+
+  if (summary.totalShipmentsInRange != null && summary.totalShipmentsInRange > 0) {
+    cards.push(
+      {
+        label: 'RTO Orders',
+        value: (summary.rtoOrders ?? 0).toLocaleString('en-IN'),
+      },
+      {
+        label: 'RTO %',
+        value:
+          summary.rtoPercent != null ? `${summary.rtoPercent.toFixed(1)}%` : '—',
+      },
+      {
+        label:
+          summary.rtoUnmapped && summary.rtoUnmapped > 0
+            ? `RTO Value (${summary.rtoUnmapped} unmapped)`
+            : 'RTO Value',
+        value: formatCurrency(summary.rtoValue ?? 0, summary.currency),
+      }
+    )
+  }
 
   if (summary.totalSessions != null) {
     cards.push({
