@@ -494,6 +494,7 @@ enum InvitationStatus {
 }
 
 enum SubscriptionPlan {
+  // s
   FREE
   STARTER
   GROWTH
