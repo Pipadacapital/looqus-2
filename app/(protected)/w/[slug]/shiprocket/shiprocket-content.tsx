@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import { toast } from 'sonner'
 import { formatDistanceToNow } from 'date-fns'
@@ -29,6 +29,13 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover'
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
   IconRefresh,
   IconLoader2,
   IconEye,
@@ -38,6 +45,10 @@ import {
   IconSearch,
   IconCheck,
   IconAlertTriangle,
+  IconChevronLeft,
+  IconChevronRight,
+  IconChevronsLeft,
+  IconChevronsRight,
 } from '@tabler/icons-react'
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -72,6 +83,22 @@ type ShipmentRow = {
 
 type ChannelInfo = { id: number; name: string }
 
+type PaginationState = {
+  page: number
+  pageSize: number
+  totalCount: number
+  totalPages: number
+}
+
+type FilterState = {
+  search: string
+  statuses: string[]
+  channelNames: string[]
+  payment: 'COD' | 'PREPAID' | null
+  mapping: 'MATCHED' | 'UNMATCHED' | null
+  rtoOnly: boolean
+}
+
 interface ShiprocketContentProps {
   slug: string
   workspaceId: string
@@ -81,9 +108,19 @@ interface ShiprocketContentProps {
   totalShipmentCount: number
   totalOrderCount: number
   filteredShipmentCount: number
+  filteredCountInRange: number
+  filteredOrderCountInRange: number
+  deliveredCount: number
+  rtoCount: number
+  mappedCount: number
   shipments: ShipmentRow[]
   dateFrom: string
   dateTo: string
+  showAllFallback?: boolean
+  pagination: PaginationState
+  filters: FilterState
+  distinctStatusesFromPage: string[]
+  pageSizeOptions: number[]
 }
 
 // ── rawJson helpers ────────────────────────────────────────────────
@@ -185,24 +222,107 @@ export function ShiprocketContent({
   totalShipmentCount,
   totalOrderCount,
   filteredShipmentCount,
+  filteredCountInRange,
+  filteredOrderCountInRange,
+  deliveredCount,
+  rtoCount,
+  mappedCount,
   shipments,
   dateFrom,
   dateTo,
+  showAllFallback = false,
+  pagination,
+  filters,
+  distinctStatusesFromPage,
+  pageSizeOptions,
 }: ShiprocketContentProps) {
   const router = useRouter()
   const pathname = usePathname()
   const [syncing, setSyncing] = useState(false)
   const [refreshingChannels, setRefreshingChannels] = useState(false)
   const [jsonModal, setJsonModal] = useState<unknown>(null)
+
   const [from, setFrom] = useState(dateFrom)
   const [to, setTo] = useState(dateTo)
+  const [searchInput, setSearchInput] = useState(filters.search)
+
+  useEffect(() => {
+    setFrom(dateFrom)
+    setTo(dateTo)
+    setSearchInput(filters.search)
+  }, [dateFrom, dateTo, filters.search])
+
+  const buildParams = useCallback(
+    (updates: {
+      from?: string
+      to?: string
+      page?: number
+      pageSize?: number
+      q?: string
+      status?: string
+      channel?: string
+      payment?: string | null
+      mapping?: string | null
+      rtoOnly?: boolean
+    }) => {
+      const p = new URLSearchParams()
+      p.set('from', updates.from ?? dateFrom)
+      p.set('to', updates.to ?? dateTo)
+      p.set('page', String(updates.page ?? pagination.page))
+      p.set('pageSize', String(updates.pageSize ?? pagination.pageSize))
+      const q = updates.q !== undefined ? updates.q : filters.search
+      if (q) p.set('q', q)
+      else p.delete('q')
+      const status =
+        updates.status !== undefined ? updates.status : filters.statuses.join(',')
+      if (status) p.set('status', status)
+      else p.delete('status')
+      const channel =
+        updates.channel !== undefined
+          ? updates.channel
+          : filters.channelNames.join(',')
+      if (channel) p.set('channel', channel)
+      else p.delete('channel')
+      const payment =
+        updates.payment !== undefined ? updates.payment : filters.payment
+      if (payment) p.set('payment', payment)
+      else p.delete('payment')
+      const mapping =
+        updates.mapping !== undefined ? updates.mapping : filters.mapping
+      if (mapping) p.set('mapping', mapping)
+      else p.delete('mapping')
+      const rtoOnly =
+        updates.rtoOnly !== undefined ? updates.rtoOnly : filters.rtoOnly
+      if (rtoOnly) p.set('rtoOnly', '1')
+      else p.delete('rtoOnly')
+      return p
+    },
+    [
+      dateFrom,
+      dateTo,
+      pagination.page,
+      pagination.pageSize,
+      filters.search,
+      filters.statuses,
+      filters.channelNames,
+      filters.payment,
+      filters.mapping,
+      filters.rtoOnly,
+    ]
+  )
+
+  const navigate = useCallback(
+    (params: URLSearchParams) => {
+      router.push(`${pathname}?${params.toString()}`)
+    },
+    [pathname, router]
+  )
 
   // Channels
   const [channels, setChannels] = useState<ChannelInfo[]>(initialChannels)
   const [selChannelIds, setSelChannelIds] = useState<Set<string>>(
     new Set(initialSelectedChannelIds)
   )
-  const [channelFilter, setChannelFilter] = useState<Set<string>>(new Set())
 
   const channelNameMap = useMemo(() => {
     const m = new Map<string, string>()
@@ -210,80 +330,84 @@ export function ShiprocketContent({
     return m
   }, [channels])
 
-  // Filters
-  const [search, setSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState<Set<string>>(new Set())
-  const [paymentFilter, setPaymentFilter] = useState<string | null>(null)
-  const [mappingFilter, setMappingFilter] = useState<string | null>(null)
-  const [rtoOnly, setRtoOnly] = useState(false)
-
-  // Derive distinct statuses from loaded data
-  const distinctStatuses = useMemo(() => {
-    const s = new Set<string>()
-    for (const row of shipments) {
-      if (row.status) s.add(row.status)
-    }
-    return [...s].sort()
-  }, [shipments])
-
-  // Client-side filter
-  const filtered = useMemo(() => {
-    const q = search.toLowerCase().trim()
-    return shipments.filter((s) => {
-      if (q) {
-        const haystack = [
-          s.shipmentId,
-          s.orderId,
-          s.channelOrderId,
-          s.awbCode,
-          s.shopifyOrderName,
-        ]
-          .filter(Boolean)
-          .join(' ')
-          .toLowerCase()
-        if (!haystack.includes(q)) return false
-      }
-
-      if (channelFilter.size > 0) {
-        const rowChannel = getChannel(s.rawJson)
-        if (!rowChannel) return false
-        const match = [...channelFilter].some(
-          (chId) => channelNameMap.get(chId) === rowChannel
-        )
-        if (!match) return false
-      }
-
-      if (rtoOnly) {
-        const upper = (s.status ?? '').toUpperCase()
-        if (!upper.includes('RTO')) return false
-      } else if (statusFilter.size > 0) {
-        if (!s.status || !statusFilter.has(s.status)) return false
-      }
-
-      if (paymentFilter === 'COD' && !s.isCod) return false
-      if (paymentFilter === 'PREPAID' && s.isCod) return false
-
-      if (mappingFilter === 'MATCHED' && !s.shopifyOrderName) return false
-      if (mappingFilter === 'UNMATCHED' && s.shopifyOrderName) return false
-
-      return true
-    })
-  }, [shipments, search, channelFilter, channelNameMap, statusFilter, paymentFilter, mappingFilter, rtoOnly])
-
-  // Summary counts
-  const deliveredCount = filtered.filter(
-    (s) => s.status?.toUpperCase().includes('DELIVER')
-  ).length
-  const rtoCount = filtered.filter(
-    (s) => s.status?.toUpperCase().includes('RTO')
-  ).length
-  const mappedCount = filtered.filter((s) => s.shopifyOrderName).length
+  const distinctStatuses = useMemo(
+    () =>
+      [...new Set([...distinctStatusesFromPage, ...filters.statuses])].sort(),
+    [distinctStatusesFromPage, filters.statuses]
+  )
 
   const applyDateRange = () => {
-    const params = new URLSearchParams()
-    params.set('from', from)
-    params.set('to', to)
-    router.push(`${pathname}?${params.toString()}`)
+    const params = buildParams({ from, to, page: 1 })
+    navigate(params)
+  }
+
+  const applySearch = () => {
+    const params = buildParams({ q: searchInput.trim() || undefined, page: 1 })
+    navigate(params)
+  }
+
+  const toggleStatus = (st: string) => {
+    const next = filters.statuses.includes(st)
+      ? filters.statuses.filter((s) => s !== st)
+      : [...filters.statuses, st]
+    const params = buildParams({ status: next.join(','), page: 1 })
+    navigate(params)
+  }
+
+  const toggleChannelFilter = (chName: string) => {
+    const next = filters.channelNames.includes(chName)
+      ? filters.channelNames.filter((c) => c !== chName)
+      : [...filters.channelNames, chName]
+    const params = buildParams({ channel: next.join(','), page: 1 })
+    navigate(params)
+  }
+
+  const setPaymentFilter = (p: 'COD' | 'PREPAID' | null) => {
+    const params = buildParams({ payment: p, page: 1 })
+    navigate(params)
+  }
+
+  const setMappingFilter = (m: 'MATCHED' | 'UNMATCHED' | null) => {
+    const params = buildParams({ mapping: m, page: 1 })
+    navigate(params)
+  }
+
+  const setRtoOnly = (v: boolean) => {
+    const params = buildParams({ rtoOnly: v, page: 1 })
+    navigate(params)
+  }
+
+  const clearFilters = () => {
+    setSearchInput('')
+    const params = buildParams({
+      q: undefined,
+      status: undefined,
+      channel: undefined,
+      payment: null,
+      mapping: null,
+      rtoOnly: false,
+      page: 1,
+    })
+    navigate(params)
+  }
+
+  const hasActiveFilters =
+    filters.search !== '' ||
+    filters.statuses.length > 0 ||
+    filters.channelNames.length > 0 ||
+    filters.payment !== null ||
+    filters.mapping !== null ||
+    filters.rtoOnly
+
+  const goToPage = (page: number) => {
+    const p = Math.max(1, Math.min(page, pagination.totalPages))
+    const params = buildParams({ page: p })
+    navigate(params)
+  }
+
+  const setPageSize = (size: number) => {
+    const params = buildParams({ pageSize: size, page: 1 })
+    navigate(params)
   }
 
   const handleRefreshChannels = async () => {
@@ -346,6 +470,8 @@ export function ShiprocketContent({
         toast.error(data.error || 'Sync failed')
         return
       }
+      const data = await res.json().catch(() => ({}))
+      if (data.warning) toast.warning(data.warning)
       toast.success('Shiprocket sync complete — refreshing…')
       window.location.reload()
     } catch {
@@ -354,42 +480,6 @@ export function ShiprocketContent({
       setSyncing(false)
     }
   }
-
-  const toggleStatus = (st: string) => {
-    setStatusFilter((prev) => {
-      const next = new Set(prev)
-      if (next.has(st)) next.delete(st)
-      else next.add(st)
-      return next
-    })
-    setRtoOnly(false)
-  }
-
-  const toggleChannelFilter = (chId: string) => {
-    setChannelFilter((prev) => {
-      const next = new Set(prev)
-      if (next.has(chId)) next.delete(chId)
-      else next.add(chId)
-      return next
-    })
-  }
-
-  const clearFilters = () => {
-    setSearch('')
-    setStatusFilter(new Set())
-    setPaymentFilter(null)
-    setMappingFilter(null)
-    setChannelFilter(new Set())
-    setRtoOnly(false)
-  }
-
-  const hasActiveFilters =
-    search !== '' ||
-    statusFilter.size > 0 ||
-    paymentFilter !== null ||
-    mappingFilter !== null ||
-    channelFilter.size > 0 ||
-    rtoOnly
 
   return (
     <div className="space-y-5 p-6">
@@ -483,98 +573,64 @@ export function ShiprocketContent({
       </div>
 
       {/* Channels */}
-      {connection?.status === 'CONNECTED' && (
-        <div className="rounded-lg border bg-muted/30 p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Channels ({channels.length})
-            </h2>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 text-xs"
-              disabled={refreshingChannels}
-              onClick={handleRefreshChannels}
-            >
-              {refreshingChannels ? (
-                <IconLoader2 className="mr-1 h-3 w-3 animate-spin" />
-              ) : (
-                <IconRefresh className="mr-1 h-3 w-3" />
-              )}
-              Refresh channels
-            </Button>
-          </div>
-          {channels.length > 0 ? (
-            <div className="flex flex-wrap gap-2">
-              {channels.map((ch) => {
-                const chId = String(ch.id)
-                const selected = selChannelIds.has(chId)
-                return (
-                  <label
-                    key={chId}
-                    className="flex items-center gap-1.5 text-xs cursor-pointer rounded-md border px-2.5 py-1.5 hover:bg-accent/50 transition-colors"
-                  >
-                    <Checkbox
-                      checked={selected}
-                      onCheckedChange={() => handleToggleChannel(chId)}
-                      className="h-3.5 w-3.5"
-                    />
-                    <span className={selected ? 'font-medium' : 'text-muted-foreground'}>
-                      {ch.name}
-                    </span>
-                    <span className="text-muted-foreground text-[10px]">#{chId}</span>
-                  </label>
-                )
-              })}
-            </div>
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              No channels discovered yet. Click <strong>Refresh channels</strong> or run a sync.
-            </p>
-          )}
-          {channels.length > 0 && selChannelIds.size === 0 && (
-            <p className="text-xs text-amber-600">
-              No channels selected — sync will pull orders without channel filter.
-            </p>
-          )}
-        </div>
-      )}
+     
 
       {/* Summary tiles */}
       {connection && (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-          <Tile label="Total shipments" value={totalShipmentCount} />
-          <Tile label="Total orders" value={totalOrderCount} icon={<IconPackage className="h-3.5 w-3.5" />} />
-          <Tile label="In range" value={filteredShipmentCount} />
-          <Tile label="Showing" value={filtered.length} sub={hasActiveFilters ? '(filtered)' : undefined} />
-          <Tile label="Delivered" value={deliveredCount} color="emerald" />
-          <Tile label="RTO" value={rtoCount} color="red" />
+          <Tile label="Total shipments" value={filteredShipmentCount} />
+        
+          <Tile label="In range" value={filteredCountInRange} />
+          <Tile
+            label="Showing"
+            value={shipments.length}
+            sub={
+              pagination.totalCount > 0
+                ? `${(pagination.page - 1) * pagination.pageSize + 1}–${Math.min(pagination.page * pagination.pageSize, pagination.totalCount)} of ${pagination.totalCount.toLocaleString('en-IN')}`
+                : hasActiveFilters
+                  ? '(no matches)'
+                  : undefined
+            }
+          />
+          <Tile
+            label="Delivered"
+            value={deliveredCount}
+            color="emerald"
+          />
+          <Tile
+            label="RTO"
+            value={rtoCount}
+            color="red"
+          />
         </div>
       )}
 
       {/* Filters */}
-      {shipments.length > 0 && (
+      {connection && (
         <div className="flex items-center gap-2 flex-wrap">
           {/* Search */}
-          <div className="relative">
-            <IconSearch className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-            <Input
-              placeholder="AWB / Shipment ID / Order…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="h-8 pl-8 w-56 text-xs"
-            />
+          <div className="flex items-center gap-1">
+            <div className="relative">
+              <IconSearch className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+              <Input
+                placeholder="AWB / Shipment ID / Order…"
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && applySearch()}
+                className="h-8 pl-8 w-56 text-xs"
+              />
+            </div>
+            <Button size="sm" variant="secondary" className="h-8 text-xs" onClick={applySearch}>
+              Apply
+            </Button>
           </div>
 
           {/* RTO toggle */}
           <Button
             size="sm"
-            variant={rtoOnly ? 'default' : 'outline'}
+            variant={filters.rtoOnly ? 'default' : 'outline'}
             className="h-8 text-xs"
-            onClick={() => {
-              setRtoOnly(!rtoOnly)
-              if (!rtoOnly) setStatusFilter(new Set())
-            }}
+            onClick={() => setRtoOnly(!filters.rtoOnly)}
           >
             RTO*
           </Button>
@@ -584,9 +640,9 @@ export function ShiprocketContent({
             <Button
               key={p}
               size="sm"
-              variant={paymentFilter === p ? 'default' : 'outline'}
+              variant={filters.payment === p ? 'default' : 'outline'}
               className="h-8 text-xs"
-              onClick={() => setPaymentFilter(paymentFilter === p ? null : p)}
+              onClick={() => setPaymentFilter(filters.payment === p ? null : p)}
             >
               {p}
             </Button>
@@ -597,9 +653,9 @@ export function ShiprocketContent({
             <Button
               key={m}
               size="sm"
-              variant={mappingFilter === m ? 'default' : 'outline'}
+              variant={filters.mapping === m ? 'default' : 'outline'}
               className="h-8 text-xs"
-              onClick={() => setMappingFilter(mappingFilter === m ? null : m)}
+              onClick={() => setMappingFilter(filters.mapping === m ? null : m)}
             >
               {m === 'MATCHED' ? (
                 <IconCheck className="mr-1 h-3 w-3" />
@@ -615,7 +671,7 @@ export function ShiprocketContent({
             <PopoverTrigger asChild>
               <Button size="sm" variant="outline" className="h-8 text-xs">
                 <IconFilter className="mr-1 h-3.5 w-3.5" />
-                Status{statusFilter.size > 0 ? ` (${statusFilter.size})` : ''}
+                Status{filters.statuses.length > 0 ? ` (${filters.statuses.length})` : ''}
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-60 p-3" align="start">
@@ -624,7 +680,7 @@ export function ShiprocketContent({
                 {distinctStatuses.map((st) => (
                   <label key={st} className="flex items-center gap-2 text-xs cursor-pointer">
                     <Checkbox
-                      checked={statusFilter.has(st)}
+                      checked={filters.statuses.includes(st)}
                       onCheckedChange={() => toggleStatus(st)}
                       className="h-3.5 w-3.5"
                     />
@@ -641,25 +697,22 @@ export function ShiprocketContent({
               <PopoverTrigger asChild>
                 <Button size="sm" variant="outline" className="h-8 text-xs">
                   <IconFilter className="mr-1 h-3.5 w-3.5" />
-                  Channel{channelFilter.size > 0 ? ` (${channelFilter.size})` : ''}
+                  Channel{filters.channelNames.length > 0 ? ` (${filters.channelNames.length})` : ''}
                 </Button>
               </PopoverTrigger>
               <PopoverContent className="w-60 p-3" align="start">
                 <p className="text-xs font-medium mb-2">Filter by channel</p>
                 <div className="space-y-1.5 max-h-52 overflow-auto">
-                  {channels.map((ch) => {
-                    const chId = String(ch.id)
-                    return (
-                      <label key={chId} className="flex items-center gap-2 text-xs cursor-pointer">
-                        <Checkbox
-                          checked={channelFilter.has(chId)}
-                          onCheckedChange={() => toggleChannelFilter(chId)}
-                          className="h-3.5 w-3.5"
-                        />
-                        {ch.name}
-                      </label>
-                    )
-                  })}
+                  {channels.map((ch) => (
+                    <label key={ch.id} className="flex items-center gap-2 text-xs cursor-pointer">
+                      <Checkbox
+                        checked={filters.channelNames.includes(ch.name)}
+                        onCheckedChange={() => toggleChannelFilter(ch.name)}
+                        className="h-3.5 w-3.5"
+                      />
+                      {ch.name}
+                    </label>
+                  ))}
                 </div>
               </PopoverContent>
             </Popover>
@@ -672,14 +725,20 @@ export function ShiprocketContent({
           )}
 
           <span className="text-xs text-muted-foreground ml-auto">
-            {mappedCount} / {filtered.length} mapped to Shopify
+            {mappedCount} / {pagination.totalCount.toLocaleString('en-IN')} mapped to Shopify
           </span>
         </div>
       )}
 
       {/* Shipments table */}
-      {filtered.length > 0 && (
-        <div className="rounded-md border overflow-x-auto">
+      {shipments.length > 0 && (
+        <>
+          {showAllFallback && (
+            <div className="rounded-lg border bg-amber-500/10 border-amber-500/30 px-4 py-2 text-sm text-amber-800 dark:text-amber-200">
+              No shipments fall within the selected date range. Showing first page of all shipments. Try an earlier start date and click <strong>Apply</strong> to filter by date.
+            </div>
+          )}
+          <div className="rounded-md border overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -700,7 +759,7 @@ export function ShiprocketContent({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filtered.map((s) => {
+              {shipments.map((s) => {
                 const zone = getZone(s.rawJson)
                 const weight = getChargedWeight(s.rawJson)
                 const fwd = computeForwardShipping(s.rawJson)
@@ -778,7 +837,7 @@ export function ShiprocketContent({
                       {fmtInr(rto)}
                     </TableCell>
                     <TableCell>
-                      {s.rawJson && (
+                      {s.rawJson != null ? (
                         <Button
                           variant="ghost"
                           size="icon"
@@ -788,7 +847,7 @@ export function ShiprocketContent({
                         >
                           <IconEye className="h-3.5 w-3.5" />
                         </Button>
-                      )}
+                      ) : null}
                     </TableCell>
                   </TableRow>
                 )
@@ -796,18 +855,99 @@ export function ShiprocketContent({
             </TableBody>
           </Table>
         </div>
+
+        {/* Pagination */}
+        {pagination.totalPages > 1 && (
+          <div className="flex items-center justify-between gap-4 flex-wrap py-3 px-1">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <span>
+                Page {pagination.page} of {pagination.totalPages}
+              </span>
+              <span className="text-xs">
+                ({(pagination.page - 1) * pagination.pageSize + 1}–{Math.min(pagination.page * pagination.pageSize, pagination.totalCount)} of {pagination.totalCount.toLocaleString('en-IN')})
+              </span>
+            </div>
+            <div className="flex items-center gap-1">
+              <Select
+                value={String(pagination.pageSize)}
+                onValueChange={(v: string) => setPageSize(Number(v))}
+              >
+                <SelectTrigger className="w-20 h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {pageSizeOptions.map((n) => (
+                    <SelectItem key={n} value={String(n)}>
+                      {n} per page
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 w-8 p-0"
+                disabled={pagination.page <= 1}
+                onClick={() => goToPage(1)}
+                title="First page"
+              >
+                <IconChevronsLeft className="h-4 w-4" />
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 w-8 p-0"
+                disabled={pagination.page <= 1}
+                onClick={() => goToPage(pagination.page - 1)}
+                title="Previous page"
+              >
+                <IconChevronLeft className="h-4 w-4" />
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 w-8 p-0"
+                disabled={pagination.page >= pagination.totalPages}
+                onClick={() => goToPage(pagination.page + 1)}
+                title="Next page"
+              >
+                <IconChevronRight className="h-4 w-4" />
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 w-8 p-0"
+                disabled={pagination.page >= pagination.totalPages}
+                onClick={() => goToPage(pagination.totalPages)}
+                title="Last page"
+              >
+                <IconChevronsRight className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        )}
+        </>
       )}
 
-      {connection && shipments.length === 0 && (
-        <div className="rounded-lg border border-dashed p-8 text-center">
+      {connection && totalShipmentCount === 0 && (
+        <div className="rounded-lg border border-dashed p-8 text-center space-y-3">
           <p className="text-muted-foreground">
-            No shipments in this date range. Try a wider range or click{' '}
-            <strong>Fetch live now</strong>.
+            No shipments yet. Sync from Shiprocket to load data, or try a wider date range and click <strong>Apply</strong>.
           </p>
+          {connection.status === 'CONNECTED' && (
+            <Button onClick={handleSync} disabled={syncing} size="sm">
+              {syncing ? (
+                <IconLoader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <IconRefresh className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              Sync selected channels
+            </Button>
+          )}
         </div>
       )}
 
-      {connection && shipments.length > 0 && filtered.length === 0 && (
+      {connection && totalShipmentCount > 0 && pagination.totalCount === 0 && (
         <div className="rounded-lg border border-dashed p-8 text-center">
           <p className="text-muted-foreground">
             No shipments match the current filters.{' '}

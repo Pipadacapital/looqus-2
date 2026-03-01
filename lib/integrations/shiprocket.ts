@@ -189,9 +189,21 @@ export async function fetchShiprocketOrders(
   }
 
   const data = await res.json()
-  const orders: ShiprocketOrderRow[] = data.data ?? []
-  const meta = data.meta ?? {}
-  const hasMore = meta.current_page < meta.last_page
+
+  // Support multiple response shapes: { data: [] }, { orders: [] }, or array at root
+  let orders: ShiprocketOrderRow[] = []
+  if (Array.isArray(data.data)) orders = data.data
+  else if (Array.isArray(data.orders)) orders = data.orders
+  else if (Array.isArray(data)) orders = data
+
+  const meta = data.meta ?? data
+  const currentPage = Number(meta?.current_page ?? meta?.currentPage ?? 1)
+  const lastPage = Number(meta?.last_page ?? meta?.lastPage ?? 1)
+  // Keep fetching when we got a full page (API may report last_page=1 incorrectly or return oldest first)
+  const hasValidMeta = Number.isFinite(currentPage) && Number.isFinite(lastPage) && lastPage >= 1
+  const hasMore = hasValidMeta
+    ? currentPage < lastPage || orders.length >= perPage
+    : orders.length >= perPage
 
   return { orders, hasMore }
 }
@@ -216,9 +228,21 @@ export async function fetchShiprocketShipments(
   }
 
   const data = await res.json()
-  const shipments: ShiprocketShipmentRow[] = data.data ?? []
-  const meta = data.meta ?? {}
-  const hasMore = meta.current_page < meta.last_page
+
+  // Support multiple response shapes: { data: [] }, { shipments: [] }, or array at root
+  let shipments: ShiprocketShipmentRow[] = []
+  if (Array.isArray(data.data)) shipments = data.data
+  else if (Array.isArray(data.shipments)) shipments = data.shipments
+  else if (Array.isArray(data)) shipments = data
+
+  const meta = data.meta ?? data
+  const currentPage = Number(meta?.current_page ?? meta?.currentPage ?? 1)
+  const lastPage = Number(meta?.last_page ?? meta?.lastPage ?? 1)
+  // Keep fetching when we got a full page (API may report last_page=1 incorrectly or return oldest first)
+  const hasValidMeta = Number.isFinite(currentPage) && Number.isFinite(lastPage) && lastPage >= 1
+  const hasMore = hasValidMeta
+    ? currentPage < lastPage || shipments.length >= perPage
+    : shipments.length >= perPage
 
   return { shipments, hasMore }
 }

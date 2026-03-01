@@ -77,7 +77,36 @@ function getStringFromRaw(raw: unknown, key: string): string | null {
   return typeof v === 'string' && v.trim() !== '' ? v.trim() : null
 }
 
-export async function syncShiprocketForConnection(connectionId: string) {
+/** Get string from raw object by dot path (e.g. "charges.zone") or top-level key. */
+function getStringFromRawPath(raw: unknown, path: string): string | null {
+  if (raw == null || typeof raw !== 'object') return null
+  const keys = path.split('.')
+  let cur: unknown = raw
+  for (const k of keys) {
+    if (cur == null || typeof cur !== 'object') return null
+    cur = (cur as Record<string, unknown>)[k]
+  }
+  if (typeof cur === 'string' && cur.trim() !== '') return cur.trim()
+  if (typeof cur === 'number' && !Number.isNaN(cur)) return String(cur)
+  return null
+}
+
+/** Get shipment created date from raw row (same logic as upsertShipment). */
+function getShipmentCreatedAt(s: ShiprocketShipmentRow): Date | null {
+  const createdAtRaw =
+    getStringFromRaw(s, 'created_at') ??
+    getStringFromRaw(s, 'creation_date') ??
+    getStringFromRaw(s, 'created_date') ??
+    getStringFromRaw(s, 'date') ??
+    getStringFromRawPath(s, 'created_at') ??
+    getStringFromRawPath(s, 'createdAt')
+  return parseShiprocketDate(createdAtRaw)
+}
+
+export async function syncShiprocketForConnection(
+  connectionId: string,
+  options?: { days?: number }
+) {
   const connection = await prisma.shiprocketConnection.findUnique({
     where: { id: connectionId },
   })
@@ -96,8 +125,14 @@ export async function syncShiprocketForConnection(connectionId: string) {
         lastSyncError: `Token refresh failed: ${err instanceof Error ? err.message : String(err)}`,
       },
     })
-    return
+    throw err
   }
+
+  // Only sync data within the given window (default 90 days for backfill; use 1 for daily cron)
+  const days = options?.days ?? 90
+  const toDate = new Date()
+  const fromDate = new Date()
+  fromDate.setUTCDate(fromDate.getUTCDate() - days)
 
   // Discover channels dynamically
   try {
@@ -135,8 +170,14 @@ export async function syncShiprocketForConnection(connectionId: string) {
         let hasMore = true
         while (hasMore) {
           const result = await fetchShiprocketOrders(token, page, 200, channelId)
-          for (const order of result.orders) {
-            await upsertOrder(connectionId, order, channelId)
+          const validOrders = result.orders.filter(
+            (o) => o != null && (typeof o.id === 'number' || typeof o.id === 'string')
+          )
+          for (const order of validOrders) {
+            const orderDate = toDateSafe(order.order_date)
+            if (!orderDate || (orderDate >= fromDate && orderDate <= toDate)) {
+              await upsertOrder(connectionId, order, channelId)
+            }
           }
           hasMore = result.hasMore
           page++
@@ -152,8 +193,14 @@ export async function syncShiprocketForConnection(connectionId: string) {
       let hasMore = true
       while (hasMore) {
         const result = await fetchShiprocketOrders(token, page, 200)
-        for (const order of result.orders) {
-          await upsertOrder(connectionId, order)
+        const validOrders = result.orders.filter(
+          (o) => o != null && (typeof o.id === 'number' || typeof o.id === 'string')
+        )
+        for (const order of validOrders) {
+          const orderDate = toDateSafe(order.order_date)
+          if (!orderDate || (orderDate >= fromDate && orderDate <= toDate)) {
+            await upsertOrder(connectionId, order)
+          }
         }
         hasMore = result.hasMore
         page++
@@ -170,8 +217,14 @@ export async function syncShiprocketForConnection(connectionId: string) {
     let hasMore = true
     while (hasMore) {
       const result = await fetchShiprocketShipments(token, page, 200)
-      for (const shipment of result.shipments) {
-        await upsertShipment(connectionId, shipment)
+      const validShipments = result.shipments.filter(
+        (s) => s != null && (typeof s.id === 'number' || typeof s.id === 'string')
+      )
+      for (const shipment of validShipments) {
+        const shipDate = getShipmentCreatedAt(shipment)
+        if (!shipDate || (shipDate >= fromDate && shipDate <= toDate)) {
+          await upsertShipment(connectionId, shipment)
+        }
       }
       hasMore = result.hasMore
       page++
@@ -183,7 +236,10 @@ export async function syncShiprocketForConnection(connectionId: string) {
 
   // Refresh tracking for non-terminal shipments
   try {
-    await syncTrackingForConnection(connectionId, token)
+    const trackingErrors = await syncTrackingForConnection(connectionId, token)
+    if (trackingErrors > 0) {
+      errors.push(`Tracking: ${trackingErrors} shipment(s) failed to update`)
+    }
   } catch (err) {
     errors.push(`Tracking: ${err instanceof Error ? err.message : String(err)}`)
   }
@@ -202,6 +258,8 @@ export async function syncShiprocketForConnection(connectionId: string) {
       lastSyncError: errors.length > 0 ? errors.join('; ') : null,
     },
   })
+
+  return { warning: errors.length > 0 ? errors.join('; ') : undefined }
 }
 
 export async function discoverChannels(connectionId: string) {
@@ -237,7 +295,9 @@ export type SyncAllShiprocketResult = {
   error?: string
 }
 
-export async function syncAllShiprocket(): Promise<{
+export async function syncAllShiprocket(options?: {
+  days?: number
+}): Promise<{
   synced: number
   failed: number
   results: SyncAllShiprocketResult[]
@@ -255,7 +315,7 @@ export async function syncAllShiprocket(): Promise<{
 
   for (const c of connections) {
     try {
-      await syncShiprocketForConnection(c.id)
+      await syncShiprocketForConnection(c.id, options)
       results.push({
         connectionId: c.id,
         workspaceId: c.workspaceId,
@@ -324,8 +384,15 @@ async function upsertShipment(connectionId: string, s: ShiprocketShipmentRow) {
   const rtoInitiatedAt = toDateSafe(s.rto_initiated_date)
   const channelOrderId =
     typeof s.channel_order_id === 'string' ? s.channel_order_id : null
-  const shiprocketCreatedAt =
-    parseShiprocketDate(getStringFromRaw(s, 'created_at'))
+  // Resolve created date from multiple possible API keys so latest shipments get a date
+  const createdAtRaw =
+    getStringFromRaw(s, 'created_at') ??
+    getStringFromRaw(s, 'creation_date') ??
+    getStringFromRaw(s, 'created_date') ??
+    getStringFromRaw(s, 'date') ??
+    getStringFromRawPath(s, 'created_at') ??
+    getStringFromRawPath(s, 'createdAt')
+  const shiprocketCreatedAt = parseShiprocketDate(createdAtRaw)
   const paymentMethod = getStringFromRaw(s, 'payment_method')
 
   const shared = {
@@ -355,7 +422,11 @@ async function upsertShipment(connectionId: string, s: ShiprocketShipmentRow) {
 
 const TRACKING_BATCH_SIZE = 50
 
-async function syncTrackingForConnection(connectionId: string, token: string) {
+/** Returns number of tracking fetch failures. */
+async function syncTrackingForConnection(
+  connectionId: string,
+  token: string
+): Promise<number> {
   const shipments = await prisma.shiprocketShipment.findMany({
     where: {
       connectionId,
@@ -368,8 +439,9 @@ async function syncTrackingForConnection(connectionId: string, token: string) {
     take: 200,
   })
 
-  if (shipments.length === 0) return
+  if (shipments.length === 0) return 0
 
+  let failures = 0
   let processed = 0
   for (const shipment of shipments) {
     try {
@@ -398,6 +470,7 @@ async function syncTrackingForConnection(connectionId: string, token: string) {
         await new Promise((r) => setTimeout(r, 500))
       }
     } catch (err) {
+      failures++
       if (process.env.NODE_ENV === 'development') {
         console.warn(
           `[shiprocket-sync] tracking failed for shipment ${shipment.shipmentId}:`,
@@ -406,6 +479,7 @@ async function syncTrackingForConnection(connectionId: string, token: string) {
       }
     }
   }
+  return failures
 }
 
 async function mapShiprocketToShopify(connectionId: string) {

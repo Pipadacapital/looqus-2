@@ -1,0 +1,171 @@
+import type { Prisma } from '@prisma/client'
+
+const DEFAULT_PAGE_SIZE = 20
+const PAGE_SIZE_OPTIONS = [20, 50, 100] as const
+const MAX_PAGE_SIZE = 100
+
+export type ShiprocketListParams = {
+  from: string
+  to: string
+  page: number
+  pageSize: number
+  search: string | null
+  statuses: string[]
+  channelNames: string[]
+  payment: 'COD' | 'PREPAID' | null
+  mapping: 'MATCHED' | 'UNMATCHED' | null
+  rtoOnly: boolean
+}
+
+export function parseShiprocketListParams(
+  sp: Record<string, string | string[] | undefined>
+): ShiprocketListParams {
+  const today = new Date()
+  const defaultFrom = new Date(today)
+  defaultFrom.setUTCDate(defaultFrom.getUTCDate() - 89)
+
+  const fromStr =
+    typeof sp.from === 'string' ? sp.from : defaultFrom.toISOString().slice(0, 10)
+  const toStr =
+    typeof sp.to === 'string' ? sp.to : today.toISOString().slice(0, 10)
+
+  const page = Math.max(
+    1,
+    parseInt(typeof sp.page === 'string' ? sp.page : '', 10) || 1
+  )
+  const rawPageSize = parseInt(
+    typeof sp.pageSize === 'string' ? sp.pageSize : '',
+    10
+  )
+  const pageSize = PAGE_SIZE_OPTIONS.includes(rawPageSize as (typeof PAGE_SIZE_OPTIONS)[number])
+    ? rawPageSize
+    : DEFAULT_PAGE_SIZE
+  const cappedPageSize = Math.min(pageSize, MAX_PAGE_SIZE)
+
+  const search =
+    typeof sp.q === 'string' ? sp.q.trim() || null : null
+  const statuses =
+    typeof sp.status === 'string'
+      ? sp.status
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : []
+  const channelNames =
+    typeof sp.channel === 'string'
+      ? sp.channel
+          .split(',')
+          .map((c) => c.trim())
+          .filter(Boolean)
+      : []
+  const payment =
+    sp.payment === 'COD'
+      ? 'COD'
+      : sp.payment === 'PREPAID'
+        ? 'PREPAID'
+        : null
+  const mapping =
+    sp.mapping === 'MATCHED'
+      ? 'MATCHED'
+      : sp.mapping === 'UNMATCHED'
+        ? 'UNMATCHED'
+        : null
+  const rtoOnly =
+    sp.rtoOnly === '1' || sp.rtoOnly === 'true'
+
+  return {
+    from: fromStr,
+    to: toStr,
+    page,
+    pageSize: cappedPageSize,
+    search,
+    statuses,
+    channelNames,
+    payment,
+    mapping,
+    rtoOnly,
+  }
+}
+
+export function buildShiprocketWhere(
+  connectionId: string,
+  params: ShiprocketListParams,
+  options?: { skipDateFilter?: boolean }
+): Prisma.ShiprocketShipmentWhereInput {
+  const fromDate = new Date(`${params.from}T00:00:00.000Z`)
+  const toDate = new Date(`${params.to}T23:59:59.999Z`)
+
+  const dateFilter: Prisma.ShiprocketShipmentWhereInput = {
+    OR: [
+      {
+        shiprocketCreatedAt: { gte: fromDate, lte: toDate },
+      },
+      {
+        shiprocketCreatedAt: null,
+        syncedAt: { gte: fromDate, lte: toDate },
+      },
+    ],
+  }
+
+  const conditions: Prisma.ShiprocketShipmentWhereInput[] = [
+    { connectionId },
+  ]
+
+  if (!options?.skipDateFilter) {
+    conditions.push(dateFilter)
+  }
+
+  if (params.search) {
+    const q = params.search
+    conditions.push({
+      OR: [
+        { shipmentId: { contains: q, mode: 'insensitive' } },
+        { orderId: { contains: q, mode: 'insensitive' } },
+        { channelOrderId: { contains: q, mode: 'insensitive' } },
+        { awbCode: { contains: q, mode: 'insensitive' } },
+        { shopifyOrderName: { contains: q, mode: 'insensitive' } },
+      ],
+    })
+  }
+
+  if (params.rtoOnly) {
+    conditions.push({
+      status: { contains: 'RTO', mode: 'insensitive' },
+    })
+  } else if (params.statuses.length > 0) {
+    conditions.push({ status: { in: params.statuses } })
+  }
+
+  if (params.payment === 'COD') {
+    conditions.push({ isCod: true })
+  } else if (params.payment === 'PREPAID') {
+    conditions.push({ isCod: false })
+  }
+
+  if (params.mapping === 'MATCHED') {
+    conditions.push({ shopifyOrderName: { not: null } })
+  } else if (params.mapping === 'UNMATCHED') {
+    conditions.push({ shopifyOrderName: null })
+  }
+
+  if (params.channelNames.length > 0) {
+    conditions.push({
+      OR: params.channelNames.map((name) => ({
+        rawJson: {
+          path: ['channel_name'],
+          equals: name,
+        } as Prisma.JsonNullableFilter,
+      })),
+    })
+  }
+
+  return { AND: conditions }
+}
+
+export function getDefaultPageSize(): number {
+  return DEFAULT_PAGE_SIZE
+}
+
+export function getPageSizeOptions(): readonly number[] {
+  return PAGE_SIZE_OPTIONS
+}

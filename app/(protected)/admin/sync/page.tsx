@@ -94,10 +94,12 @@ export default function AdminSyncPage() {
   const [shiprocketConnections, setShiprocketConnections] = useState<ShiprocketConnectionRow[]>([])
   const [loadingShiprocketList, setLoadingShiprocketList] = useState(true)
   const [shiprocketSyncing, setShiprocketSyncing] = useState(false)
+  const [shiprocketDays, setShiprocketDays] = useState(1)
   const [shiprocketLastResult, setShiprocketLastResult] = useState<{
     synced: number
     failed: number
     total: number
+    days?: number
     results: SyncResultRow[]
   } | null>(null)
 
@@ -224,7 +226,10 @@ export default function AdminSyncPage() {
     setShiprocketSyncing(true)
     setShiprocketLastResult(null)
     try {
-      const res = await fetch('/api/admin/sync-all-shiprocket', { method: 'POST' })
+      const res = await fetch(
+        `/api/admin/sync-all-shiprocket?days=${shiprocketDays}`,
+        { method: 'POST' }
+      )
       const data = await res.json()
       if (!res.ok) {
         toast.error(data.error || 'Shiprocket sync failed')
@@ -234,6 +239,7 @@ export default function AdminSyncPage() {
         synced: data.synced,
         failed: data.failed,
         total: data.total,
+        days: data.days,
         results: data.results ?? [],
       })
       if (data.failed === 0 && data.synced > 0) {
@@ -704,6 +710,18 @@ export default function AdminSyncPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
+          <span className="text-sm text-muted-foreground">Sync last</span>
+          <Select value={String(shiprocketDays)} onValueChange={(v) => setShiprocketDays(Number(v))}>
+            <SelectTrigger className="w-24">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="1">1 day</SelectItem>
+              <SelectItem value="7">7 days</SelectItem>
+              <SelectItem value="30">30 days</SelectItem>
+              <SelectItem value="90">90 days</SelectItem>
+            </SelectContent>
+          </Select>
           <Button
             onClick={handleSyncAllShiprocket}
             disabled={shiprocketSyncing || shiprocketConnections.filter((c) => c.status === 'CONNECTED').length === 0}
@@ -725,7 +743,7 @@ export default function AdminSyncPage() {
         {shiprocketLastResult && (
           <div className="rounded-xl border bg-card p-4 shadow-sm space-y-3">
             <p className="text-sm font-medium">
-              Shiprocket result: {shiprocketLastResult.synced} synced, {shiprocketLastResult.failed} failed
+              Shiprocket result{shiprocketLastResult.days != null ? ` (last ${shiprocketLastResult.days} day${shiprocketLastResult.days === 1 ? '' : 's'})` : ''}: {shiprocketLastResult.synced} synced, {shiprocketLastResult.failed} failed
             </p>
             <ul className="space-y-2">
               {shiprocketLastResult.results.map((r) => (

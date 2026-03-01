@@ -33,8 +33,11 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    await syncShiprocketForConnection(connection.id)
-    return NextResponse.json({ success: true })
+    const result = await syncShiprocketForConnection(connection.id)
+    return NextResponse.json({
+      success: true,
+      warning: result?.warning ?? undefined,
+    })
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Sync failed' },

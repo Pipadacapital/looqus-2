@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    await syncAllShiprocket()
+    await syncAllShiprocket({ days: 1 })
     results.shiprocket = 'ok'
   } catch (err) {
     results.shiprocket = err instanceof Error ? err.message : 'failed'
