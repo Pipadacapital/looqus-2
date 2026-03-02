@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
-import { loadContextWithTrend, chatWithContext, computeSignals } from '@/module/ai'
+import { loadContextWithTrend, chatWithContextAndTools, chatWithContext, computeSignals } from '@/module/ai'
 
 const DEFAULT_DAYS = 30
 const MAX_DAYS = 90
@@ -9,6 +9,7 @@ const MAX_DAYS = 90
 /**
  * POST /api/workspaces/[slug]/ai/chat
  * Body: { message: string, model?: string, days?: number, stream?: boolean }
+ * Uses tool calling so the AI can query workspace metrics, orders, products, RTO, ads, etc.
  * Returns NDJSON stream { delta } / { done: true } / { error } or JSON { reply, modelUsed }.
  */
 export async function POST(
@@ -106,47 +107,72 @@ export async function POST(
     return NextResponse.json({ reply: fallback, modelUsed: null })
   }
 
-  if (stream) {
-    const encoder = new TextEncoder()
-    const streamBody = new ReadableStream({
-      async start(controller) {
-        try {
-          const result = await chatWithContext(metricsContext, messages, {
-            model,
-            stream: true,
-            signals,
-          })
-          if (!result.stream || !('streamGenerator' in result)) {
-            controller.enqueue(encoder.encode(JSON.stringify({ delta: (result as { reply: string }).reply ?? '', done: true }) + '\n'))
-            controller.close()
-            return
-          }
-          for await (const delta of result.streamGenerator) {
-            controller.enqueue(encoder.encode(JSON.stringify({ delta }) + '\n'))
-          }
-          controller.enqueue(encoder.encode(JSON.stringify({ done: true }) + '\n'))
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : 'Chat failed'
-          controller.enqueue(encoder.encode(JSON.stringify({ error: msg }) + '\n'))
-        } finally {
-          controller.close()
-        }
-      },
-    })
-    return new Response(streamBody, {
-      headers: { 'Content-Type': 'application/x-ndjson' },
-    })
-  }
-
   try {
-    const result = await chatWithContext(metricsContext, messages, { model, stream: false, signals })
+    const result = await chatWithContextAndTools(prisma, workspace.id, messages, {
+      model,
+      stream,
+      defaultPeriod: metricsContext.period,
+    })
+
+    if (result.stream && 'streamGenerator' in result) {
+      const encoder = new TextEncoder()
+      const streamBody = new ReadableStream({
+        async start(controller) {
+          try {
+            for await (const delta of result.streamGenerator) {
+              controller.enqueue(encoder.encode(JSON.stringify({ delta }) + '\n'))
+            }
+            controller.enqueue(encoder.encode(JSON.stringify({ done: true }) + '\n'))
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : 'Stream failed'
+            controller.enqueue(encoder.encode(JSON.stringify({ error: msg }) + '\n'))
+          } finally {
+            controller.close()
+          }
+        },
+      })
+      return new Response(streamBody, {
+        headers: { 'Content-Type': 'application/x-ndjson' },
+      })
+    }
+
     const reply = 'reply' in result ? result.reply : ''
     const modelUsed = result.modelUsed
     return NextResponse.json({ reply, modelUsed })
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : 'Chat failed'
+  } catch (toolsError) {
+    const toolsErrMsg = toolsError instanceof Error ? toolsError.message : String(toolsError)
+    const isOllama400 = toolsErrMsg.includes('400') || toolsErrMsg.includes('closing')
+    if (isOllama400) {
+      try {
+        const fallbackResult = await chatWithContext(metricsContext, messages, {
+          model,
+          stream,
+          signals,
+        })
+        if (fallbackResult.stream && 'streamGenerator' in fallbackResult) {
+          const encoder = new TextEncoder()
+          const streamBody = new ReadableStream({
+            async start(controller) {
+              try {
+                for await (const delta of fallbackResult.streamGenerator) {
+                  controller.enqueue(encoder.encode(JSON.stringify({ delta }) + '\n'))
+                }
+                controller.enqueue(encoder.encode(JSON.stringify({ done: true }) + '\n'))
+              } finally {
+                controller.close()
+              }
+            },
+          })
+          return new Response(streamBody, { headers: { 'Content-Type': 'application/x-ndjson' } })
+        }
+        const reply = 'reply' in fallbackResult ? fallbackResult.reply : ''
+        return NextResponse.json({ reply, modelUsed: fallbackResult.modelUsed })
+      } catch {
+        // fallback failed, return original error
+      }
+    }
     return NextResponse.json(
-      { error: msg, reply: null, modelUsed: null },
+      { error: toolsErrMsg, reply: null, modelUsed: null },
       { status: 500 }
     )
   }

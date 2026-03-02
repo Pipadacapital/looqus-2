@@ -6,7 +6,7 @@ import type { PrismaClient } from '@prisma/client'
 export type { AiInsight, WorkspaceMetricsContext, TrendSnapshot } from './types'
 export { buildWorkspaceContext } from './context'
 export { generateInsights } from './insights'
-export { chatWithContext } from './chat'
+export { chatWithContext, chatWithContextAndTools } from './chat'
 export { ollamaListModels } from './providers/ollama'
 export { computeSignals } from './pipeline/signals'
 
