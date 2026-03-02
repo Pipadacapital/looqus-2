@@ -49,7 +49,7 @@ model Workspace {
   costs                  WorkspaceCost[]
   miscExpenses           WorkspaceMiscExpense[]
   createdBy              User                    @relation("WorkspaceCreator", fields: [createdById], references: [id])
-
+ workspaceDailyMetrics WorkspaceDailyMetrics[]
   @@map("workspaces")
 }
 
@@ -536,4 +536,62 @@ enum WorkspaceCostType {
  
   WEBSITE
   CUSTOM
+}
+model WorkspaceDailyMetrics {
+  id                   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId          String    @map("workspace_id") @db.Uuid
+  date                 DateTime  @db.Date
+
+  // Sales & orders
+  netSales             Decimal   @map("net_sales") @db.Decimal(12, 2)
+  grossSales           Decimal   @map("gross_sales") @db.Decimal(12, 2)
+  totalTax             Decimal   @map("total_tax") @db.Decimal(12, 2)
+  totalDiscount        Decimal   @map("total_discount") @db.Decimal(12, 2)
+  ordersCount          Int       @map("orders_count")
+  aov                  Decimal   @db.Decimal(12, 2)
+  currency             String    @db.VarChar(3)
+
+  // Costs & contribution margin
+  cogs                 Decimal   @db.Decimal(12, 2)
+  shipping             Decimal   @db.Decimal(12, 2)
+  packaging            Decimal   @db.Decimal(12, 2)
+  websiteCharges      Decimal   @map("website_charges") @db.Decimal(12, 2)
+  cm1                  Decimal   @db.Decimal(12, 2)
+
+  // Ad spend
+  metaAdSpend          Decimal   @map("meta_ad_spend") @db.Decimal(12, 2)
+  googleAdSpend        Decimal   @map("google_ad_spend") @db.Decimal(12, 2)
+  totalAdSpend         Decimal   @map("total_ad_spend") @db.Decimal(12, 2)
+  cm2                  Decimal   @db.Decimal(12, 2)
+
+  // Misc expenses (prorated for this day) & CM3
+  miscExpensesProrated Decimal   @map("misc_expenses_prorated") @db.Decimal(12, 2)
+  cm3                  Decimal   @db.Decimal(12, 2)
+
+  // Derived: ACOS %, Blended ROAS (net sales / ad spend)
+  acos                 Decimal?  @db.Decimal(5, 2)
+  blendedRoas          Decimal?  @map("blended_roas") @db.Decimal(8, 2)
+
+  // Traffic (when available)
+  sessions             Int?      @db.Integer
+  conversionRate       Decimal?  @map("conversion_rate") @db.Decimal(8, 4)
+
+  // RTO (Shiprocket)
+  rtoOrders            Int?      @map("rto_orders")
+  rtoValue             Decimal?  @map("rto_value") @db.Decimal(12, 2)
+  rtoPercent           Decimal?  @map("rto_percent") @db.Decimal(5, 2)
+  rtoMapped            Int?      @map("rto_mapped")
+  rtoUnmapped          Int?      @map("rto_unmapped")
+  totalShipments       Int?      @map("total_shipments")
+
+  // Prepaid
+  prepaidOrdersCount   Int?      @map("prepaid_orders_count")
+  prepaidPercentage    Decimal?  @map("prepaid_percentage") @db.Decimal(5, 2)
+
+  computedAt           DateTime  @default(now()) @map("computed_at")
+  workspace            Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, date])
+  @@index([workspaceId, date])
+  @@map("workspace_daily_metrics")
 }

@@ -2,7 +2,7 @@
   "name": "shopify-analitcs",
   "version": "0.1.0",
   "private": true,
-  "scripts": {
+"scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
@@ -11,7 +11,8 @@
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
-      "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "cron:workspace-daily-metrics": "tsx scripts/populate-workspace-daily-metrics.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.2.0",
