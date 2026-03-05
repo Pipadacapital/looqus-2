@@ -5,9 +5,12 @@ import { prisma } from '@/lib/prisma'
 import { shopifyGraphQL } from './graphql'
 import { Decimal } from '@prisma/client/runtime/library'
 
+const DEFAULT_BACKFILL_DAYS = 400
+const ORDERS_PAGE_SIZE = 50
+
 const ORDERS_QUERY = `
   query Orders($cursor: String) {
-    orders(first: 50, after: $cursor, sortKey: PROCESSED_AT, reverse: true) {
+    orders(first: ${ORDERS_PAGE_SIZE}, after: $cursor, sortKey: PROCESSED_AT, reverse: true) {
       pageInfo { hasNextPage endCursor }
       edges {
         cursor
@@ -48,6 +51,13 @@ const PRODUCTS_QUERY = `
           featuredImage { url }
           totalInventory
           publishedAt
+          variants(first: 100) {
+            edges {
+              node {
+                id title sku price compareAtPrice inventoryQuantity
+              }
+            }
+          }
         }
       }
     }
@@ -92,7 +102,7 @@ export async function syncOrders(connectionId: string): Promise<{ synced: number
   do {
     const data = await shopifyGraphQL<{
       orders: {
-        pageInfo: { hasNextPage: boolean; endCursor: string | null }
+        pageInfo: { hasNextPage: boolean, endCursor: string | null }
         edges: Array<{
           node: {
             id: string
@@ -109,7 +119,7 @@ export async function syncOrders(connectionId: string): Promise<{ synced: number
             cancelledAt: string | null
             tags: string[]
             customer: { id: string } | null
-            lineItems: { edges: Array<{ node: { id: string; title: string; quantity: number; originalUnitPriceSet: { shopMoney: { amount: string } }; sku: string | null; variant: { title: string; product: { id: string } | null } | null } }> }
+            lineItems: { edges: Array<{ node: { id: string, title: string, quantity: number, originalUnitPriceSet: { shopMoney: { amount: string } }, sku: string | null, variant: { title: string, product: { id: string } | null } | null } }> }
           }
         }>
       }
@@ -198,6 +208,164 @@ export async function syncOrders(connectionId: string): Promise<{ synced: number
   return { synced: total }
 }
 
+function getBackfillDays(): number {
+  const env = process.env.SHOPIFY_ORDER_BACKFILL_DAYS
+  if (env != null && env !== '') {
+    const n = parseInt(env, 10)
+    if (!Number.isNaN(n) && n > 0) return Math.min(n, 730)
+  }
+  return DEFAULT_BACKFILL_DAYS
+}
+
+/**
+ * Deep backfill: fetch orders until we have at least `daysBack` days of history.
+ * Pages through GraphQL (PROCESSED_AT desc) and stops when the oldest order in a page
+ * is before (now - daysBack). Use for initial backfill; normal sync has no date cutoff.
+ */
+export async function backfillOrders(
+  connectionId: string,
+  options?: { daysBack?: number }
+): Promise<{ synced: number; stoppedAt?: string }> {
+  const daysBack = options?.daysBack ?? getBackfillDays()
+  const cutoff = new Date()
+  cutoff.setUTCDate(cutoff.getUTCDate() - daysBack)
+
+  const conn = await prisma.shopifyConnection.findUnique({
+    where: { id: connectionId },
+    select: { shopDomain: true, accessToken: true },
+  })
+  if (!conn?.accessToken) throw new Error('Connection not found or missing access token')
+
+  let cursor: string | null = null
+  let total = 0
+  let stoppedAt: string | undefined
+
+  if (process.env.NODE_ENV === 'development') {
+    console.log(`[Shopify backfill] connectionId=${connectionId} daysBack=${daysBack} cutoff=${cutoff.toISOString()}`)
+  }
+
+  do {
+    const data = await shopifyGraphQL<{
+      orders: {
+        pageInfo: { hasNextPage: boolean, endCursor: string | null }
+        edges: Array<{
+          node: {
+            id: string
+            name: string
+            email: string | null
+            totalPriceSet: { shopMoney: { amount: string } }
+            subtotalPriceSet: { shopMoney: { amount: string } }
+            totalTaxSet: { shopMoney: { amount: string } }
+            totalDiscountsSet: { shopMoney: { amount: string } }
+            currencyCode: string
+            displayFinancialStatus: string
+            displayFulfillmentStatus: string | null
+            processedAt: string | null
+            cancelledAt: string | null
+            tags: string[]
+            customer: { id: string } | null
+            lineItems: { edges: Array<{ node: { id: string, title: string, quantity: number, originalUnitPriceSet: { shopMoney: { amount: string } }, sku: string | null, variant: { title: string, product: { id: string } | null } | null } }> }
+          }
+        }>
+      }
+    }>({
+      shopDomain: conn.shopDomain,
+      accessToken: conn.accessToken,
+      query: ORDERS_QUERY,
+      variables: { cursor },
+    })
+
+    const orders = data.orders as any
+    if (!orders?.edges?.length) break
+
+    let minProcessedAt: Date | null = null
+    for (const { node: order } of orders.edges) {
+      const pt = order.processedAt ? new Date(order.processedAt) : null
+      if (pt && (minProcessedAt == null || pt < minProcessedAt)) minProcessedAt = pt
+    }
+    if (minProcessedAt != null && minProcessedAt < cutoff) {
+      stoppedAt = minProcessedAt.toISOString()
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`[Shopify backfill] Reached cutoff: min in page ${stoppedAt}, stopping after this page.`)
+      }
+    }
+
+    for (const { node: order } of orders.edges) {
+      const shopifyId = order.id
+      const processedAt = order.processedAt ? new Date(order.processedAt) : new Date(0)
+      const cancelledAt = order.cancelledAt ? new Date(order.cancelledAt) : null
+
+      const orderRecord = await prisma.shopifyOrder.upsert({
+        where: {
+          connectionId_shopifyId: { connectionId, shopifyId },
+        },
+        create: {
+          connectionId,
+          shopifyId,
+          orderNumber: parseGid(order.id),
+          name: order.name,
+          email: order.email ?? null,
+          totalPrice: toDecimal(order.totalPriceSet?.shopMoney?.amount),
+          subtotalPrice: toDecimal(order.subtotalPriceSet?.shopMoney?.amount),
+          totalTax: toDecimal(order.totalTaxSet?.shopMoney?.amount),
+          totalDiscount: toDecimal(order.totalDiscountsSet?.shopMoney?.amount),
+          currency: order.currencyCode ?? 'USD',
+          financialStatus: order.displayFinancialStatus ?? 'PENDING',
+          fulfillmentStatus: order.displayFulfillmentStatus ?? null,
+          customerShopifyId: order.customer?.id ?? null,
+          processedAt,
+          cancelledAt,
+          tags: order.tags ?? [],
+        },
+        update: {
+          totalPrice: toDecimal(order.totalPriceSet?.shopMoney?.amount),
+          subtotalPrice: toDecimal(order.subtotalPriceSet?.shopMoney?.amount),
+          totalTax: toDecimal(order.totalTaxSet?.shopMoney?.amount),
+          totalDiscount: toDecimal(order.totalDiscountsSet?.shopMoney?.amount),
+          financialStatus: order.displayFinancialStatus ?? 'PENDING',
+          fulfillmentStatus: order.displayFulfillmentStatus ?? null,
+          cancelledAt,
+          tags: order.tags ?? [],
+        },
+      })
+      total++
+
+      for (const li of order.lineItems?.edges ?? []) {
+        const line = li.node
+        const lineShopifyId = line.id
+        const productGid = line.variant?.product?.id ?? null
+
+        await prisma.shopifyLineItem.upsert({
+          where: {
+            connectionId_shopifyId: { connectionId, shopifyId: lineShopifyId },
+          },
+          create: {
+            orderId: orderRecord.id,
+            connectionId,
+            shopifyId: lineShopifyId,
+            title: line.title,
+            quantity: line.quantity,
+            price: toDecimal(line.originalUnitPriceSet?.shopMoney?.amount),
+            sku: line.sku ?? null,
+            variantTitle: line.variant?.title ?? null,
+            productShopifyId: productGid,
+          },
+          update: {
+            quantity: line.quantity,
+            price: toDecimal(line.originalUnitPriceSet?.shopMoney?.amount),
+            productShopifyId: productGid,
+          },
+        })
+      }
+    }
+
+    if (stoppedAt != null) break
+    cursor = orders.pageInfo.hasNextPage ? orders.pageInfo.endCursor : null
+  } while (cursor)
+
+  return { synced: total, stoppedAt }
+}
+
 export async function syncProducts(connectionId: string): Promise<{ synced: number }> {
   const conn = await prisma.shopifyConnection.findUnique({
     where: { id: connectionId },
@@ -211,7 +379,7 @@ export async function syncProducts(connectionId: string): Promise<{ synced: numb
   do {
     const data = await shopifyGraphQL<{
       products: {
-        pageInfo: { hasNextPage: boolean; endCursor: string | null }
+        pageInfo: { hasNextPage: boolean, endCursor: string | null }
         edges: Array<{
           node: {
             id: string
@@ -224,6 +392,18 @@ export async function syncProducts(connectionId: string): Promise<{ synced: numb
             featuredImage: { url: string } | null
             totalInventory: number | null
             publishedAt: string | null
+            variants: {
+              edges: Array<{
+                node: {
+                  id: string
+                  title: string | null
+                  sku: string | null
+                  price: string | null
+                  compareAtPrice: string | null
+                  inventoryQuantity: number | null
+                }
+              }>
+            }
           }
         }>
       }
@@ -238,7 +418,7 @@ export async function syncProducts(connectionId: string): Promise<{ synced: numb
     if (!products?.edges?.length) break
 
     for (const { node: p } of products.edges) {
-      await prisma.shopifyProduct.upsert({
+      const productRecord = await prisma.shopifyProduct.upsert({
         where: {
           connectionId_shopifyId: { connectionId, shopifyId: p.id },
         },
@@ -267,6 +447,33 @@ export async function syncProducts(connectionId: string): Promise<{ synced: numb
           publishedAt: p.publishedAt ? new Date(p.publishedAt) : null,
         },
       })
+
+      // Sync variants
+      for (const { node: v } of p.variants?.edges ?? []) {
+        await prisma.shopifyVariant.upsert({
+          where: {
+            connectionId_shopifyId: { connectionId, shopifyId: v.id },
+          },
+          create: {
+            connectionId,
+            productId: productRecord.id,
+            shopifyId: v.id,
+            title: v.title ?? null,
+            sku: v.sku ?? null,
+            price: v.price != null ? toDecimal(v.price) : null,
+            compareAtPrice: v.compareAtPrice != null ? toDecimal(v.compareAtPrice) : null,
+            inventoryQuantity: v.inventoryQuantity ?? null,
+          },
+          update: {
+            productId: productRecord.id,
+            title: v.title ?? null,
+            sku: v.sku ?? null,
+            price: v.price != null ? toDecimal(v.price) : null,
+            compareAtPrice: v.compareAtPrice != null ? toDecimal(v.compareAtPrice) : null,
+            inventoryQuantity: v.inventoryQuantity ?? null,
+          },
+        })
+      }
       total++
     }
 
@@ -275,6 +482,7 @@ export async function syncProducts(connectionId: string): Promise<{ synced: numb
 
   return { synced: total }
 }
+
 
 export async function syncCustomers(connectionId: string): Promise<{ synced: number }> {
   const conn = await prisma.shopifyConnection.findUnique({
@@ -289,7 +497,7 @@ export async function syncCustomers(connectionId: string): Promise<{ synced: num
   do {
     const data = await shopifyGraphQL<{
       customers: {
-        pageInfo: { hasNextPage: boolean; endCursor: string | null }
+        pageInfo: { hasNextPage: boolean, endCursor: string | null }
         edges: Array<{
           node: {
             id: string
