@@ -1,0 +1,114 @@
+import { NextResponse, type NextRequest } from 'next/server'
+import { createClient } from '@/lib/server'
+import { prisma } from '@/lib/prisma'
+import { z } from 'zod'
+
+const updateWorkspaceSettingsSchema = z.object({
+  timezone: z
+    .string()
+    .trim()
+    .min(1)
+    .refine(isValidTimeZone, 'Invalid timezone'),
+  taxPercent: z.coerce.number().min(0).max(100),
+})
+
+function isValidTimeZone(value: string) {
+  try {
+    Intl.DateTimeFormat('en-US', { timeZone: value })
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function getWorkspaceAndMembership(slug: string, userId: string) {
+  const workspace = await prisma.workspace.findUnique({
+    where: { slug },
+    include: {
+      members: { where: { userId } },
+    },
+  })
+
+  if (!workspace || workspace.members.length === 0) return null
+  return workspace
+}
+
+export async function GET(
+  _request: NextRequest,
+  context: { params: Promise<{ slug: string }> }
+) {
+  const { slug } = await context.params
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const workspace = await getWorkspaceAndMembership(slug, user.id)
+  if (!workspace) {
+    return NextResponse.json({ error: 'Workspace not found' }, { status: 404 })
+  }
+
+  return NextResponse.json({
+    timezone: workspace.timezone,
+    taxPercent: Number(workspace.taxPercent),
+  })
+}
+
+export async function PATCH(
+  request: NextRequest,
+  context: { params: Promise<{ slug: string }> }
+) {
+  const { slug } = await context.params
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const workspace = await getWorkspaceAndMembership(slug, user.id)
+  if (!workspace) {
+    return NextResponse.json({ error: 'Workspace not found' }, { status: 404 })
+  }
+
+  const role = workspace.members[0].role
+  if (role !== 'OWNER') {
+    return NextResponse.json(
+      { error: 'Only workspace owners can update workspace settings.' },
+      { status: 403 }
+    )
+  }
+
+  try {
+    const json = await request.json()
+    const body = updateWorkspaceSettingsSchema.parse(json)
+
+    const updatedWorkspace = await prisma.workspace.update({
+      where: { id: workspace.id },
+      data: {
+        timezone: body.timezone,
+        taxPercent: body.taxPercent,
+      },
+    })
+
+    return NextResponse.json({
+      timezone: updatedWorkspace.timezone,
+      taxPercent: Number(updatedWorkspace.taxPercent),
+    })
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return NextResponse.json(
+        { error: error.flatten().fieldErrors },
+        { status: 400 }
+      )
+    }
+
+    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 })
+  }
+}

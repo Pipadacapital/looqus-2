@@ -34,6 +34,7 @@ export function StoreContent({
   const queryClient = useQueryClient()
   const [syncing, setSyncing] = useState(false)
   const [backfilling, setBackfilling] = useState(false)
+  const [customerBackfilling, setCustomerBackfilling] = useState(false)
 
   const handleRefreshFromShopify = async () => {
     if (!connectionId) return
@@ -58,27 +59,41 @@ export function StoreContent({
     }
   }
 
-  const handleBulkBackfill = async () => {
+  const startBackfill = async (resources?: Array<'customers' | 'products' | 'orders'>) => {
     if (!connectionId) return
-    setBackfilling(true)
     try {
       const res = await fetch(`/api/workspaces/${slug}/shopify/bulk-backfill`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify(resources ? { resources } : {}),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
         toast.error(data.error ?? 'Bulk backfill failed to start')
         return
       }
-      toast.success(
-        'Bulk backfill started! This may take a while for 4 years of data. You\'ll be notified when it completes.'
-      )
+      const label = resources?.join(', ') ?? 'all resources'
+      toast.success(`Backfill started for ${label}. You'll be notified when it completes.`)
     } catch {
       toast.error('Failed to start bulk backfill')
+    }
+  }
+
+  const handleBulkBackfill = async () => {
+    setBackfilling(true)
+    try {
+      await startBackfill()
     } finally {
       setBackfilling(false)
+    }
+  }
+
+  const handleCustomerBackfill = async () => {
+    setCustomerBackfilling(true)
+    try {
+      await startBackfill(['customers'])
+    } finally {
+      setCustomerBackfilling(false)
     }
   }
 
@@ -105,12 +120,25 @@ export function StoreContent({
             )}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleCustomerBackfill}
+            disabled={customerBackfilling || syncing || backfilling}
+          >
+            {customerBackfilling ? (
+              <IconLoader2 className="size-4 animate-spin" />
+            ) : (
+              <IconUsers className="size-4" />
+            )}
+            <span className="ml-2">Backfill Customers</span>
+          </Button>
           <Button
             variant="outline"
             size="sm"
             onClick={handleBulkBackfill}
-            disabled={backfilling || syncing}
+            disabled={backfilling || syncing || customerBackfilling}
           >
             {backfilling ? (
               <IconLoader2 className="size-4 animate-spin" />
@@ -123,7 +151,7 @@ export function StoreContent({
             variant="outline"
             size="sm"
             onClick={handleRefreshFromShopify}
-            disabled={syncing || backfilling}
+            disabled={syncing || backfilling || customerBackfilling}
           >
             {syncing ? (
               <IconLoader2 className="size-4 animate-spin" />

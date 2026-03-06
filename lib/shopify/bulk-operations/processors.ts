@@ -31,6 +31,53 @@ function parseGid(gid: string): string {
   return gid.replace(/^gid:\/\/shopify\/\w+\//, '')
 }
 
+async function runWithConcurrency<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>
+): Promise<void> {
+  for (let i = 0; i < items.length; i += concurrency) {
+    const chunk = items.slice(i, i + concurrency)
+    await Promise.allSettled(chunk.map((item) => worker(item)))
+  }
+}
+
+function isTransientPrismaConnectionError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+
+  const message = error.message.toLowerCase()
+  return (
+    message.includes('server has closed the connection') ||
+    message.includes('connection') ||
+    message.includes('pool')
+  )
+}
+
+async function retryTransientDbError<T>(
+  operation: () => Promise<T>,
+  retries = 3
+): Promise<T> {
+  let lastError: unknown
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await operation()
+    } catch (error) {
+      lastError = error
+
+      if (!isTransientPrismaConnectionError(error) || attempt === retries) {
+        throw error
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)))
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error('Database operation failed after retries')
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function isOrderRow(row: any): row is BulkOrderRow {
   const id = row.id as string | undefined
@@ -386,47 +433,54 @@ export async function processCustomerRows(
   console.log(`[BulkOps Processor] Processing ${customerRows.length} customers`)
 
   const CUSTOMER_BATCH_SIZE = 100
+  const CUSTOMER_UPSERT_CONCURRENCY = 8
   for (let i = 0; i < customerRows.length; i += CUSTOMER_BATCH_SIZE) {
     const batch = customerRows.slice(i, i + CUSTOMER_BATCH_SIZE)
 
-    for (const c of batch) {
-      try {
-        await prisma.shopifyCustomer.upsert({
-          where: {
-            connectionId_shopifyId: { connectionId, shopifyId: c.id },
-          },
-          create: {
-            connectionId,
-            shopifyId: c.id,
-            email: c.email ?? null,
-            firstName: c.firstName ?? null,
-            lastName: c.lastName ?? null,
-            ordersCount: Number(c.numberOfOrders) || 0,
-            totalSpent: toDecimal(c.amountSpent?.amount),
-            currency: null,
-            tags: c.tags ?? [],
-            state: c.state ?? null,
-            shopifyCreatedAt: new Date(c.createdAt),
-          },
-          update: {
-            email: c.email ?? null,
-            firstName: c.firstName ?? null,
-            lastName: c.lastName ?? null,
-            ordersCount: Number(c.numberOfOrders) || 0,
-            totalSpent: toDecimal(c.amountSpent?.amount),
-            currency: null,
-            tags: c.tags ?? [],
-            state: c.state ?? null,
-          },
-        })
-        customersProcessed++
-      } catch (err) {
-        console.error(
-          `[BulkOps Processor] Failed to upsert customer ${c.id}:`,
-          err instanceof Error ? err.message : err
-        )
+    await runWithConcurrency(
+      batch,
+      CUSTOMER_UPSERT_CONCURRENCY,
+      async (c) => {
+        try {
+          await retryTransientDbError(() =>
+            prisma.shopifyCustomer.upsert({
+              where: {
+                connectionId_shopifyId: { connectionId, shopifyId: c.id },
+              },
+              create: {
+                connectionId,
+                shopifyId: c.id,
+                email: c.email ?? null,
+                firstName: c.firstName ?? null,
+                lastName: c.lastName ?? null,
+                ordersCount: Number(c.numberOfOrders) || 0,
+                totalSpent: toDecimal(c.amountSpent?.amount),
+                currency: null,
+                tags: c.tags ?? [],
+                state: c.state ?? null,
+                shopifyCreatedAt: new Date(c.createdAt),
+              },
+              update: {
+                email: c.email ?? null,
+                firstName: c.firstName ?? null,
+                lastName: c.lastName ?? null,
+                ordersCount: Number(c.numberOfOrders) || 0,
+                totalSpent: toDecimal(c.amountSpent?.amount),
+                currency: null,
+                tags: c.tags ?? [],
+                state: c.state ?? null,
+              },
+            })
+          )
+          customersProcessed++
+        } catch (err) {
+          console.error(
+            `[BulkOps Processor] Failed to upsert customer ${c.id}:`,
+            err instanceof Error ? err.message : err
+          )
+        }
       }
-    }
+    )
 
     if (i + CUSTOMER_BATCH_SIZE < customerRows.length) {
       console.log(

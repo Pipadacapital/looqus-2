@@ -124,22 +124,72 @@ async function getFirstOrders(
 async function getOrderCogs(
   prisma: PrismaClient,
   connectionId: string,
-  orderIds: string[]
+  orderIds: string[],
+  workspaceId: string
 ): Promise<Map<string, number>> {
   if (orderIds.length === 0) return new Map()
-  const products = await prisma.shopifyProduct.findMany({
-    where: { connectionId },
-    select: { shopifyId: true, coq: true },
-  })
+  const [products, cogsSettings, items] = await Promise.all([
+    prisma.shopifyProduct.findMany({
+      where: { connectionId },
+      select: { shopifyId: true, coq: true },
+    }),
+    prisma.workspaceCogsSettings.findUnique({
+      where: { workspaceId },
+    }),
+    prisma.shopifyLineItem.findMany({
+      where: { orderId: { in: orderIds } },
+      select: { orderId: true, productShopifyId: true, quantity: true, price: true },
+    }),
+  ])
   const coqMap = new Map(products.filter((p) => p.coq).map((p) => [p.shopifyId, Number(p.coq)]))
-  const items = await prisma.shopifyLineItem.findMany({
-    where: { orderId: { in: orderIds } },
-    select: { orderId: true, productShopifyId: true, quantity: true },
-  })
+  const overridePct = cogsSettings ? Number(cogsSettings.overrideAllCogsPercent) : 0
+  const fallbackPct = cogsSettings ? Number(cogsSettings.fallbackCogsPercent) : 0
+  const markupPct = cogsSettings ? Number(cogsSettings.cogsMarkupPercent) : 0
+
   const cogsByOrder = new Map<string, number>()
+  let totalRevenue = 0
+  let countOverride = 0
+  let countProductCoq = 0
+  let countFallback = 0
+  let countZero = 0
   for (const it of items) {
-    const coq = it.productShopifyId ? coqMap.get(it.productShopifyId) ?? 0 : 0
-    cogsByOrder.set(it.orderId, (cogsByOrder.get(it.orderId) ?? 0) + coq * it.quantity)
+    const revenue = Number(it.price) * it.quantity
+    totalRevenue += revenue
+    let baseCogs: number
+    if (overridePct > 0) {
+      baseCogs = revenue * (overridePct / 100)
+      countOverride++
+    } else {
+      const coq = it.productShopifyId ? coqMap.get(it.productShopifyId) ?? 0 : 0
+      if (coq > 0) {
+        baseCogs = coq * it.quantity
+        countProductCoq++
+      } else if (fallbackPct > 0) {
+        baseCogs = revenue * (fallbackPct / 100)
+        countFallback++
+      } else {
+        baseCogs = 0
+        countZero++
+      }
+    }
+    const finalCogs = markupPct > 0 ? baseCogs * (1 + markupPct / 100) : baseCogs
+    cogsByOrder.set(it.orderId, (cogsByOrder.get(it.orderId) ?? 0) + finalCogs)
+  }
+  if (items.length > 0) {
+    const totalCogs = [...cogsByOrder.values()].reduce((a, b) => a + b, 0)
+    console.log('[cohorts getOrderCogs] COGS', {
+      orderCount: orderIds.length,
+      lineItemCount: items.length,
+      overridePct,
+      fallbackPct,
+      markupPct,
+      totalLineItemRevenue: Math.round(totalRevenue * 100) / 100,
+      countOverride,
+      countProductCoq,
+      countFallback,
+      countZero,
+      totalCogs: Math.round(totalCogs * 100) / 100,
+    })
   }
   return cogsByOrder
 }
@@ -356,7 +406,7 @@ export async function computeCohorts(
     },
     select: { id: true, customerShopifyId: true, processedAt: true, totalPrice: true, orderNumber: true, name: true },
   })
-  const orderCogsMap = await getOrderCogs(prisma, connectionId, orders.map((o) => o.id))
+  const orderCogsMap = await getOrderCogs(prisma, connectionId, orders.map((o) => o.id), workspace.id)
   const storeCurrency = 'INR'
 
   const firstOrderMetrics = new Map<string, { firstOrder: number; firstOrderR: number }>()

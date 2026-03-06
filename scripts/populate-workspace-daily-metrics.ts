@@ -78,6 +78,13 @@ async function main() {
       shiprocketConnection: {
         select: { id: true, status: true },
       },
+      cogsSettings: {
+        select: {
+          overrideAllCogsPercent: true,
+          fallbackCogsPercent: true,
+          cogsMarkupPercent: true,
+        },
+      },
     },
   })
 
@@ -96,6 +103,7 @@ async function main() {
     const workspace: WorkspaceForMetrics = {
       id: ws.id,
       shopifyConnections: ws.shopifyConnections,
+      cogsSettings: ws.cogsSettings ?? undefined,
       meta_ads_connections: ws.meta_ads_connections,
       google_ads_connections: ws.google_ads_connections,
       shiprocketConnection: ws.shiprocketConnection,

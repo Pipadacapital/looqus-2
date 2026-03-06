@@ -4,6 +4,69 @@ import { prisma } from '@/lib/prisma'
 import { runFullBackfill } from '@/lib/shopify/bulk-operations'
 import { createNotification } from '@/lib/notifications/create'
 import type { BulkResourceType } from '@/lib/shopify/bulk-operations'
+import { shopifyGraphQL } from '@/lib/shopify/graphql'
+
+type ShopifyCountPrecision = 'EXACT' | 'AT_LEAST'
+
+type ShopifyCount = {
+  count: number
+  precision: ShopifyCountPrecision
+}
+
+async function fetchShopifyCatalogCounts(params: {
+  shopDomain: string
+  accessToken: string
+}): Promise<{
+  products: ShopifyCount
+  customers: ShopifyCount
+}> {
+  const data = await shopifyGraphQL<{
+    productsCount: ShopifyCount
+    customersCount: ShopifyCount
+  }>({
+    shopDomain: params.shopDomain,
+    accessToken: params.accessToken,
+    query: `
+      query BulkBackfillCounts {
+        productsCount {
+          count
+          precision
+        }
+        customersCount {
+          count
+          precision
+        }
+      }
+    `,
+  })
+
+  return {
+    products: data.productsCount,
+    customers: data.customersCount,
+  }
+}
+
+function buildCompletenessCheck(localCount: number, shopifyCount: ShopifyCount) {
+  const hasAllData =
+    shopifyCount.precision === 'EXACT' ? localCount === shopifyCount.count : null
+
+  return {
+    localCount,
+    shopifyCount: shopifyCount.count,
+    shopifyCountPrecision: shopifyCount.precision,
+    hasAllData,
+    missingCount:
+      shopifyCount.precision === 'EXACT'
+        ? Math.max(shopifyCount.count - localCount, 0)
+        : null,
+  }
+}
+
+function combineCompleteness(values: Array<boolean | null>): boolean | null {
+  if (values.some((value) => value === false)) return false
+  if (values.every((value) => value === true)) return true
+  return null
+}
 
 /**
  * POST /api/workspaces/[slug]/shopify/bulk-backfill
@@ -167,7 +230,8 @@ export async function POST(
 /**
  * GET /api/workspaces/[slug]/shopify/bulk-backfill
  *
- * Returns current record counts for the connected Shopify store.
+ * Returns local record counts and verifies product/customer coverage
+ * against live Shopify totals. Orders are intentionally skipped for now.
  */
 export async function GET(
   _request: NextRequest,
@@ -192,6 +256,7 @@ export async function GET(
         select: {
           id: true,
           shopDomain: true,
+          accessToken: true,
           lastSyncAt: true,
           status: true,
           _count: {
@@ -219,6 +284,47 @@ export async function GET(
     )
   }
 
+  let catalogCoverage:
+    | {
+        checkedResources: Array<'products' | 'customers'>
+        hasAllData: boolean | null
+        products: ReturnType<typeof buildCompletenessCheck>
+        customers: ReturnType<typeof buildCompletenessCheck>
+      }
+    | null = null
+  let catalogCoverageError: string | null = null
+
+  if (connection.accessToken) {
+    try {
+      const shopifyCounts = await fetchShopifyCatalogCounts({
+        shopDomain: connection.shopDomain,
+        accessToken: connection.accessToken,
+      })
+
+      const products = buildCompletenessCheck(
+        connection._count.products,
+        shopifyCounts.products
+      )
+      const customers = buildCompletenessCheck(
+        connection._count.customers,
+        shopifyCounts.customers
+      )
+
+      catalogCoverage = {
+        checkedResources: ['products', 'customers'],
+        hasAllData: combineCompleteness([
+          products.hasAllData,
+          customers.hasAllData,
+        ]),
+        products,
+        customers,
+      }
+    } catch (error) {
+      catalogCoverageError =
+        error instanceof Error ? error.message : 'Failed to verify Shopify counts'
+    }
+  }
+
   return NextResponse.json({
     connectionId: connection.id,
     shopDomain: connection.shopDomain,
@@ -229,5 +335,7 @@ export async function GET(
       products: connection._count.products,
       customers: connection._count.customers,
     },
+    catalogCoverage,
+    catalogCoverageError,
   })
 }

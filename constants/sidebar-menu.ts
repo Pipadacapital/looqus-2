@@ -1,6 +1,7 @@
 import {
   IconChartBar,
   IconChartLine,
+  IconClock,
   IconDashboard,
   IconDatabase,
   IconFileWord,
@@ -50,6 +51,11 @@ export const sidebarMenuData = {
       title: "Cohorts",
       path: "cohorts",
       icon: IconChartLine,
+    },
+    {
+      title: "Timings",
+      path: "timings",
+      icon: IconClock,
     },
     {
       title: "Inventory",

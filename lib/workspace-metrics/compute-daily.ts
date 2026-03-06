@@ -5,6 +5,11 @@ import { RTO_STATUS_CODES } from './constants'
 export type WorkspaceForMetrics = {
   id: string
   shopifyConnections: { id: string }[]
+  cogsSettings?: {
+    overrideAllCogsPercent: unknown
+    fallbackCogsPercent: unknown
+    cogsMarkupPercent: unknown
+  } | null
   meta_ads_connections: {
     id: string
     selected_ad_account_ids: string[]
@@ -131,13 +136,59 @@ export async function computeWorkspaceDayMetrics(
     select: {
       productShopifyId: true,
       quantity: true,
+      price: true,
     },
   })
 
+  const cogsSettings = workspace.cogsSettings
+  const overridePct = cogsSettings ? Number(cogsSettings.overrideAllCogsPercent) : 0
+  const fallbackPct = cogsSettings ? Number(cogsSettings.fallbackCogsPercent) : 0
+  const markupPct = cogsSettings ? Number(cogsSettings.cogsMarkupPercent) : 0
+
   let cogs = 0
+  let totalLineItemRevenue = 0
+  let countOverride = 0
+  let countProductCoq = 0
+  let countFallback = 0
+  let countZero = 0
   for (const item of lineItems) {
-    const coq = item.productShopifyId ? (coqMap.get(item.productShopifyId) ?? 0) : 0
-    cogs += coq * item.quantity
+    const revenue = Number(item.price) * item.quantity
+    totalLineItemRevenue += revenue
+    let baseCogs: number
+    if (overridePct > 0) {
+      baseCogs = revenue * (overridePct / 100)
+      countOverride++
+    } else {
+      const coq = item.productShopifyId ? (coqMap.get(item.productShopifyId) ?? 0) : 0
+      if (coq > 0) {
+        baseCogs = coq * item.quantity
+        countProductCoq++
+      } else if (fallbackPct > 0) {
+        baseCogs = revenue * (fallbackPct / 100)
+        countFallback++
+      } else {
+        baseCogs = 0
+        countZero++
+      }
+    }
+    const finalCogs = markupPct > 0 ? baseCogs * (1 + markupPct / 100) : baseCogs
+    cogs += finalCogs
+  }
+
+  if (lineItems.length > 0) {
+    console.log('[compute-daily] COGS', {
+      date: dateStr,
+      workspaceId: workspace.id,
+      overridePct,
+      fallbackPct,
+      markupPct,
+      lineItemRevenue: Math.round(totalLineItemRevenue * 100) / 100,
+      countOverride,
+      countProductCoq,
+      countFallback,
+      countZero,
+      totalCogs: Math.round(cogs * 100) / 100,
+    })
   }
 
   let shipping = 0

@@ -46,6 +46,7 @@ export async function GET(
         select: { id: true },
         take: 1,
       },
+      cogsSettings: true,
       meta_ads_connections: {
         select: {
           id: true,
@@ -159,20 +160,69 @@ export async function GET(
     select: {
       productShopifyId: true,
       quantity: true,
+      price: true,
       order: { select: { processedAt: true } },
     },
   })
 
+  const cogsSettings = workspace.cogsSettings
+  const overridePct = cogsSettings ? Number(cogsSettings.overrideAllCogsPercent) : 0
+  const fallbackPct = cogsSettings ? Number(cogsSettings.fallbackCogsPercent) : 0
+  const markupPct = cogsSettings ? Number(cogsSettings.cogsMarkupPercent) : 0
+
   let totalCogs = 0
   const dailyCogs = new Map<string, number>()
-  for (const item of lineItems) {
-    const coq = item.productShopifyId ? (coqMap.get(item.productShopifyId) || 0) : 0
-    const itemCog = coq * item.quantity
-    totalCogs += itemCog
+  let totalLineItemRevenue = 0
+  let countOverride = 0
+  let countProductCoq = 0
+  let countFallback = 0
+  let countZero = 0
 
+  for (const item of lineItems) {
+    const revenue = Number(item.price) * item.quantity
+    totalLineItemRevenue += revenue
+    let baseCogs: number
+    if (overridePct > 0) {
+      baseCogs = revenue * (overridePct / 100)
+      countOverride++
+    } else {
+      const coq = item.productShopifyId ? (coqMap.get(item.productShopifyId) ?? 0) : 0
+      if (coq > 0) {
+        baseCogs = coq * item.quantity
+        countProductCoq++
+      } else if (fallbackPct > 0) {
+        baseCogs = revenue * (fallbackPct / 100)
+        countFallback++
+      } else {
+        baseCogs = 0
+        countZero++
+      }
+    }
+    const finalCogs = markupPct > 0 ? baseCogs * (1 + markupPct / 100) : baseCogs
+    totalCogs += finalCogs
     const dateStr = item.order.processedAt.toISOString().slice(0, 10)
-    dailyCogs.set(dateStr, (dailyCogs.get(dateStr) || 0) + itemCog)
+    dailyCogs.set(dateStr, (dailyCogs.get(dateStr) || 0) + finalCogs)
   }
+
+  console.log('[shopify-analytics] COGS calculation', {
+    from: fromStr,
+    to: toStr,
+    cogsSettings: {
+      overrideAllCogsPercent: overridePct,
+      fallbackCogsPercent: fallbackPct,
+      cogsMarkupPercent: markupPct,
+    },
+    lineItems: {
+      total: lineItems.length,
+      totalLineItemRevenue: Math.round(totalLineItemRevenue * 100) / 100,
+      countOverride,
+      countProductCoq,
+      countFallback,
+      countZero,
+    },
+    totalCogs: Math.round(totalCogs * 100) / 100,
+    note: 'Override and fallback both use (price × quantity) per line item as revenue base.',
+  })
 
   // Calculate other costs based on WorkspaceCost
   const workspaceCosts = await prisma.workspaceCost.findMany({
