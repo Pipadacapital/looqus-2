@@ -125,8 +125,12 @@ export async function fetchMetaUserId(
   return data.id
 }
 
+const META_RATE_LIMIT_RETRIES = 3
+const META_RATE_LIMIT_BACKOFF_MS = 2000
+
 /**
  * Fetch daily insights for an ad account.
+ * Uses explicit time_range: { since, until } and time_increment=1 for daily rows.
  */
 export async function fetchAdAccountInsights(
   accessToken: string,
@@ -151,7 +155,14 @@ export async function fetchAdAccountInsights(
     }).toString()
 
   while (url) {
-    const res: Response = await fetch(url)
+    let res: Response = await fetch(url)
+    for (let attempt = 0; res.status === 429 && attempt < META_RATE_LIMIT_RETRIES; attempt++) {
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`[Meta Ads] Rate limited (429), backoff ${META_RATE_LIMIT_BACKOFF_MS}ms attempt ${attempt + 1}`)
+      }
+      await new Promise((r) => setTimeout(r, META_RATE_LIMIT_BACKOFF_MS * (attempt + 1)))
+      res = await fetch(url)
+    }
     if (!res.ok) {
       const text = await res.text()
       throw new Error(`Meta insights fetch failed (${res.status}): ${text}`)

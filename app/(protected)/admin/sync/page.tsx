@@ -77,7 +77,8 @@ export default function AdminSyncPage() {
     days: number
     results: SyncResultRow[]
   } | null>(null)
-  const [days, setDays] = useState(30)
+  const [days, setDays] = useState(7)
+  const [googleBackfilling, setGoogleBackfilling] = useState(false)
 
   const [metaConnections, setMetaConnections] = useState<MetaConnectionRow[]>([])
   const [loadingMetaList, setLoadingMetaList] = useState(true)
@@ -89,7 +90,8 @@ export default function AdminSyncPage() {
     days: number
     results: SyncResultRow[]
   } | null>(null)
-  const [metaDays, setMetaDays] = useState(30)
+  const [metaDays, setMetaDays] = useState(7)
+  const [metaBackfilling, setMetaBackfilling] = useState(false)
 
   const [shiprocketConnections, setShiprocketConnections] = useState<ShiprocketConnectionRow[]>([])
   const [loadingShiprocketList, setLoadingShiprocketList] = useState(true)
@@ -396,6 +398,40 @@ export default function AdminSyncPage() {
               </>
             )}
           </Button>
+          <Button
+            variant="outline"
+            onClick={async () => {
+              setGoogleBackfilling(true)
+              try {
+                const res = await fetch('/api/admin/sync-all-google-ads?backfill=1', { method: 'POST' })
+                const data = await res.json()
+                if (!res.ok) {
+                  toast.error(data.error || 'Backfill failed')
+                  return
+                }
+                setLastResult({
+                  synced: data.synced,
+                  failed: data.failed,
+                  total: data.total,
+                  days: data.days,
+                  results: data.results ?? [],
+                })
+                toast.success(`Backfill complete: ${data.synced} synced, ${data.failed} failed`)
+              } finally {
+                setGoogleBackfilling(false)
+              }
+            }}
+            disabled={googleBackfilling || connections.length === 0}
+          >
+            {googleBackfilling ? (
+              <>
+                <IconLoader2 className="mr-2 h-4 w-4 animate-spin" />
+                Backfilling…
+              </>
+            ) : (
+              'Backfill 2 years'
+            )}
+          </Button>
         </div>
 
         {lastResult && (
@@ -619,6 +655,40 @@ export default function AdminSyncPage() {
                 <IconRefresh className="mr-2 h-4 w-4" />
                 Sync all Meta Ads
               </>
+            )}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={async () => {
+              setMetaBackfilling(true)
+              try {
+                const res = await fetch('/api/admin/sync-all-meta-ads?backfill=1', { method: 'POST' })
+                const data = await res.json()
+                if (!res.ok) {
+                  toast.error(data.error || 'Backfill failed')
+                  return
+                }
+                setMetaLastResult({
+                  synced: data.synced,
+                  failed: data.failed,
+                  total: data.total,
+                  days: data.days,
+                  results: data.results ?? [],
+                })
+                toast.success(`Backfill complete: ${data.synced} synced, ${data.failed} failed`)
+              } finally {
+                setMetaBackfilling(false)
+              }
+            }}
+            disabled={metaBackfilling || metaConnections.length === 0}
+          >
+            {metaBackfilling ? (
+              <>
+                <IconLoader2 className="mr-2 h-4 w-4 animate-spin" />
+                Backfilling…
+              </>
+            ) : (
+              'Backfill 2 years'
             )}
           </Button>
         </div>

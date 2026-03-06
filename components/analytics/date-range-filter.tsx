@@ -9,6 +9,7 @@ const RANGE_PRESETS = [
   { type: 'range' as const, label: '7D', days: 7 },
   { type: 'range' as const, label: '30D', days: 30 },
   { type: 'range' as const, label: '90D', days: 90 },
+  { type: 'range' as const, label: '1Y', days: 365 },
 ]
 
 const SINGLE_DAY_PRESETS = [

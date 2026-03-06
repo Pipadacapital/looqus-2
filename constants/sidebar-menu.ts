@@ -1,9 +1,11 @@
 import {
   IconChartBar,
+  IconChartLine,
   IconDashboard,
   IconDatabase,
   IconFileWord,
   IconHelp,
+  IconRefresh,
   IconReport,
   IconSearch,
   IconSettings,
@@ -45,6 +47,11 @@ export const sidebarMenuData = {
       icon: IconChartBar,
     },
     {
+      title: "Cohorts",
+      path: "cohorts",
+      icon: IconChartLine,
+    },
+    {
       title: "Inventory",
       path: "inventory",
       icon: IconPackage,
@@ -75,6 +82,11 @@ export const sidebarMenuData = {
       title: "Settings",
       path: "settings",
       icon: IconSettings,
+    },
+    {
+      title: "Ads Backfill",
+      path: "settings/ads-backfill",
+      icon: IconRefresh,
     },
     {
       title: "Get Help",
