@@ -13,13 +13,13 @@ export async function POST(request: NextRequest) {
   const auth = await requireSuperadmin()
   if ('error' in auth) return auth.error
 
-  const days = Math.min(
-    90,
-    Math.max(1, Number(request.nextUrl.searchParams.get('days')) || 30)
-  )
+  const backfill = request.nextUrl.searchParams.get('backfill') === '1'
+  const days = backfill
+    ? 730
+    : Math.min(90, Math.max(1, Number(request.nextUrl.searchParams.get('days')) || 7))
 
   try {
-    const { synced, failed, results } = await syncAllMetaAds(days)
+    const { synced, failed, results } = await syncAllMetaAds(days, { backfill })
     return NextResponse.json({
       success: true,
       synced,
