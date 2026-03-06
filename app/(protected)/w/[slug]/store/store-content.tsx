@@ -15,6 +15,7 @@ import {
   IconTargetArrow,
   IconRefresh,
   IconLoader2,
+  IconDatabaseImport,
 } from '@tabler/icons-react'
 import { useWorkspace } from '@/hooks/use-workspace'
 import { Button } from '@/components/ui/button'
@@ -32,6 +33,7 @@ export function StoreContent({
   const slug = current.slug
   const queryClient = useQueryClient()
   const [syncing, setSyncing] = useState(false)
+  const [backfilling, setBackfilling] = useState(false)
 
   const handleRefreshFromShopify = async () => {
     if (!connectionId) return
@@ -53,6 +55,30 @@ export function StoreContent({
       queryClient.invalidateQueries({ queryKey: ['store', 'products', slug] })
     } finally {
       setSyncing(false)
+    }
+  }
+
+  const handleBulkBackfill = async () => {
+    if (!connectionId) return
+    setBackfilling(true)
+    try {
+      const res = await fetch(`/api/workspaces/${slug}/shopify/bulk-backfill`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast.error(data.error ?? 'Bulk backfill failed to start')
+        return
+      }
+      toast.success(
+        'Bulk backfill started! This may take a while for 4 years of data. You\'ll be notified when it completes.'
+      )
+    } catch {
+      toast.error('Failed to start bulk backfill')
+    } finally {
+      setBackfilling(false)
     }
   }
 
@@ -79,19 +105,34 @@ export function StoreContent({
             )}
           </p>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleRefreshFromShopify}
-          disabled={syncing}
-        >
-          {syncing ? (
-            <IconLoader2 className="size-4 animate-spin" />
-          ) : (
-            <IconRefresh className="size-4" />
-          )}
-          <span className="ml-2">Refresh from Shopify</span>
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleBulkBackfill}
+            disabled={backfilling || syncing}
+          >
+            {backfilling ? (
+              <IconLoader2 className="size-4 animate-spin" />
+            ) : (
+              <IconDatabaseImport className="size-4" />
+            )}
+            <span className="ml-2">Bulk Backfill (4 Years)</span>
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleRefreshFromShopify}
+            disabled={syncing || backfilling}
+          >
+            {syncing ? (
+              <IconLoader2 className="size-4 animate-spin" />
+            ) : (
+              <IconRefresh className="size-4" />
+            )}
+            <span className="ml-2">Refresh from Shopify</span>
+          </Button>
+        </div>
       </div>
 
       <Tabs defaultValue="orders" className="w-full">
