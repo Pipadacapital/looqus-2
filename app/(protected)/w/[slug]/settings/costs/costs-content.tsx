@@ -51,6 +51,7 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover'
 import { toast } from 'sonner'
+import { Label } from "@/components/ui/label"
 
 // ─── Costs form schema ──────────────────────────────────────────────────────
 
@@ -107,6 +108,10 @@ export function CostsContent({ slug, isOwner }: { slug: string; isOwner: boolean
   const [costDialogOpen, setCostDialogOpen] = useState(false)
   const [miscDialogOpen, setMiscDialogOpen] = useState(false)
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [founderSalary, setFounderSalary] = useState<{ monthlyAmount: number | null; currency: string }>({ monthlyAmount: null, currency: 'INR' })
+  const [founderSalaryLoading, setFounderSalaryLoading] = useState(true)
+  const [founderSalarySaving, setFounderSalarySaving] = useState(false)
+  const [founderSalaryInput, setFounderSalaryInput] = useState('')
   const router = useRouter()
 
   // ─── Cost form ──────────────────────────────────────────────────────────
@@ -169,9 +174,24 @@ export function CostsContent({ slug, isOwner }: { slug: string; isOwner: boolean
     }
   }
 
+  const fetchFounderSalary = async () => {
+    try {
+      const res = await fetch(`/api/workspaces/${slug}/founder-salary`)
+      if (!res.ok) throw new Error()
+      const data = await res.json()
+      setFounderSalary({ monthlyAmount: data.monthlyAmount, currency: data.currency ?? 'INR' })
+      setFounderSalaryInput(data.monthlyAmount != null ? String(data.monthlyAmount) : '')
+    } catch {
+      toast.error('Failed to load founder salary')
+    } finally {
+      setFounderSalaryLoading(false)
+    }
+  }
+
   useEffect(() => {
     fetchCosts()
     fetchMiscExpenses()
+    fetchFounderSalary()
   }, [slug])
 
   // ─── Handlers ──────────────────────────────────────────────────────────
@@ -260,6 +280,34 @@ export function CostsContent({ slug, isOwner }: { slug: string; isOwner: boolean
       toast.error('Failed to delete expense')
     } finally {
       setDeleting(null)
+    }
+  }
+
+  const onSaveFounderSalary = async () => {
+    const amount = parseFloat(founderSalaryInput)
+    if (Number.isNaN(amount) || amount < 0) {
+      toast.error('Enter a valid amount')
+      return
+    }
+    setFounderSalarySaving(true)
+    try {
+      const res = await fetch(`/api/workspaces/${slug}/founder-salary`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ monthlyAmount: amount, currency: founderSalary.currency }),
+      })
+      if (res.status === 403) {
+        toast.error('Only owners can edit founder salary.')
+        return
+      }
+      if (!res.ok) throw new Error()
+      toast.success('Founder salary updated')
+      setFounderSalary({ monthlyAmount: amount, currency: founderSalary.currency })
+      router.refresh()
+    } catch {
+      toast.error('Failed to update founder salary')
+    } finally {
+      setFounderSalarySaving(false)
     }
   }
 
@@ -677,6 +725,55 @@ export function CostsContent({ slug, isOwner }: { slug: string; isOwner: boolean
               )}
             </TableBody>
           </Table>
+        </div>
+      </div>
+
+      {/* ═══ Founder's salary (used in P&L Net Profit) ═══ */}
+      <div className="space-y-6">
+        <div>
+          <h2 className="text-2xl font-bold tracking-tight">Founder&apos;s salary</h2>
+          <p className="text-muted-foreground">
+            Monthly amount allocated in P&L Net Profit. Owner-only editable.
+          </p>
+        </div>
+        <div className="rounded-md border p-4">
+          {founderSalaryLoading ? (
+            <p className="text-sm text-muted-foreground">Loading...</p>
+          ) : (
+            <div className="flex flex-wrap items-center gap-3">
+              {isOwner ? (
+                <>
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="founder-salary-amount" className="text-sm">Monthly amount</Label>
+                    <Input
+                      id="founder-salary-amount"
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      value={founderSalaryInput}
+                      onChange={(e) => setFounderSalaryInput(e.target.value)}
+                      className="w-36"
+                    />
+                  </div>
+                  <span className="text-sm text-muted-foreground">
+                    {founderSalary.currency}
+                  </span>
+                  <Button
+                    onClick={onSaveFounderSalary}
+                    disabled={founderSalarySaving}
+                  >
+                    {founderSalarySaving ? 'Saving...' : 'Save'}
+                  </Button>
+                </>
+              ) : (
+                <p className="text-sm">
+                  {founderSalary.monthlyAmount != null
+                    ? new Intl.NumberFormat('en-US', { style: 'currency', currency: founderSalary.currency }).format(founderSalary.monthlyAmount) + ' / month'
+                    : 'Not set'}
+                </p>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

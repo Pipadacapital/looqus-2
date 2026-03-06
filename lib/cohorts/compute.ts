@@ -144,6 +144,28 @@ async function getOrderCogs(
   return cogsByOrder
 }
 
+/** Daily total_returns and gross_sales by date (for First Order R: attribute refunds to first orders by day) */
+async function getDailyReturnsAndSales(
+  prisma: PrismaClient,
+  connectionId: string,
+  fromDate: Date,
+  toDate: Date
+): Promise<Map<string, { grossSales: number; totalReturns: number }>> {
+  const rows = await prisma.shopifyAnalyticsDaily.findMany({
+    where: { connectionId, date: { gte: fromDate, lte: toDate } },
+    select: { date: true, grossSales: true, totalReturns: true },
+  })
+  const map = new Map<string, { grossSales: number; totalReturns: number }>()
+  for (const r of rows) {
+    const dateStr = r.date.toISOString().slice(0, 10)
+    map.set(dateStr, {
+      grossSales: Number(r.grossSales),
+      totalReturns: Number(r.totalReturns ?? 0),
+    })
+  }
+  return map
+}
+
 /** Total ad spend in [fromDate, toDate] — same logic as /analytics (aggregate Meta + Google, selected accounts) */
 async function getTotalAdSpend(
   prisma: PrismaClient,
@@ -183,6 +205,54 @@ async function getTotalAdSpend(
     googleAdSpend = Number(agg._sum.spend ?? 0)
   }
   return metaAdSpend + googleAdSpend
+}
+
+/** Daily ad spend (Meta + Google, same filters as analytics) — for order-level CM3 = ... - Ad Spend - Misc */
+async function getDailyAdSpend(
+  prisma: PrismaClient,
+  workspace: WorkspaceForCohorts,
+  fromDate: Date,
+  toDate: Date
+): Promise<Map<string, number>> {
+  const byDate = new Map<string, number>()
+  const meta = workspace.meta_ads_connections
+  const google = workspace.google_ads_connections
+  const metaIds = meta?.selected_ad_account_ids?.length ? meta.selected_ad_account_ids : meta?.selected_ad_account_id ? [meta.selected_ad_account_id] : undefined
+  const googleIds = google?.selected_customer_ids?.length ? google.selected_customer_ids : google?.selected_customer_id ? [google.selected_customer_id] : undefined
+
+  if (meta?.id) {
+    const metaWhere: { connection_id: string; date: { gte: Date; lte: Date }; ad_account_id?: { in: string[] } } = {
+      connection_id: meta.id,
+      date: { gte: fromDate, lte: toDate },
+    }
+    if (metaIds?.length) metaWhere.ad_account_id = { in: metaIds }
+    const rows = await prisma.meta_ads_daily_metrics.groupBy({
+      by: ['date'],
+      where: metaWhere as Parameters<typeof prisma.meta_ads_daily_metrics.groupBy>[0]['where'],
+      _sum: { spend: true },
+    })
+    for (const r of rows) {
+      const dateStr = r.date.toISOString().slice(0, 10)
+      byDate.set(dateStr, (byDate.get(dateStr) ?? 0) + Number(r._sum.spend ?? 0))
+    }
+  }
+  if (google?.id) {
+    const googleWhere: { connection_id: string; date: { gte: Date; lte: Date }; customer_id?: { in: string[] } } = {
+      connection_id: google.id,
+      date: { gte: fromDate, lte: toDate },
+    }
+    if (googleIds?.length) googleWhere.customer_id = { in: googleIds }
+    const rows = await prisma.google_ads_daily_metrics.groupBy({
+      by: ['date'],
+      where: googleWhere as Parameters<typeof prisma.google_ads_daily_metrics.groupBy>[0]['where'],
+      _sum: { spend: true },
+    })
+    for (const r of rows) {
+      const dateStr = r.date.toISOString().slice(0, 10)
+      byDate.set(dateStr, (byDate.get(dateStr) ?? 0) + Number(r._sum.spend ?? 0))
+    }
+  }
+  return byDate
 }
 
 /** Ad spend by month (Meta + Google, same filters as analytics) — for per-cohort CAC */
@@ -327,12 +397,14 @@ export async function computeCohorts(
   const toDateExtended = new Date(toDate)
   toDateExtended.setUTCDate(toDateExtended.getUTCDate() + 360)
 
-  const [firstOrders, dailyRates, adSpendByMonth, totalAdSpend, rtoIds] = await Promise.all([
+  const [firstOrders, dailyRates, adSpendByMonth, totalAdSpend, rtoIds, dailyReturnsAndSales, dailyAdSpend] = await Promise.all([
     getFirstOrders(prisma, connectionId, fromDate, toDate),
     buildDailyRates(prisma, workspace.id, connectionId, fromDate, toDateExtended, 'INR'),
     getAdSpendByMonth(prisma, workspace, fromDate, toDate),
     getTotalAdSpend(prisma, workspace, fromDate, toDate),
     getRtoOrderIdentifiers(prisma, workspace.id, connectionId, fromDate, toDateExtended),
+    getDailyReturnsAndSales(prisma, connectionId, fromDate, toDateExtended),
+    getDailyAdSpend(prisma, workspace, fromDate, toDateExtended),
   ])
 
   const firstByCustomer = new Map<string | null, { firstAt: Date; orderId: string }>()
@@ -386,10 +458,21 @@ export async function computeCohorts(
     const perOrderPackaging = (rates?.packaging ?? 0) / ordersThatDay
     const perOrderWebsite = (rates?.website ?? 0) / ordersThatDay
     const perOrderMisc = (rates?.misc ?? 0) / ordersThatDay
+    const perOrderAdSpend = (dailyAdSpend.get(dateStr) ?? 0) / ordersThatDay
     const cm1 = totalPrice - cogs - perOrderShipping - perOrderPackaging - perOrderWebsite
-    const cm3 = cm1 - perOrderMisc
+    const cm2 = cm1 - perOrderAdSpend
+    const cm3 = cm2 - perOrderMisc
     const isRto = rtoIds.has(order.orderNumber) || rtoIds.has(order.name) || (order.name && rtoIds.has('#' + order.name))
-    const realized = isRto ? 0 : cm3
+    let realized: number
+    if (isRto) {
+      realized = 0
+    } else {
+      const daily = dailyReturnsAndSales.get(dateStr)
+      const grossSales = daily?.grossSales ?? 0
+      const totalReturns = daily?.totalReturns ?? 0
+      const orderShareRefunds = grossSales > 0 ? (totalPrice / grossSales) * totalReturns : 0
+      realized = cm3 - orderShareRefunds
+    }
     const cohortMonth = fo.firstAt.toISOString().slice(0, 7)
 
     if (order.id === fo.orderId) {
@@ -398,8 +481,8 @@ export async function computeCohorts(
     }
     const firstAt = fo.firstAt
     const daysDiff = (order.processedAt.getTime() - firstAt.getTime()) / (1000 * 60 * 60 * 24)
-    const bucket = Math.floor(daysDiff / BUCKET_DAYS) + 1
-    if (bucket < 1 || bucket > 12) continue
+    if (daysDiff < 1 || daysDiff > 360) continue
+    const bucket = Math.min(12, Math.floor((daysDiff - 1) / 30) + 1)
 
     const rev = totalPrice
     const m = repeatByCohortBucket.get(cohortMonth)!.get(bucket)!
@@ -481,9 +564,15 @@ export async function computeCohorts(
       if (cum >= 0) payback = 0
       else {
         for (let k = 1; k <= 12; k++) {
-          cum += incr[k - 1]
+          const incrVal = incr[k - 1]
+          const prevCum = cum
+          cum += incrVal
           if (cum >= 0) {
-            payback = k
+            if (params.metric === 'cm3' && params.mode === 'post' && incrVal > eps && prevCum < 0) {
+              payback = k - 1 + (0 - prevCum) / incrVal
+            } else {
+              payback = k
+            }
             break
           }
         }
@@ -496,9 +585,15 @@ export async function computeCohorts(
       paybackWeight += newCustomers
     } else {
       for (let k = 1; k <= 12; k++) {
-        cumCm3 += incrCm3[k - 1]
+        const incrVal = incrCm3[k - 1]
+        const prevCum = cumCm3
+        cumCm3 += incrVal
         if (cumCm3 >= 0) {
-          paybackWeightedSum += k * newCustomers
+          if (incrVal > eps && prevCum < 0) {
+            paybackWeightedSum += (k - 1 + (0 - prevCum) / incrVal) * newCustomers
+          } else {
+            paybackWeightedSum += k * newCustomers
+          }
           paybackWeight += newCustomers
           break
         }
@@ -518,7 +613,7 @@ export async function computeCohorts(
       m11 = incr[10],
       m12 = incr[11]
 
-    if (params.mode === 'post' && (params.metric === 'cm3' || params.metric === 'revenue')) {
+    if (params.mode === 'post' && params.metric === 'revenue') {
       let s = 0
       m1 = (s += incr[0])
       m2 = (s += incr[1])
@@ -594,7 +689,31 @@ export async function computeCohorts(
       m11 = (s += incr[10])
       m12 = (s += incr[11])
     }
-    // incr: m1..m12 already set for incremental
+    // incr: m1..m12 already set for incremental (CM3+Post keeps incremental)
+
+    if (params.metric === 'cm3' && params.mode === 'post' && rows.length === 0) {
+      const paybackNote =
+        payback === 0
+          ? 'Immediate (First Order (R) >= CAC)'
+          : payback != null
+            ? `First Order (R) + M1+...+M${Math.ceil(payback)} >= CAC; interpolated = ${Number(payback).toFixed(1)} mo`
+            : 'Not reached'
+      console.log('[Cohort CM3+Post DEBUG]', {
+        cohortMonth,
+        newCustomers,
+        cac,
+        originalFirstOrderCm3Avg: firstOrder,
+        realizedFirstOrderCm3Avg: firstOrderR,
+        m1: incr[0],
+        m2: incr[1],
+        m3: incr[2],
+        miscellaneousFixedCostsIncluded: true,
+        payback,
+        paybackFormatted: payback != null ? (payback === 0 ? 'Immediate' : `${Number(payback).toFixed(1)} mo`) : '—',
+        paybackCalculation: paybackNote,
+        formulaNote: 'CM3 = Net Revenue (order) - COGS - Variable - Ad Spend - Misc; Realized = CM3 - refund share',
+      })
+    }
 
     rows.push({
       cohortMonth,
