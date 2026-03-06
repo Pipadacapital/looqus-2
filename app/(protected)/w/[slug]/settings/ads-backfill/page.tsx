@@ -32,16 +32,17 @@ export default async function AdsBackfillPage({
   const isOwner = membership.role === 'OWNER'
 
   return (
-    <div className="max-w-2xl space-y-6 py-4 md:py-6">
+    <div className="max-w-2xl space-y-8 py-4 md:py-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Ads Backfill</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Backfill</h1>
         <p className="text-sm text-muted-foreground mt-0.5">
-          {workspace.name} — Backfill Meta + Google Ads daily metrics (last 2 years).
+          {workspace.name} — Backfill historical data for ads and P&L.
         </p>
       </div>
       <AdsBackfillClient
         workspaceId={workspace.id}
         workspaceName={workspace.name}
+        workspaceSlug={slug}
         isOwner={isOwner}
       />
     </div>

@@ -122,7 +122,7 @@ export function CohortsContent({ workspaceSlug, workspaceName }: CohortsContentP
   const formatPayback = (v: number | null) => {
     if (v === null) return '—'
     if (v === 0) return 'Immediate'
-    return `${v} mo`
+    return `${Number(v).toFixed(1)} mo`
   }
 
   const formatCurrency = (v: number) => {

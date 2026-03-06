@@ -34,14 +34,14 @@ model Workspace {
   industry                String?                 @map("industry")
   monthlyRevenue          String?                 @map("monthly_revenue")
   storeUrl                String?                 @map("store_url")
-  timezone                String                  @default("UTC") @db.VarChar(100)
-  taxPercent              Decimal                 @default(0) @map("tax_percent") @db.Decimal(5, 2)
   plan                    SubscriptionPlan        @default(FREE)
   createdById             String                  @map("created_by_id") @db.Uuid
   createdAt               DateTime                @default(now()) @map("created_at")
   updatedAt               DateTime                @updatedAt @map("updated_at")
   founder_salary_currency String?                 @db.VarChar(3)
   founder_salary_monthly  Decimal?                @db.Decimal(12, 2)
+  taxPercent              Decimal                 @default(0) @map("tax_percent") @db.Decimal(5, 2)
+  timezone                String                  @default("UTC") @db.VarChar(100)
   auditLogs               AuditLog[]
   google_ads_connections  google_ads_connections?
   invitations             Invitation[]
@@ -49,24 +49,24 @@ model Workspace {
   notifications           Notification[]
   shiprocketConnection    ShiprocketConnection?
   shopifyConnections      ShopifyConnection[]
+  cogsSettings            WorkspaceCogsSettings?
   costs                   WorkspaceCost[]
   workspaceDailyMetrics   WorkspaceDailyMetrics[]
   members                 WorkspaceMember[]
   miscExpenses            WorkspaceMiscExpense[]
-  cogsSettings            WorkspaceCogsSettings?
   createdBy               User                    @relation("WorkspaceCreator", fields: [createdById], references: [id])
 
   @@map("workspaces")
 }
 
 model WorkspaceCogsSettings {
-  id                    String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  workspaceId           String   @unique @map("workspace_id") @db.Uuid
-  overrideAllCogsPercent Decimal @default(0) @map("override_all_cogs_percent") @db.Decimal(5, 2)
-  fallbackCogsPercent   Decimal  @default(0) @map("fallback_cogs_percent") @db.Decimal(5, 2)
-  cogsMarkupPercent     Decimal  @default(0) @map("cogs_markup_percent") @db.Decimal(5, 2)
-  updatedAt             DateTime @updatedAt @map("updated_at")
-  workspace             Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  id                     String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId            String    @unique @map("workspace_id") @db.Uuid
+  overrideAllCogsPercent Decimal   @default(0) @map("override_all_cogs_percent") @db.Decimal(5, 2)
+  fallbackCogsPercent    Decimal   @default(0) @map("fallback_cogs_percent") @db.Decimal(5, 2)
+  cogsMarkupPercent      Decimal   @default(0) @map("cogs_markup_percent") @db.Decimal(5, 2)
+  updatedAt              DateTime  @updatedAt @map("updated_at")
+  workspace              Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@map("workspace_cogs_settings")
 }
@@ -177,7 +177,7 @@ model ShopifyAnalyticsDaily {
   updatedAt      DateTime          @updatedAt @map("updated_at")
   conversionRate Decimal?          @map("conversion_rate") @db.Decimal(8, 4)
   sessions       Int?
-  returns        Decimal?          @db.Decimal(12, 2)
+  returns        Decimal?          @map("returns") @db.Decimal(12, 2)
   total_returns  Decimal?          @db.Decimal(12, 2)
   connection     ShopifyConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 

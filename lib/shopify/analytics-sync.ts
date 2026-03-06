@@ -40,7 +40,7 @@ function buildSessionsQl(from: string, to: string): string {
 
 function buildShopifyAnalyticsQl(from: string, to: string): string {
   return `FROM sales
-  SHOW gross_sales, net_sales, discounts, taxes, orders
+  SHOW gross_sales, net_sales, discounts, taxes, orders, total_returns, returns
   TIMESERIES day
   SINCE ${from} UNTIL ${to}
   ORDER BY day`
@@ -114,8 +114,9 @@ export async function syncShopifySessionsFromShopifyQL(
 }
 
 /**
- * Fetches daily Shopify analytics (gross_sales, net_sales, discounts, taxes, orders)
- * from ShopifyQL sales dataset and upserts into shopify_analytics_daily.
+ * Fetches daily Shopify analytics (gross_sales, net_sales, discounts, taxes, orders,
+ * total_returns, returns) from ShopifyQL sales dataset and upserts into shopify_analytics_daily.
+ * P&L uses: refunds = total_returns, productRefunds = returns, shippingRefunds = total_returns - returns.
  *
  * Uses the validated shopifyqlQuery API: tableData.columns + tableData.rows (objects keyed by column name).
  */
@@ -155,20 +156,61 @@ export async function syncShopifyAnalyticsFromOrders(
   }
 
   const table = data.shopifyqlQuery.tableData
+  const rowsReturned = table?.rows?.length ?? 0
+  console.log('[syncShopifyAnalytics] range:', from, '→', to)
+  console.log('[syncShopifyAnalytics] rows returned from Shopify:', rowsReturned)
   if (!table?.rows?.length) {
     return { daysUpserted: 0 }
   }
 
+  // Raw ShopifyQL response log for debugging (query, parseErrors, columns, first 20 rows)
+  console.log('[syncShopifyAnalytics] RAW shopifyqlQuery:')
+  console.log('[syncShopifyAnalytics] query string:', shopifyql)
+  console.log('[syncShopifyAnalytics] parseErrors:', data.shopifyqlQuery.parseErrors)
+  console.log('[syncShopifyAnalytics] tableData.columns:', JSON.stringify(table.columns))
+  console.log('[syncShopifyAnalytics] tableData.rows (first 20):', JSON.stringify(table.rows.slice(0, 20)))
+
+  const totalReturnsRaw = (row: Record<string, string | number | null>) =>
+    row['total_returns'] != null ? Number(row['total_returns']) : 0
+  const returnsRaw = (row: Record<string, string | number | null>) =>
+    row['returns'] != null ? Number(row['returns']) : 0
+
+  // Normalize day to UTC date-only (YYYY-MM-DD) so we never write wrong date due to timezone or format
+  function toDateOnly(row: Record<string, string | number | null>): string {
+    const dayRaw = row['day']
+    if (dayRaw == null) return ''
+    if (typeof dayRaw === 'string') {
+      const match = dayRaw.match(/^(\d{4}-\d{2}-\d{2})/)
+      return match ? match[1] : dayRaw.slice(0, 10)
+    }
+    return new Date(dayRaw).toISOString().slice(0, 10)
+  }
+
+  // Clear stale total_returns and returns for this range before writing fresh ShopifyQL values
+  const fromDate = new Date(`${from}T00:00:00.000Z`)
+  const toDate = new Date(`${to}T23:59:59.999Z`)
+  await prisma.shopifyAnalyticsDaily.updateMany({
+    where: {
+      connectionId,
+      date: { gte: fromDate, lte: toDate },
+    },
+    data: { totalReturns: 0, returns: 0 },
+  })
+
   let daysUpserted = 0
   for (const row of table.rows) {
-    const dayStr = String(row['day'] ?? '')
+    const dateOnly = toDateOnly(row)
+    if (!dateOnly || dateOnly.length < 10) continue
+
     const grossSales = Number(row['gross_sales'] ?? 0)
     const netSales = Number(row['net_sales'] ?? 0)
     const discounts = Number(row['discounts'] ?? 0)
     const taxes = Number(row['taxes'] ?? 0)
     const ordersCount = Number(row['orders'] ?? 0)
+    const totalReturns = totalReturnsRaw(row)
+    const returnsVal = returnsRaw(row)
 
-    const date = new Date(`${dayStr}T00:00:00.000Z`)
+    const date = new Date(`${dateOnly}T00:00:00.000Z`)
 
     await prisma.shopifyAnalyticsDaily.upsert({
       where: {
@@ -186,6 +228,8 @@ export async function syncShopifyAnalyticsFromOrders(
         aov: ordersCount > 0 ? netSales / ordersCount : 0,
         totalTax: taxes,
         totalDiscount: discounts,
+        totalReturns,
+        returns: returnsVal,
         currency: 'INR',
       },
       update: {
@@ -195,11 +239,28 @@ export async function syncShopifyAnalyticsFromOrders(
         aov: ordersCount > 0 ? netSales / ordersCount : 0,
         totalTax: taxes,
         totalDiscount: discounts,
+        totalReturns,
+        returns: returnsVal,
       },
     })
 
     daysUpserted++
   }
 
+  // First 3 parsed days (temporary log)
+  const first3 = table.rows.slice(0, 3).map((row) => ({
+    day: toDateOnly(row),
+    gross_sales: row['gross_sales'],
+    net_sales: row['net_sales'],
+    orders: row['orders'],
+    total_tax: row['taxes'],
+    total_discount: row['discounts'],
+    total_returns: row['total_returns'],
+    returns: row['returns'],
+  }))
+  console.log('[syncShopifyAnalytics] first 3 parsed days:', JSON.stringify(first3))
+  console.log('[syncShopifyAnalytics] rows upserted:', daysUpserted)
+
   return { daysUpserted }
 }
+
