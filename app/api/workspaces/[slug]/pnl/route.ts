@@ -167,7 +167,7 @@ export async function GET(
         totalDiscount: true,
         ordersCount: true,
         currency: true,
-        totalReturns: true,
+        total_returns: true,
         returns: true,
       },
     }),
@@ -258,7 +258,7 @@ export async function GET(
   const dailyReturns = new Map<string, number>()
   for (const d of dailyAnalytics) {
     const dateStr = d.date.toISOString().slice(0, 10)
-    dailyTotalReturns.set(dateStr, Number(d.totalReturns ?? 0))
+    dailyTotalReturns.set(dateStr, Number(d.total_returns ?? 0))
     dailyReturns.set(dateStr, Number(d.returns ?? 0))
   }
 

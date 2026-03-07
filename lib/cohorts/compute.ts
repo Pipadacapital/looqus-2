@@ -203,14 +203,14 @@ async function getDailyReturnsAndSales(
 ): Promise<Map<string, { grossSales: number; totalReturns: number }>> {
   const rows = await prisma.shopifyAnalyticsDaily.findMany({
     where: { connectionId, date: { gte: fromDate, lte: toDate } },
-    select: { date: true, grossSales: true, totalReturns: true },
+    select: { date: true, grossSales: true, total_returns: true },
   })
   const map = new Map<string, { grossSales: number; totalReturns: number }>()
   for (const r of rows) {
     const dateStr = r.date.toISOString().slice(0, 10)
     map.set(dateStr, {
       grossSales: Number(r.grossSales),
-      totalReturns: Number(r.totalReturns ?? 0),
+      totalReturns: Number(r.total_returns ?? 0),
     })
   }
   return map

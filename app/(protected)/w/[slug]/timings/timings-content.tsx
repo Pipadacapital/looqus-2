@@ -292,7 +292,7 @@ export function TimingsContent({
       '1 -> 2 (days)',
       '2 -> 3 (days)',
       '3 -> 4 (days)',
-      'Reactivation (days)',
+      'Reactivation 80% of 1->2 (days)',
     ]
     headers[0] = getGroupByLabel(groupBy)
     const rows = sortedGroups.map((group) => [
@@ -434,7 +434,10 @@ export function TimingsContent({
                 </div>
                 <div className="rounded-lg border bg-[#96bf48]/10 p-4">
                   <p className="text-xs font-bold text-[#96bf48] uppercase tracking-wider">
-                    Reactivation
+                    Recommended reactivation
+                  </p>
+                  <p className="text-[10px] text-[#96bf48]/80 mt-0.5">
+                    80% of 1→2 to catch before churn
                   </p>
                   <p className="text-xl font-bold mt-0.5 text-[#96bf48]">
                     {formatDays(summary.reactivationDays, true)}
@@ -554,7 +557,7 @@ export function TimingsContent({
                       <TableHead className="text-right">1 → 2</TableHead>
                       <TableHead className="text-right">2 → 3</TableHead>
                       <TableHead className="text-right">3 → 4</TableHead>
-                      <TableHead className="text-right">Reactivation</TableHead>
+                      <TableHead className="text-right">Reactivation (80% of 1→2)</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>

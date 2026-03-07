@@ -6,7 +6,7 @@ import type {
   TimingsSummary,
 } from './types'
 
-const REACTIVATION_GAP_DAYS = 30
+const REACTIVATION_PCT_OF_1TO2 = 0.8 // 80% of typical 1→2 interval = recommended reactivation timing
 
 type FirstOrderRow = {
   customer_shopify_id: string
@@ -42,7 +42,6 @@ type CustomerMetrics = {
   days1to2: number | null
   days2to3: number | null
   days3to4: number | null
-  reactivationGaps: number[]
 }
 
 type GroupEntry = {
@@ -258,7 +257,6 @@ export async function computeTimings(
   const days1to2All: number[] = []
   const days2to3All: number[] = []
   const days3to4All: number[] = []
-  const reactivationAll: number[] = []
 
   let count2nd = 0
   let count3rd = 0
@@ -300,15 +298,6 @@ export async function computeTimings(
       days3to4All.push(days3to4)
     }
 
-    const reactivationGaps: number[] = []
-    for (let i = 1; i < orderDates.length; i++) {
-      const gap = (orderDates[i]! - orderDates[i - 1]!) / (1000 * 60 * 60 * 24)
-      if (gap >= REACTIVATION_GAP_DAYS) {
-        reactivationAll.push(gap)
-        reactivationGaps.push(gap)
-      }
-    }
-
     const customerMetrics: CustomerMetrics = {
       has2nd,
       has3rd,
@@ -316,7 +305,6 @@ export async function computeTimings(
       days1to2,
       days2to3,
       days3to4,
-      reactivationGaps,
     }
 
     const groupKeys = new Set<string>()
@@ -347,15 +335,16 @@ export async function computeTimings(
   }
 
   const totalFirst = firstOrders.length
+  const typical1to2 = pickMetric(days1to2All, params.metric)
   const summary: TimingsSummary = {
     firstOrders: totalFirst,
     secondOrdersPct: totalFirst > 0 ? (count2nd / totalFirst) * 100 : 0,
     thirdOrdersPct: totalFirst > 0 ? (count3rd / totalFirst) * 100 : 0,
     fourthOrdersPct: totalFirst > 0 ? (count4th / totalFirst) * 100 : 0,
-    median1to2: pickMetric(days1to2All, params.metric),
+    median1to2: typical1to2,
     median2to3: pickMetric(days2to3All, params.metric),
     median3to4: pickMetric(days3to4All, params.metric),
-    reactivationDays: pickMetric(reactivationAll, params.metric),
+    reactivationDays: REACTIVATION_PCT_OF_1TO2 * typical1to2,
   }
 
   const groups: TimingsGroupRow[] = []
@@ -370,7 +359,7 @@ export async function computeTimings(
     const d12 = customers.map((c) => c.days1to2).filter((d): d is number => d != null)
     const d23 = customers.map((c) => c.days2to3).filter((d): d is number => d != null)
     const d34 = customers.map((c) => c.days3to4).filter((d): d is number => d != null)
-    const react = customers.flatMap((c) => c.reactivationGaps)
+    const typical1to2Group = d12.length > 0 ? pickMetric(d12, params.metric) : null
 
     groups.push({
       id: entry.id,
@@ -380,10 +369,10 @@ export async function computeTimings(
       secondOrdersPct: firstOrdersCount > 0 ? (count2 / firstOrdersCount) * 100 : 0,
       thirdOrdersPct: firstOrdersCount > 0 ? (count3 / firstOrdersCount) * 100 : 0,
       fourthOrdersPct: firstOrdersCount > 0 ? (count4 / firstOrdersCount) * 100 : 0,
-      days1to2: d12.length > 0 ? pickMetric(d12, params.metric) : null,
+      days1to2: typical1to2Group,
       days2to3: d23.length > 0 ? pickMetric(d23, params.metric) : null,
       days3to4: d34.length > 0 ? pickMetric(d34, params.metric) : null,
-      reactivationDays: react.length > 0 ? pickMetric(react, params.metric) : null,
+      reactivationDays: typical1to2Group != null ? REACTIVATION_PCT_OF_1TO2 * typical1to2Group : null,
     })
   }
 
