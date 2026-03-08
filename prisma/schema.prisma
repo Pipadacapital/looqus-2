@@ -27,23 +27,23 @@ model User {
 }
 
 model Workspace {
-  id                         String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  id                         String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name                       String
-  slug                       String                  @unique
-  logoUrl                    String?                 @map("logo_url")
-  industry                   String?                 @map("industry")
-  monthlyRevenue             String?                 @map("monthly_revenue")
-  storeUrl                   String?                 @map("store_url")
-  plan                       SubscriptionPlan        @default(FREE)
-  createdById                String                  @map("created_by_id") @db.Uuid
-  createdAt                  DateTime                @default(now()) @map("created_at")
-  updatedAt                  DateTime                @updatedAt @map("updated_at")
-  founder_salary_currency    String?                 @db.VarChar(3)
-  founder_salary_monthly     Decimal?                @db.Decimal(12, 2)
-  taxPercent                 Decimal                 @default(0) @map("tax_percent") @db.Decimal(5, 2)
-  timezone                   String                  @default("UTC") @db.VarChar(100)
-  skip_zero_sales_orders     Boolean                 @default(false)
-  skipped_shopify_order_tags String[]                @default([])
+  slug                       String                     @unique
+  logoUrl                    String?                    @map("logo_url")
+  industry                   String?                    @map("industry")
+  monthlyRevenue             String?                    @map("monthly_revenue")
+  storeUrl                   String?                    @map("store_url")
+  plan                       SubscriptionPlan           @default(FREE)
+  createdById                String                     @map("created_by_id") @db.Uuid
+  createdAt                  DateTime                   @default(now()) @map("created_at")
+  updatedAt                  DateTime                   @updatedAt @map("updated_at")
+  founder_salary_currency    String?                    @db.VarChar(3)
+  founder_salary_monthly     Decimal?                   @db.Decimal(12, 2)
+  taxPercent                 Decimal                    @default(0) @map("tax_percent") @db.Decimal(5, 2)
+  timezone                   String                     @default("UTC") @db.VarChar(100)
+  skip_zero_sales_orders     Boolean                    @default(false)
+  skipped_shopify_order_tags String[]                   @default([])
   auditLogs                  AuditLog[]
   google_ads_connections     google_ads_connections?
   invitations                Invitation[]
@@ -51,29 +51,31 @@ model Workspace {
   notifications              Notification[]
   shiprocketConnection       ShiprocketConnection?
   shopifyConnections         ShopifyConnection[]
+  aiInsightsCache            WorkspaceAiInsightsCache[]
   cogsSettings               WorkspaceCogsSettings?
   costs                      WorkspaceCost[]
   workspaceDailyMetrics      WorkspaceDailyMetrics[]
   members                    WorkspaceMember[]
   miscExpenses               WorkspaceMiscExpense[]
-  aiInsightsCache            WorkspaceAiInsightsCache[]
-  createdBy                  User                    @relation("WorkspaceCreator", fields: [createdById], references: [id])
+  createdBy                  User                       @relation("WorkspaceCreator", fields: [createdById], references: [id])
 
   @@map("workspaces")
 }
+
 model WorkspaceAiInsightsCache {
-  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  workspaceId  String   @map("workspace_id") @db.Uuid
-  periodDays   Int      @map("period_days")
-  insights     Json     @db.JsonB
-  modelUsed    String   @map("model_used") @db.VarChar(120)
-  generatedAt  DateTime @default(now()) @map("generated_at")
-  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId String    @map("workspace_id") @db.Uuid
+  periodDays  Int       @map("period_days")
+  insights    Json
+  modelUsed   String    @map("model_used") @db.VarChar(120)
+  generatedAt DateTime  @default(now()) @map("generated_at")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@unique([workspaceId, periodDays])
   @@index([workspaceId])
   @@map("workspace_ai_insights_cache")
 }
+
 model WorkspaceCogsSettings {
   id                     String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   workspaceId            String    @unique @map("workspace_id") @db.Uuid

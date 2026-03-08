@@ -19,6 +19,7 @@ import {
   IconTruck,
   IconBrain,
   IconPackage,
+  IconShoppingBag,
 } from "@tabler/icons-react"
 
 export const sidebarMenuData = {
@@ -59,6 +60,16 @@ export const sidebarMenuData = {
       icon: IconChartLine,
     },
     {
+      title: "Lifetime Value",
+      path: "lifetime-value",
+      icon: IconReport,
+    },
+    {
+      title: "Products",
+      path: "products",
+      icon: IconShoppingBag,
+    },
+    {
       title: "Timings",
       path: "timings",
       icon: IconClock,
@@ -70,7 +81,7 @@ export const sidebarMenuData = {
     },
     {
       title: "AI",
-      path: "ai",
+      path: "ai-2",
       icon: IconBrain,
     },
     {
@@ -100,16 +111,8 @@ export const sidebarMenuData = {
       path: "settings/ads-backfill",
       icon: IconRefresh,
     },
-    {
-      title: "Get Help",
-      url: "#",
-      icon: IconHelp,
-    },
-    {
-      title: "Search",
-      url: "#",
-      icon: IconSearch,
-    },
+
+ 
   ],
   documents: [
     {

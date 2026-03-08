@@ -4,6 +4,12 @@ import { prisma } from '@/lib/prisma'
 import { getDaysInMonth } from 'date-fns'
 import { getBuckets, getBucketUtcDateStrings, allocateMonthlyToBucket, type Granularity } from '@/lib/pnl/buckets'
 import { totalChargesFromRaw } from '@/lib/shiprocket-charges'
+import {
+  getOrderInclusionWhereFromWorkspace,
+  getFilteredDailyAggregates,
+  hasNoOrderFilters,
+  normalizeOrderFilterSettings,
+} from '@/lib/order-filters'
 
 const EXCHANGE_RATES: Record<string, number> = {
   USD: 1,
@@ -143,8 +149,10 @@ export async function GET(
   }
 
   const storeCurrency = 'INR'
+  const orderFilterSettings = normalizeOrderFilterSettings(workspace)
+  const orderInclusionWhere = getOrderInclusionWhereFromWorkspace(workspace)
 
-  // Load all data in parallel
+  // Load all data in parallel (orders and line items respect workspace order filters)
   const [
     dailyAnalytics,
     workspaceCosts,
@@ -155,6 +163,7 @@ export async function GET(
     googleAdDaily,
     shiprocketShipments,
     allOrdersInRange,
+    filteredDaily,
   ] = await Promise.all([
     prisma.shopifyAnalyticsDaily.findMany({
       where: { connectionId, date: { gte: fromDate, lte: toDate } },
@@ -184,7 +193,11 @@ export async function GET(
     prisma.shopifyLineItem.findMany({
       where: {
         connectionId,
-        order: { processedAt: { gte: fromDate, lte: toDate } },
+        order: {
+          connectionId,
+          processedAt: { gte: fromDate, lte: toDate },
+          ...orderInclusionWhere,
+        },
       },
       select: {
         productShopifyId: true,
@@ -230,6 +243,7 @@ export async function GET(
       where: {
         connectionId,
         processedAt: { gte: fromDate, lte: toDate },
+        ...orderInclusionWhere,
       },
       select: {
         id: true,
@@ -239,6 +253,9 @@ export async function GET(
         totalTax: true,
       },
     }),
+    hasNoOrderFilters(orderFilterSettings)
+      ? Promise.resolve(new Map<string, { grossSales: number; ordersCount: number }>())
+      : getFilteredDailyAggregates(prisma, connectionId, fromDate, toDate, orderFilterSettings),
   ])
 
   const coqMap = new Map(products.filter((p) => p.coq).map((p) => [p.shopifyId, Number(p.coq)]))
@@ -279,18 +296,16 @@ export async function GET(
     dailyAdSpend.set(d, (dailyAdSpend.get(d) ?? 0) + spend)
   }
 
-  // First order per customer (all-time) for NC/EC
-  const firstOrderByCustomer = await prisma.$queryRaw<
-    { customer_shopify_id: string; first_at: Date }[]
-  >`
-    SELECT customer_shopify_id, MIN(processed_at) AS first_at
-    FROM shopify_orders
-    WHERE connection_id = ${connectionId}::uuid
-      AND customer_shopify_id IS NOT NULL
-      AND customer_shopify_id != ''
-    GROUP BY customer_shopify_id
-  `
-  const firstAtMap = new Map(firstOrderByCustomer.map((r) => [r.customer_shopify_id, r.first_at]))
+  // First order per customer (from filtered orders in range) for NC/EC
+  const firstAtMap = new Map<string, Date>()
+  for (const order of allOrdersInRange) {
+    const cid = order.customerShopifyId
+    if (!cid || cid === '') continue
+    const existing = firstAtMap.get(cid)
+    if (!existing || order.processedAt < existing) {
+      firstAtMap.set(cid, order.processedAt)
+    }
+  }
 
   // NC/EC revenue by bucket: for each order in range, is it first? attribute (total_price - total_tax) to bucket
   const bucketNcRevenue = new Map<string, number>()
@@ -379,14 +394,24 @@ export async function GET(
     let fixedCosts = 0
 
     for (const dateStr of dateStrings) {
+      const filtered = filteredDaily.get(dateStr)
       const daily = dailyAnalytics.find((d) => d.date.toISOString().slice(0, 10) === dateStr)
-      const dayOrders = daily?.ordersCount ?? 0
-      const dayGross = daily ? Number(daily.grossSales) : 0
-      if (daily) {
+      const dayOrders = filtered
+        ? filtered.ordersCount
+        : (daily?.ordersCount ?? 0)
+      const dayGross = filtered
+        ? filtered.grossSales
+        : (daily ? Number(daily.grossSales) : 0)
+      if (filtered) {
+        grossSales += filtered.grossSales
+        ordersCount += filtered.ordersCount
+      } else if (daily) {
         grossSales += Number(daily.grossSales)
+        ordersCount += daily.ordersCount
+      }
+      if (daily) {
         totalDiscount += Number(daily.totalDiscount)
         totalTaxBucket += Number(daily.totalTax)
-        ordersCount += daily.ordersCount
       }
       cogs += dailyCogs.get(dateStr) ?? 0
       adSpend += dailyAdSpend.get(dateStr) ?? 0
