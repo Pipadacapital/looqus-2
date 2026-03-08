@@ -7,6 +7,10 @@ import {
   computeDaysLeft,
   computeSellThrough,
 } from '@/lib/inventory-constants'
+import {
+  getOrderInclusionRawFragment,
+  normalizeOrderFilterSettings,
+} from '@/lib/order-filters'
 
 export async function GET(
   request: NextRequest,
@@ -72,6 +76,15 @@ export async function GET(
     })
   }
 
+  const orderInclusionFragment = getOrderInclusionRawFragment(
+    normalizeOrderFilterSettings(workspace),
+    'o'
+  )
+  const orderInclusionFragmentO2 = getOrderInclusionRawFragment(
+    normalizeOrderFilterSettings(workspace),
+    'o2'
+  )
+
   // ── Debug: prove order data availability (min/max dates, counts by window) ──
   if (debug) {
     const asOfEnd = new Date(asOf + 'T23:59:59.999Z')
@@ -89,10 +102,11 @@ export async function GET(
           MIN(o.processed_at) as min_processed_at,
           MAX(o.processed_at) as max_processed_at,
           COUNT(DISTINCT o.id)::bigint as order_count,
-          (SELECT COUNT(*)::bigint FROM shopify_line_items li WHERE li.order_id IN (SELECT id FROM shopify_orders WHERE connection_id = ${connectionId}::uuid AND cancelled_at IS NULL)) as line_item_count
+          (SELECT COUNT(*)::bigint FROM shopify_line_items li WHERE li.order_id IN (SELECT id FROM shopify_orders o2 WHERE o2.connection_id = ${connectionId}::uuid AND o2.cancelled_at IS NULL ${orderInclusionFragmentO2})) as line_item_count
         FROM shopify_orders o
         WHERE o.connection_id = ${connectionId}::uuid
           AND o.cancelled_at IS NULL
+          ${orderInclusionFragment}
       `,
       prisma.$queryRaw<
         Array<{
@@ -108,12 +122,13 @@ export async function GET(
           COUNT(*) FILTER (WHERE o.processed_at < ${start90})::bigint as orders_older_than_90,
           COUNT(*) FILTER (WHERE o.processed_at < ${start180})::bigint as orders_older_than_180,
           COUNT(*) FILTER (WHERE o.processed_at < ${start360})::bigint as orders_older_than_360,
-          (SELECT COUNT(*)::bigint FROM shopify_line_items li JOIN shopify_orders o2 ON o2.id = li.order_id WHERE o2.connection_id = ${connectionId}::uuid AND o2.cancelled_at IS NULL AND o2.processed_at < ${start90}) as line_items_90,
-          (SELECT COUNT(*)::bigint FROM shopify_line_items li JOIN shopify_orders o2 ON o2.id = li.order_id WHERE o2.connection_id = ${connectionId}::uuid AND o2.cancelled_at IS NULL AND o2.processed_at < ${start180}) as line_items_180,
-          (SELECT COUNT(*)::bigint FROM shopify_line_items li JOIN shopify_orders o2 ON o2.id = li.order_id WHERE o2.connection_id = ${connectionId}::uuid AND o2.cancelled_at IS NULL AND o2.processed_at < ${start360}) as line_items_360
+          (SELECT COUNT(*)::bigint FROM shopify_line_items li JOIN shopify_orders o2 ON o2.id = li.order_id WHERE o2.connection_id = ${connectionId}::uuid AND o2.cancelled_at IS NULL ${orderInclusionFragmentO2} AND o2.processed_at < ${start90}) as line_items_90,
+          (SELECT COUNT(*)::bigint FROM shopify_line_items li JOIN shopify_orders o2 ON o2.id = li.order_id WHERE o2.connection_id = ${connectionId}::uuid AND o2.cancelled_at IS NULL ${orderInclusionFragmentO2} AND o2.processed_at < ${start180}) as line_items_180,
+          (SELECT COUNT(*)::bigint FROM shopify_line_items li JOIN shopify_orders o2 ON o2.id = li.order_id WHERE o2.connection_id = ${connectionId}::uuid AND o2.cancelled_at IS NULL ${orderInclusionFragmentO2} AND o2.processed_at < ${start360}) as line_items_360
         FROM shopify_orders o
         WHERE o.connection_id = ${connectionId}::uuid
           AND o.cancelled_at IS NULL
+          ${orderInclusionFragment}
       `,
     ])
     const r = rangeRow[0]
@@ -194,6 +209,7 @@ export async function GET(
       l360Start,
       n14lyStart,
       n14lyEnd,
+      orderInclusionFragment,
     })
   }
 
@@ -311,6 +327,7 @@ export async function GET(
         AND o.processed_at >= ${l360Start}
         AND o.processed_at <= ${asOfDate}
         AND o.cancelled_at IS NULL
+        ${orderInclusionFragment}
     ) sales ON true
     LEFT JOIN product_lead_times plt
       ON plt.workspace_id = ${workspace.id}::uuid
@@ -388,11 +405,13 @@ async function handleVariantView(opts: {
   l360Start: Date
   n14lyStart: Date
   n14lyEnd: Date
+  orderInclusionFragment: Prisma.Sql
 }) {
   const {
     productId, connectionId, workspaceId,
     page, pageSize, sort, dir, search,
     asOfDate, l30Start, l90Start, l180Start, l360Start, n14lyStart, n14lyEnd,
+    orderInclusionFragment,
   } = opts
 
   // Fetch the parent product
@@ -506,6 +525,7 @@ async function handleVariantView(opts: {
         AND o.processed_at >= ${l360Start}
         AND o.processed_at <= ${asOfDate}
         AND o.cancelled_at IS NULL
+        ${orderInclusionFragment}
     ) sales ON true
     WHERE sv.product_id = ${productId}::uuid
     ${searchCondition}

@@ -42,6 +42,8 @@ model Workspace {
   founder_salary_monthly  Decimal?                @db.Decimal(12, 2)
   taxPercent              Decimal                 @default(0) @map("tax_percent") @db.Decimal(5, 2)
   timezone                String                  @default("UTC") @db.VarChar(100)
+  skippedShopifyOrderTags String[]                @default([]) @map("skipped_shopify_order_tags")
+  skipZeroSalesOrders     Boolean                 @default(false) @map("skip_zero_sales_orders")
   auditLogs               AuditLog[]
   google_ads_connections  google_ads_connections?
   invitations             Invitation[]
@@ -158,6 +160,7 @@ model ShopifyConnection {
   orders         ShopifyOrder[]
   products       ShopifyProduct[]
   variants       ShopifyVariant[]
+  refundLineItems ShopifyRefundLineItem[]
 
   @@unique([workspaceId, shopDomain])
   @@map("shopify_connections")
@@ -231,6 +234,30 @@ model ShopifyLineItem {
   @@unique([connectionId, shopifyId])
   @@index([orderId])
   @@map("shopify_line_items")
+}
+
+model ShopifyRefundLineItem {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  connectionId      String    @map("connection_id") @db.Uuid
+  shopifyRefundId   String    @map("shopify_refund_id")
+  shopifyRefundLineId String  @map("shopify_refund_line_id")
+  shopifyOrderId    String    @map("shopify_order_id")
+  orderId           String    @map("order_id") @db.Uuid
+  shopifyLineItemId String?   @map("shopify_line_item_id")
+  lineItemId        String?   @map("line_item_id") @db.Uuid
+  productShopifyId  String?   @map("product_shopify_id")
+  sku               String?
+  quantity          Int
+  subtotalAmount    Decimal   @map("subtotal_amount") @db.Decimal(12, 2)
+  totalTaxAmount    Decimal   @default(0) @map("total_tax_amount") @db.Decimal(12, 2)
+  processedAt      DateTime  @map("processed_at")
+  connection        ShopifyConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@unique([connectionId, shopifyRefundLineId])
+  @@index([connectionId, processedAt])
+  @@index([orderId])
+  @@index([connectionId, productShopifyId])
+  @@map("shopify_refund_line_items")
 }
 
 model ShopifyProduct {

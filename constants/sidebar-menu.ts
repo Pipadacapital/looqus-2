@@ -19,6 +19,7 @@ import {
   IconTruck,
   IconBrain,
   IconPackage,
+  IconShoppingBag,
 } from "@tabler/icons-react"
 
 export const sidebarMenuData = {
@@ -57,6 +58,16 @@ export const sidebarMenuData = {
       title: "Cohorts",
       path: "cohorts",
       icon: IconChartLine,
+    },
+    {
+      title: "Lifetime Value",
+      path: "lifetime-value",
+      icon: IconReport,
+    },
+    {
+      title: "Products",
+      path: "products",
+      icon: IconShoppingBag,
     },
     {
       title: "Timings",

@@ -1,6 +1,11 @@
 import type { PrismaClient } from '@prisma/client'
 import { eachDayOfInterval, getDaysInMonth } from 'date-fns'
 import type { CohortMetric, CohortMode, CohortRow, CohortsSummary } from './types'
+import {
+  getOrderInclusionWhere,
+  hasNoOrderFilters,
+  normalizeOrderFilterSettings,
+} from '@/lib/order-filters'
 
 const EXCHANGE_RATES: Record<string, number> = {
   USD: 1,
@@ -32,6 +37,8 @@ export type WorkspaceForCohorts = {
     selected_customer_id: string | null
   } | null
   shiprocketConnection: { id: string; status: string } | null
+  skippedShopifyOrderTags?: string[] | null
+  skipZeroSalesOrders?: boolean | null
 }
 
 type FirstOrderRow = { customer_shopify_id: string; first_at: Date; order_id: string }
@@ -93,13 +100,43 @@ function buildDailyRates(
 /**
  * First order per customer GLOBALLY (all-time), then filter to those whose first_at is in [fromDate, toDate].
  * Cohort row = month of first_order_at; we only include cohorts where first_order_at ∈ [from, to].
+ * When orderFilterSettings is provided and has filters, uses only included orders.
  */
 async function getFirstOrders(
   prisma: PrismaClient,
   connectionId: string,
   fromDate: Date,
-  toDate: Date
+  toDate: Date,
+  orderFilterSettings?: { skippedShopifyOrderTags: string[]; skipZeroSalesOrders: boolean }
 ): Promise<FirstOrderRow[]> {
+  if (orderFilterSettings && !hasNoOrderFilters(orderFilterSettings)) {
+    const inclusionWhere = getOrderInclusionWhere(orderFilterSettings)
+    const orders = await prisma.shopifyOrder.findMany({
+      where: {
+        connectionId,
+        customerShopifyId: { not: null, notIn: [''] },
+        processedAt: { lte: toDate },
+        ...inclusionWhere,
+      },
+      select: { id: true, customerShopifyId: true, processedAt: true },
+    })
+    const firstByCustomer = new Map<string, { firstAt: Date; orderId: string }>()
+    for (const o of orders) {
+      const cid = o.customerShopifyId
+      if (!cid) continue
+      const existing = firstByCustomer.get(cid)
+      if (!existing || o.processedAt < existing.firstAt) {
+        firstByCustomer.set(cid, { firstAt: o.processedAt, orderId: o.id })
+      }
+    }
+    return [...firstByCustomer.entries()]
+      .filter(([, v]) => v.firstAt >= fromDate && v.firstAt <= toDate)
+      .map(([customer_shopify_id, v]) => ({
+        customer_shopify_id,
+        first_at: v.firstAt,
+        order_id: v.orderId,
+      }))
+  }
   const rows = await prisma.$queryRaw<FirstOrderRow[]>`
     WITH first_orders AS (
       SELECT customer_shopify_id, MIN(processed_at) AS first_at
@@ -203,14 +240,14 @@ async function getDailyReturnsAndSales(
 ): Promise<Map<string, { grossSales: number; totalReturns: number }>> {
   const rows = await prisma.shopifyAnalyticsDaily.findMany({
     where: { connectionId, date: { gte: fromDate, lte: toDate } },
-    select: { date: true, grossSales: true, totalReturns: true },
+    select: { date: true, grossSales: true, total_returns: true },
   })
   const map = new Map<string, { grossSales: number; totalReturns: number }>()
   for (const r of rows) {
     const dateStr = r.date.toISOString().slice(0, 10)
     map.set(dateStr, {
       grossSales: Number(r.grossSales),
-      totalReturns: Number(r.totalReturns ?? 0),
+      totalReturns: Number(r.total_returns ?? 0),
     })
   }
   return map
@@ -447,8 +484,11 @@ export async function computeCohorts(
   const toDateExtended = new Date(toDate)
   toDateExtended.setUTCDate(toDateExtended.getUTCDate() + 360)
 
+  const orderFilterSettings = normalizeOrderFilterSettings(workspace)
+  const orderInclusionWhere = getOrderInclusionWhere(orderFilterSettings)
+
   const [firstOrders, dailyRates, adSpendByMonth, totalAdSpend, rtoIds, dailyReturnsAndSales, dailyAdSpend] = await Promise.all([
-    getFirstOrders(prisma, connectionId, fromDate, toDate),
+    getFirstOrders(prisma, connectionId, fromDate, toDate, orderFilterSettings),
     buildDailyRates(prisma, workspace.id, connectionId, fromDate, toDateExtended, 'INR'),
     getAdSpendByMonth(prisma, workspace, fromDate, toDate),
     getTotalAdSpend(prisma, workspace, fromDate, toDate),
@@ -475,6 +515,7 @@ export async function computeCohorts(
       connectionId,
       customerShopifyId: { in: firstOrders.map((r) => r.customer_shopify_id) },
       processedAt: { gte: fromDate, lte: toDateExtended },
+      ...orderInclusionWhere,
     },
     select: { id: true, customerShopifyId: true, processedAt: true, totalPrice: true, orderNumber: true, name: true },
   })

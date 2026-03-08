@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
 import { eachDayOfInterval, getDaysInMonth } from 'date-fns'
+import { getOrderInclusionWhereFromWorkspace } from '@/lib/order-filters'
 
 // MVP Exchange Rates (Fallback to standard if a live API isn't used)
 const EXCHANGE_RATES: Record<string, number> = {
@@ -435,6 +436,7 @@ export async function GET(
     if (channelIds.length > 0) {
       const cleanIds = channelIds.map((id) => id.replace(/^#/, ''))
 
+      const orderInclusionWhere = getOrderInclusionWhereFromWorkspace(workspace)
       const matchedOrders = await prisma.shopifyOrder.findMany({
         where: {
           connectionId,
@@ -442,6 +444,7 @@ export async function GET(
             { orderNumber: { in: cleanIds } },
             { name: { in: channelIds } },
           ],
+          ...orderInclusionWhere,
         },
         select: { totalPrice: true },
       })

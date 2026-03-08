@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/server'
 import { redirect } from 'next/navigation'
 import { CogsSettingsContent } from './cogs-settings-content'
+import { FiltersSettingsContent } from './filters-settings-content'
 import { WorkspaceSettingsContent } from './workspace-settings-content'
 
 export default async function SettingsPage() {
@@ -14,6 +15,7 @@ export default async function SettingsPage() {
   return (
     <div className="mx-auto flex w-full justify-center items-center flex-col gap-10 py-4 md:py-6">
       <WorkspaceSettingsContent />
+      <FiltersSettingsContent />
       <CogsSettingsContent />
     </div>
   )

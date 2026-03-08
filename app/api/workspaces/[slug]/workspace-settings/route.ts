@@ -8,8 +8,11 @@ const updateWorkspaceSettingsSchema = z.object({
     .string()
     .trim()
     .min(1)
-    .refine(isValidTimeZone, 'Invalid timezone'),
-  taxPercent: z.coerce.number().min(0).max(100),
+    .refine(isValidTimeZone, 'Invalid timezone')
+    .optional(),
+  taxPercent: z.coerce.number().min(0).max(100).optional(),
+  skippedShopifyOrderTags: z.array(z.string()).optional(),
+  skipZeroSalesOrders: z.boolean().optional(),
 })
 
 function isValidTimeZone(value: string) {
@@ -52,9 +55,13 @@ export async function GET(
     return NextResponse.json({ error: 'Workspace not found' }, { status: 404 })
   }
 
+  const skippedTags = workspace.skippedShopifyOrderTags ?? []
+  const skipZero = workspace.skipZeroSalesOrders ?? false
   return NextResponse.json({
     timezone: workspace.timezone,
     taxPercent: Number(workspace.taxPercent),
+    skippedShopifyOrderTags: skippedTags,
+    skipZeroSalesOrders: skipZero,
   })
 }
 
@@ -89,17 +96,28 @@ export async function PATCH(
     const json = await request.json()
     const body = updateWorkspaceSettingsSchema.parse(json)
 
+    const data: Parameters<typeof prisma.workspace.update>[0]['data'] = {}
+    if (body.timezone !== undefined) data.timezone = body.timezone
+    if (body.taxPercent !== undefined) data.taxPercent = body.taxPercent
+    if (body.skippedShopifyOrderTags !== undefined) {
+      data.skippedShopifyOrderTags = body.skippedShopifyOrderTags
+    }
+    if (body.skipZeroSalesOrders !== undefined) {
+      data.skipZeroSalesOrders = body.skipZeroSalesOrders
+    }
+
     const updatedWorkspace = await prisma.workspace.update({
       where: { id: workspace.id },
-      data: {
-        timezone: body.timezone,
-        taxPercent: body.taxPercent,
-      },
+      data,
     })
 
+    const skippedTags = updatedWorkspace.skippedShopifyOrderTags ?? []
+    const skipZero = updatedWorkspace.skipZeroSalesOrders ?? false
     return NextResponse.json({
       timezone: updatedWorkspace.timezone,
       taxPercent: Number(updatedWorkspace.taxPercent),
+      skippedShopifyOrderTags: skippedTags,
+      skipZeroSalesOrders: skipZero,
     })
   } catch (error) {
     if (error instanceof z.ZodError) {
