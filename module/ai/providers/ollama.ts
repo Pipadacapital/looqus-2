@@ -8,7 +8,7 @@ import { prisma } from "@/lib/prisma";
 const settings = await prisma.systemSettings.findFirst()
 console.log('settingssssssssssssssssssssssssssss', settings)
 const rawOllamaBaseUrl =
- "https://isauxetic-benchless-van.ngrok-free.dev"
+ settings?.ollamaUrl ?? settings?.ollamaUrl ?? "http://localhost:11434"
 const OLLAMA_BASE_URL = rawOllamaBaseUrl?.replace(/\/$/, '')
 
 export type OllamaGenerateOptions = {
