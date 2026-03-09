@@ -111,16 +111,66 @@ export async function GET(
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
-  const result = await computeProducts(prisma, workspace as Parameters<typeof computeProducts>[1], {
-    from,
-    to,
-    groupBy: validGroupBy,
-    search,
-    sort: validSort,
-    dir,
-    page,
-    pageSize,
-  })
+  const connectionId = workspace.shopifyConnections?.[0]?.id ?? null
+  if (process.env.NODE_ENV === 'development') {
+    const [ordersCount, lineItemsCount, dailyCount, refundCount] = await Promise.all([
+      connectionId
+        ? prisma.shopifyOrder.count({
+            where: {
+              connectionId,
+              processedAt: { gte: fromDate, lte: toDate },
+            },
+          })
+        : Promise.resolve(0),
+      connectionId
+        ? prisma.shopifyLineItem.count({
+            where: { connection: { id: connectionId } },
+          })
+        : Promise.resolve(0),
+      connectionId
+        ? prisma.shopifyAnalyticsDaily.count({
+            where: { connectionId, date: { gte: fromDate, lte: toDate } },
+          })
+        : Promise.resolve(0),
+      connectionId
+        ? prisma.shopify_refund_line_items.count({
+            where: {
+              connection_id: connectionId,
+              processed_at: { gte: fromDate, lte: toDate },
+            },
+          })
+        : Promise.resolve(0),
+    ])
+    console.log('[Products] workspace scope', {
+      workspaceId: workspace.id,
+      slug,
+      connectionId,
+      ordersInRange: ordersCount,
+      lineItems: lineItemsCount,
+      analyticsDaily: dailyCount,
+      refundLineItemsInRange: refundCount,
+    })
+  }
 
-  return NextResponse.json(result)
+  try {
+    const result = await computeProducts(prisma, workspace as Parameters<typeof computeProducts>[1], {
+      from,
+      to,
+      groupBy: validGroupBy,
+      search,
+      sort: validSort,
+      dir,
+      page,
+      pageSize,
+    })
+    return NextResponse.json(result)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    const stack = err instanceof Error ? err.stack : undefined
+    console.error('[Products] computeProducts failed', { slug, workspaceId: workspace.id, message, stack })
+    return NextResponse.json(
+      { error: 'Products computation failed', details: process.env.NODE_ENV === 'development' ? message : undefined },
+      { status: 500 }
+    )
+  }
 }

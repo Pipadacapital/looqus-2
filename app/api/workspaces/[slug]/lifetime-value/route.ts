@@ -73,6 +73,7 @@ export async function GET(
         select: { id: true },
         take: 1,
       },
+      cogsSettings: true,
       meta_ads_connections: {
         select: {
           id: true,

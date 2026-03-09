@@ -90,6 +90,7 @@ const STATUS_COLORS: Record<InventoryStatus, string> = {
     'Severely Overstocked': 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
     'Overstocked': 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400',
     'Healthy': 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400',
+    'Restock Soon': 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
     'Out of stock': 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400',
 }
 
@@ -193,8 +194,9 @@ function useInventoryParams() {
     const searchParams = useSearchParams()
     const page = Number(searchParams.get('page')) || 1
     const pageSize = Number(searchParams.get('pageSize')) || 20
-    const sort = searchParams.get('sort') || 'title'
-    const dir = (searchParams.get('dir') || 'asc') as 'asc' | 'desc'
+    const sort = searchParams.get('sort') || 'quantity'
+    const defaultDir = sort === 'quantity' ? 'desc' : 'asc'
+    const dir = (searchParams.get('dir') || defaultDir) as 'asc' | 'desc'
     const search = searchParams.get('search') || ''
     const asOf =
         searchParams.get('asOf') || format(new Date(), 'yyyy-MM-dd')
@@ -524,7 +526,7 @@ export function InventoryTable() {
     // ─── Sortable columns ───
 
     const sortableColumns = [
-        'title', 'vendor', 'quantity', 'qtyL30', 'qtyL90',
+        'title', 'vendor', 'quantity', 'status', 'qtyL30', 'qtyL90',
         'qtyL180', 'qtyL360', 'qtyN14ly', 'compareAtPrice', 'costValue',
         'price', 'sellThrough', 'daysLeft',
     ]

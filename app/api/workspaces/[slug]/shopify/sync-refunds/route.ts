@@ -5,7 +5,7 @@ import { syncRefunds } from '@/lib/shopify/refund-sync'
 
 /**
  * POST: Sync refund line items from Shopify for this workspace's connection.
- * Query params: from (YYYY-MM-DD), to (YYYY-MM-DD). Defaults: last 365 days.
+ * Query params: from (YYYY-MM-DD), to (YYYY-MM-DD). Defaults: last 4 years.
  * Uses Shopify Admin GraphQL Order.refunds.refundLineItems as source of truth.
  */
 export async function POST(
@@ -13,9 +13,8 @@ export async function POST(
   context: { params: Promise<{ slug: string }> }
 ) {
   const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+  const { data: { user: userFromGetUser } } = await supabase.auth.getUser()
+  const user = userFromGetUser ?? (await supabase.auth.getSession()).data.session?.user ?? null
 
   if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -64,7 +63,7 @@ export async function POST(
     : new Date()
   const fromDate = fromParam
     ? new Date(fromParam + 'T00:00:00.000Z')
-    : new Date(toDate.getTime() - 365 * 24 * 60 * 60 * 1000)
+    : new Date(toDate.getTime() - 4 * 365 * 24 * 60 * 60 * 1000)
 
   if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime()) || fromDate > toDate) {
     return NextResponse.json({ error: 'Invalid from/to date range' }, { status: 400 })

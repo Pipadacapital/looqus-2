@@ -1,6 +1,8 @@
 import type { PrismaClient } from '@prisma/client'
 import { getDaysInMonth } from 'date-fns'
 import { RTO_STATUS_CODES } from './constants'
+import { resolveLineItemCogs, normalizeCogsSettings } from '@/lib/cogs'
+import { getDailyVariableContribution } from '@/lib/workspace-costs'
 
 export type WorkspaceForMetrics = {
   id: string
@@ -140,55 +142,17 @@ export async function computeWorkspaceDayMetrics(
     },
   })
 
-  const cogsSettings = workspace.cogsSettings
-  const overridePct = cogsSettings ? Number(cogsSettings.overrideAllCogsPercent) : 0
-  const fallbackPct = cogsSettings ? Number(cogsSettings.fallbackCogsPercent) : 0
-  const markupPct = cogsSettings ? Number(cogsSettings.cogsMarkupPercent) : 0
-
+  const cogsSettings = normalizeCogsSettings(workspace.cogsSettings as any)
   let cogs = 0
-  let totalLineItemRevenue = 0
-  let countOverride = 0
-  let countProductCoq = 0
-  let countFallback = 0
-  let countZero = 0
   for (const item of lineItems) {
-    const revenue = Number(item.price) * item.quantity
-    totalLineItemRevenue += revenue
-    let baseCogs: number
-    if (overridePct > 0) {
-      baseCogs = revenue * (overridePct / 100)
-      countOverride++
-    } else {
-      const coq = item.productShopifyId ? (coqMap.get(item.productShopifyId) ?? 0) : 0
-      if (coq > 0) {
-        baseCogs = coq * item.quantity
-        countProductCoq++
-      } else if (fallbackPct > 0) {
-        baseCogs = revenue * (fallbackPct / 100)
-        countFallback++
-      } else {
-        baseCogs = 0
-        countZero++
-      }
-    }
-    const finalCogs = markupPct > 0 ? baseCogs * (1 + markupPct / 100) : baseCogs
-    cogs += finalCogs
+    cogs += resolveLineItemCogs(
+      { price: Number(item.price), quantity: Number(item.quantity), productShopifyId: item.productShopifyId },
+      coqMap,
+      cogsSettings
+    )
   }
-
-  if (lineItems.length > 0) {
-    console.log('[compute-daily] COGS', {
-      date: dateStr,
-      workspaceId: workspace.id,
-      overridePct,
-      fallbackPct,
-      markupPct,
-      lineItemRevenue: Math.round(totalLineItemRevenue * 100) / 100,
-      countOverride,
-      countProductCoq,
-      countFallback,
-      countZero,
-      totalCogs: Math.round(cogs * 100) / 100,
-    })
+  if (process.env.NODE_ENV === 'development' && lineItems.length > 0) {
+    console.log('[compute-daily] COGS', { date: dateStr, workspaceId: workspace.id, totalCogs: Math.round(cogs * 100) / 100 })
   }
 
   let shipping = 0
@@ -198,18 +162,22 @@ export async function computeWorkspaceDayMetrics(
     const costFromStr = cost.effectiveFrom.toISOString().slice(0, 10)
     const costToStr = cost.effectiveTo ? cost.effectiveTo.toISOString().slice(0, 10) : '9999-12-31'
     if (dateStr < costFromStr || dateStr > costToStr) continue
-    const amount = Number(cost.amount)
-    if (cost.costType === 'SHIPPING') {
-      shipping += amount * ordersCount
-    } else if (cost.costType === 'PACKAGING') {
-      packaging += amount * ordersCount
-    } else if (cost.costType === 'WEBSITE') {
-      if (cost.isPercent) {
-        websiteCharges += (amount / 100) * grossSales
-      } else {
-        websiteCharges += amount * ordersCount
-      }
-    }
+    const contribution = getDailyVariableContribution(
+      {
+        costType: cost.costType,
+        amount: Number(cost.amount),
+        currency: cost.currency,
+        isPercent: cost.isPercent,
+        billingMode: cost.billingMode ?? 'monthly',
+      },
+      dateStr,
+      ordersCount,
+      grossSales,
+      storeCurrency
+    )
+    if (cost.costType === 'SHIPPING') shipping += contribution
+    else if (cost.costType === 'PACKAGING') packaging += contribution
+    else if (cost.costType === 'WEBSITE') websiteCharges += contribution
   }
 
   const cm1 = netSales - cogs - shipping - packaging - websiteCharges

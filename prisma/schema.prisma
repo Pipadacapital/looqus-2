@@ -133,7 +133,7 @@ model WorkspaceCost {
   currency      String?                  @default("USD") @db.VarChar(3)
   createdAt     DateTime                 @default(now()) @map("created_at")
   isPercent     Boolean                  @default(false) @map("is_percent")
-  billing_mode  WorkspaceCostBillingMode @default(monthly)
+  billingMode   WorkspaceCostBillingMode @default(monthly) @map("billing_mode")
   workspace     Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@index([workspaceId, costType, effectiveFrom, effectiveTo])
@@ -611,6 +611,15 @@ model shopify_refund_line_items {
   @@index([order_id])
 }
 
+model SystemSettings {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ollamaUrl String   @map("ollama_url")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("system_settings")
+}
+
 enum SystemRole {
   SUPERADMIN
   USER
@@ -677,13 +686,4 @@ enum WorkspaceCostType {
 enum WorkspaceCostBillingMode {
   monthly
   per_order
-}
-
-model SystemSettings {
-  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  ollamaUrl String   @map("ollama_url")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  @@map("system_settings")
 }

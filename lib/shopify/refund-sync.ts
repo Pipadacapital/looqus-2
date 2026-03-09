@@ -7,7 +7,7 @@
  *
  * GraphQL query (OrdersWithRefunds) fetches:
  * - orders: id (order GID)
- * - refunds: id, processedAt
+ * - refunds: id, createdAt (used as processed_at for storage; processedAt not available on all API versions)
  * - refundLineItems: id, quantity, subtotalSet.shopMoney.amount,
  *   totalTaxSet.shopMoney.amount, lineItem.id (original line item GID)
  *
@@ -30,7 +30,7 @@ const REFUNDS_ORDER_QUERY = `
           id
           refunds(first: 50) {
             id
-            processedAt
+            createdAt
             refundLineItems(first: 100) {
               edges {
                 node {
@@ -57,7 +57,7 @@ type OrdersWithRefundsResponse = {
         id: string
         refunds: Array<{
           id: string
-          processedAt: string
+          createdAt: string | null
           refundLineItems: {
             edges: Array<{
               node: {
@@ -155,7 +155,7 @@ export async function syncRefunds(params: SyncRefundsParams): Promise<SyncRefund
 
       for (const refund of orderNode.refunds ?? []) {
         const refundLineItems = refund.refundLineItems?.edges ?? []
-        const processedAt = refund.processedAt ? new Date(refund.processedAt) : new Date()
+        const processedAt = refund.createdAt ? new Date(refund.createdAt) : new Date()
 
         for (const rliEdge of refundLineItems) {
           const rli = rliEdge.node

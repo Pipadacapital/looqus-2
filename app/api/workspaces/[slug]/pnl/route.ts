@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
+import { Decimal } from '@prisma/client/runtime/library'
 import { getDaysInMonth } from 'date-fns'
 import { getBuckets, getBucketUtcDateStrings, allocateMonthlyToBucket, type Granularity } from '@/lib/pnl/buckets'
 import { totalChargesFromRaw } from '@/lib/shiprocket-charges'
@@ -10,6 +11,8 @@ import {
   hasNoOrderFilters,
   normalizeOrderFilterSettings,
 } from '@/lib/order-filters'
+import { computeLineItemsCogs, normalizeCogsSettings } from '@/lib/cogs'
+import { getDailyVariableContribution } from '@/lib/workspace-costs'
 
 const EXCHANGE_RATES: Record<string, number> = {
   USD: 1,
@@ -97,6 +100,7 @@ export async function GET(
         select: { id: true },
         take: 1,
       },
+      cogsSettings: true,
       meta_ads_connections: {
         select: {
           id: true,
@@ -129,8 +133,11 @@ export async function GET(
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
-  const connectionId = workspace.shopifyConnections[0]?.id
+  const connectionId = workspace.shopifyConnections?.[0]?.id ?? null
   if (!connectionId) {
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[P&L] No Shopify connection', { workspaceId: workspace.id, slug })
+    }
     return NextResponse.json({ rows: [], currency: 'INR' })
   }
 
@@ -202,6 +209,7 @@ export async function GET(
       select: {
         productShopifyId: true,
         quantity: true,
+        price: true,
         order: { select: { id: true, processedAt: true } },
       },
     }),
@@ -251,6 +259,7 @@ export async function GET(
         processedAt: true,
         totalPrice: true,
         totalTax: true,
+        totalDiscount: true,
       },
     }),
     hasNoOrderFilters(orderFilterSettings)
@@ -258,22 +267,78 @@ export async function GET(
       : getFilteredDailyAggregates(prisma, connectionId, fromDate, toDate, orderFilterSettings),
   ])
 
-  const coqMap = new Map(products.filter((p) => p.coq).map((p) => [p.shopifyId, Number(p.coq)]))
-
-  // Daily COGS by date
-  const dailyCogs = new Map<string, number>()
-  for (const li of lineItemsInRange) {
-    const coq = li.productShopifyId ? coqMap.get(li.productShopifyId) ?? 0 : 0
-    const cogs = coq * li.quantity
-    const dateStr = li.order.processedAt.toISOString().slice(0, 10)
-    dailyCogs.set(dateStr, (dailyCogs.get(dateStr) ?? 0) + cogs)
+  // Diagnostic: workspace and source row counts (temporary for debugging new-workspace issues)
+  if (process.env.NODE_ENV === 'development') {
+    const ordersCount = allOrdersInRange.length
+    const dailyCount = dailyAnalytics.length
+    console.log('[P&L] workspace scope', {
+      workspaceId: workspace.id,
+      slug,
+      connectionId,
+      dailyAnalyticsRows: dailyCount,
+      ordersInRange: ordersCount,
+      lineItemsInRange: lineItemsInRange.length,
+      bucketsCount: 0,
+    })
   }
+
+  // Fallback: when shopify_analytics_daily is empty but we have orders, derive daily totals from orders
+  // so P&L shows data for newly onboarded workspaces that haven't run analytics sync yet.
+  let effectiveDaily = dailyAnalytics
+  if (effectiveDaily.length === 0 && allOrdersInRange.length > 0) {
+    const byDate = new Map<
+      string,
+      { grossSales: number; totalDiscount: number; totalTax: number; ordersCount: number; total_returns: number; returns: number }
+    >()
+    for (const o of allOrdersInRange) {
+      const dateStr = o.processedAt.toISOString().slice(0, 10)
+      const cur = byDate.get(dateStr) ?? {
+        grossSales: 0,
+        totalDiscount: 0,
+        totalTax: 0,
+        ordersCount: 0,
+        total_returns: 0,
+        returns: 0,
+      }
+      cur.grossSales += Number(o.totalPrice)
+      cur.totalDiscount += Number(o.totalDiscount ?? 0)
+      cur.totalTax += Number(o.totalTax)
+      cur.ordersCount += 1
+      byDate.set(dateStr, cur)
+    }
+    effectiveDaily = [...byDate.entries()].map(([dateStr, v]) => ({
+      date: new Date(dateStr + 'T00:00:00.000Z'),
+      netSales: new Decimal(v.grossSales - Math.abs(v.totalDiscount)),
+      grossSales: new Decimal(v.grossSales),
+      totalTax: new Decimal(v.totalTax),
+      totalDiscount: new Decimal(v.totalDiscount),
+      ordersCount: v.ordersCount,
+      currency: storeCurrency,
+      total_returns: new Decimal(0),
+      returns: new Decimal(0),
+    }))
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[P&L] fallback: derived daily from orders', { days: effectiveDaily.length })
+    }
+  }
+
+  const coqMap = new Map(products.filter((p) => p.coq).map((p) => [p.shopifyId, Number(p.coq)]))
+  const cogsSettings = normalizeCogsSettings(workspace.cogsSettings)
+  const lineItemsWithDate = lineItemsInRange.map((li) => ({
+    price: Number(li.price),
+    quantity: li.quantity,
+    productShopifyId: li.productShopifyId,
+    orderProcessedAt: li.order.processedAt,
+  }))
+  const { dailyCogs } = computeLineItemsCogs(lineItemsWithDate, coqMap, cogsSettings, {
+    logSampleSource: process.env.NODE_ENV === 'development' ? 'pnl' : undefined,
+  })
 
   // Daily total_returns and returns from Shopify-derived fields (shopify_analytics_daily).
   // P&L formulas: refunds = total_returns, productRefunds = returns, shippingRefunds = total_returns - returns.
   const dailyTotalReturns = new Map<string, number>()
   const dailyReturns = new Map<string, number>()
-  for (const d of dailyAnalytics) {
+  for (const d of effectiveDaily) {
     const dateStr = d.date.toISOString().slice(0, 10)
     dailyTotalReturns.set(dateStr, Number(d.total_returns ?? 0))
     dailyReturns.set(dateStr, Number(d.returns ?? 0))
@@ -350,7 +415,7 @@ export async function GET(
   if (shiprocketShipments.length > 0) {
     const shipmentsByMonth = new Map<string, { totalCharges: number; orderCount: number }>()
     const orderCountByMonth = new Map<string, number>()
-    for (const d of dailyAnalytics) {
+    for (const d of effectiveDaily) {
       const ym = d.date.toISOString().slice(0, 7)
       orderCountByMonth.set(ym, (orderCountByMonth.get(ym) ?? 0) + d.ordersCount)
     }
@@ -395,7 +460,7 @@ export async function GET(
 
     for (const dateStr of dateStrings) {
       const filtered = filteredDaily.get(dateStr)
-      const daily = dailyAnalytics.find((d) => d.date.toISOString().slice(0, 10) === dateStr)
+      const daily = effectiveDaily.find((d) => d.date.toISOString().slice(0, 10) === dateStr)
       const dayOrders = filtered
         ? filtered.ordersCount
         : (daily?.ordersCount ?? 0)
@@ -422,13 +487,19 @@ export async function GET(
         const costFromStr = cost.effectiveFrom.toISOString().slice(0, 10)
         const costToStr = cost.effectiveTo ? cost.effectiveTo.toISOString().slice(0, 10) : '9999-12-31'
         if (dateStr >= costFromStr && dateStr <= costToStr) {
-          const amt = convertCurrency(Number(cost.amount), cost.currency || 'USD', storeCurrency)
-          if (cost.costType === 'SHIPPING') variableCosts += amt * dayOrders
-          else if (cost.costType === 'PACKAGING') variableCosts += amt * dayOrders
-          else if (cost.costType === 'WEBSITE') {
-            if (cost.isPercent) variableCosts += (Number(cost.amount) / 100) * dayGross
-            else variableCosts += amt * dayOrders
-          } else if (cost.costType === 'CUSTOM') variableCosts += amt * dayOrders
+          variableCosts += getDailyVariableContribution(
+            {
+              costType: cost.costType,
+              amount: Number(cost.amount),
+              currency: cost.currency,
+              isPercent: cost.isPercent,
+              billingMode: cost.billingMode ?? 'monthly',
+            },
+            dateStr,
+            dayOrders,
+            dayGross,
+            storeCurrency
+          )
         }
       }
 
@@ -533,6 +604,15 @@ export async function GET(
       founderSalaryAllocated: founderAllocated,
       netProfit,
       ordersCount,
+    })
+  }
+
+  if (process.env.NODE_ENV === 'development') {
+    console.log('[P&L] response', {
+      slug,
+      bucketCount: buckets.length,
+      rowsReturned: rows.length,
+      firstThree: rows.slice(0, 3).map((r) => ({ key: r.bucketKey, sales: r.sales, orders: r.ordersCount })),
     })
   }
 

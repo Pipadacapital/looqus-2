@@ -1,11 +1,12 @@
 /**
  * P&L calculator for AI context.
- * Mirrors shopify-analytics/route.ts exactly so AI Insights shows
- * the same CM1 / CM2 / CM3 figures as the Analytics page.
+ * Uses shared COGS resolution (lib/cogs) so AI Insights matches Analytics/PnL.
  */
 import type { PrismaClient } from '@prisma/client'
 import type { AiPnlData, AiPnlSummary } from './types'
 import { getDaysInMonth, eachDayOfInterval } from 'date-fns'
+import { resolveLineItemCogs, normalizeCogsSettings } from '@/lib/cogs'
+import { getDailyVariableContribution } from '@/lib/workspace-costs'
 
 const EXCHANGE_RATES: Record<string, number> = {
   USD: 1, INR: 83.5, EUR: 0.92, GBP: 0.79, AUD: 1.53, CAD: 1.35,
@@ -111,30 +112,16 @@ export async function calcPnl(
       : Promise.resolve([]),
   ])
 
-  // ── COGS (mirrors shopify-analytics/route.ts lines 168-204 exactly) ──────
-  const cogsSettings = workspace.cogsSettings
-  const overridePct = cogsSettings ? Number(cogsSettings.overrideAllCogsPercent) : 0
-  const fallbackPct = cogsSettings ? Number(cogsSettings.fallbackCogsPercent) : 0
-  const markupPct = cogsSettings ? Number(cogsSettings.cogsMarkupPercent) : 0
-  const coqMap = new Map(products.filter(p => p.coq).map(p => [p.shopifyId, Number(p.coq)]))
-
+  // ── COGS (shared resolver) ──────
+  const settings = normalizeCogsSettings(workspace.cogsSettings)
+  const coqMap = new Map(products.filter((p) => p.coq).map((p) => [p.shopifyId, Number(p.coq)]))
   let totalCogs = 0
   for (const item of lineItems) {
-    const revenue = Number(item.price) * item.quantity
-    let baseCogs: number
-    if (overridePct > 0) {
-      baseCogs = revenue * (overridePct / 100)
-    } else {
-      const coq = item.productShopifyId ? (coqMap.get(item.productShopifyId) ?? 0) : 0
-      if (coq > 0) {
-        baseCogs = coq * item.quantity
-      } else if (fallbackPct > 0) {
-        baseCogs = revenue * (fallbackPct / 100)
-      } else {
-        baseCogs = 0
-      }
-    }
-    totalCogs += markupPct > 0 ? baseCogs * (1 + markupPct / 100) : baseCogs
+    totalCogs += resolveLineItemCogs(
+      { price: Number(item.price), quantity: item.quantity, productShopifyId: item.productShopifyId },
+      coqMap,
+      settings
+    )
   }
 
   // ── Net Sales (DB field directly — mirrors shopify-analytics/route.ts line 243) ──
@@ -143,29 +130,37 @@ export async function calcPnl(
   const totalDiscount = dailyAnalytics.reduce((sum, d) => sum + Number(d.totalDiscount), 0)
   const ordersCount = dailyAnalytics.reduce((sum, d) => sum + d.ordersCount, 0)
 
-  // ── Variable costs (SHIPPING + PACKAGING + WEBSITE only — mirrors route.ts lines 465-504) ──
+  // ── Variable costs (SHIPPING + PACKAGING + WEBSITE — uses shared workspace-costs resolution) ──
   let totalShipping = 0, totalPackaging = 0, totalWebsiteCharges = 0
   for (const d of dailyAnalytics) {
     const dateStr = d.date.toISOString().slice(0, 10)
     const dayOrders = d.ordersCount
     const dayGrossSales = Number(d.grossSales)
-    let dayShippingPerOrder = 0, dayPackagingPerOrder = 0, dayWebsiteCharge = 0
+    let dayShipping = 0, dayPackaging = 0, dayWebsiteCharge = 0
     for (const cost of workspaceCosts) {
       const cFrom = cost.effectiveFrom.toISOString().slice(0, 10)
       const cTo = cost.effectiveTo ? cost.effectiveTo.toISOString().slice(0, 10) : '9999-12-31'
       if (dateStr >= cFrom && dateStr <= cTo) {
-        if (cost.costType === 'SHIPPING')
-          dayShippingPerOrder += convertCurrency(Number(cost.amount), cost.currency || 'USD', storeCurrency)
-        else if (cost.costType === 'PACKAGING')
-          dayPackagingPerOrder += convertCurrency(Number(cost.amount), cost.currency || 'USD', storeCurrency)
-        else if (cost.costType === 'WEBSITE') {
-          if (cost.isPercent) dayWebsiteCharge += (Number(cost.amount) / 100) * dayGrossSales
-          else dayWebsiteCharge += convertCurrency(Number(cost.amount), cost.currency || 'USD', storeCurrency) * dayOrders
-        }
+        const contribution = getDailyVariableContribution(
+          {
+            costType: cost.costType,
+            amount: Number(cost.amount),
+            currency: cost.currency,
+            isPercent: cost.isPercent,
+            billingMode: cost.billingMode ?? 'monthly',
+          },
+          dateStr,
+          dayOrders,
+          dayGrossSales,
+          storeCurrency
+        )
+        if (cost.costType === 'SHIPPING') dayShipping += contribution
+        else if (cost.costType === 'PACKAGING') dayPackaging += contribution
+        else if (cost.costType === 'WEBSITE') dayWebsiteCharge += contribution
       }
     }
-    totalShipping += dayShippingPerOrder * dayOrders
-    totalPackaging += dayPackagingPerOrder * dayOrders
+    totalShipping += dayShipping
+    totalPackaging += dayPackaging
     totalWebsiteCharges += dayWebsiteCharge
   }
 

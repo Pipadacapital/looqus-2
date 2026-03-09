@@ -65,6 +65,7 @@ const costFormSchema = z.object({
   isPercent: z.boolean().default(false),
   effectiveFrom: z.date(),
   currency: z.string().default('USD'),
+  billingMode: z.enum(['monthly', 'per_order']).default('monthly'),
 }).superRefine((data, ctx) => {
   if (data.costType === 'WEBSITE' && data.amount > 100) {
     ctx.addIssue({ code: z.ZodIssueCode.too_big, maximum: 100, inclusive: true, type: 'number', path: ['amount'], message: 'Percentage must be 0–100' })
@@ -91,6 +92,7 @@ type Cost = {
   effectiveFrom: string
   effectiveTo: string | null
   currency: string | null
+  billingMode: 'monthly' | 'per_order' | null
 }
 
 type MiscExpense = {
@@ -127,11 +129,14 @@ export function CostsContent({ slug, isOwner }: { slug: string; isOwner: boolean
       isPercent: false,
       effectiveFrom: new Date(),
       currency: 'USD',
+      billingMode: 'monthly',
     },
   })
 
   const watchedCostType = costForm.watch('costType')
+  const watchedBillingMode = costForm.watch('billingMode')
   const isWebsite = watchedCostType === 'WEBSITE'
+  const isShippingOrPackaging = watchedCostType === 'SHIPPING' || watchedCostType === 'PACKAGING'
 
   useEffect(() => {
     costForm.setValue('isPercent', isWebsite)
@@ -391,13 +396,47 @@ export function CostsContent({ slug, isOwner }: { slug: string; isOwner: boolean
                         )}
                       />
                     )}
+                    {isShippingOrPackaging && (
+                      <FormField
+                        control={costForm.control}
+                        name="billingMode"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Billing</FormLabel>
+                            <Select onValueChange={field.onChange} value={field.value}>
+                              <FormControl>
+                                <SelectTrigger>
+                                  <SelectValue />
+                                </SelectTrigger>
+                              </FormControl>
+                              <SelectContent>
+                                <SelectItem value="monthly">Monthly</SelectItem>
+                                <SelectItem value="per_order">Per order</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <p className="text-xs text-muted-foreground">
+                              {field.value === 'monthly' ? 'Flat amount per month (allocated by day).' : 'Charged per order in profitability calculations.'}
+                            </p>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    )}
                     <div className={isWebsite ? '' : 'grid grid-cols-2 gap-4'}>
                       <FormField
                         control={costForm.control}
                         name="amount"
                         render={({ field }) => (
                           <FormItem>
-                            <FormLabel>{isWebsite ? 'Website Charges (%)' : 'Amount'}</FormLabel>
+                            <FormLabel>
+                              {isWebsite
+                                ? 'Website Charges (%)'
+                                : isShippingOrPackaging
+                                  ? watchedBillingMode === 'per_order'
+                                    ? 'Per-order amount'
+                                    : 'Monthly amount'
+                                  : 'Amount'}
+                            </FormLabel>
                             <FormControl>
                               <Input
                                 type="number"
@@ -525,10 +564,17 @@ export function CostsContent({ slug, isOwner }: { slug: string; isOwner: boolean
                     <TableCell>
                       {cost.isPercent
                         ? `${cost.amount}%`
-                        : new Intl.NumberFormat('en-US', {
-                            style: 'currency',
-                            currency: cost.currency || 'USD',
-                          }).format(cost.amount)}
+                        : (() => {
+                            const formatted = new Intl.NumberFormat('en-US', {
+                              style: 'currency',
+                              currency: cost.currency || 'USD',
+                            }).format(cost.amount)
+                            const mode = (cost as Cost).billingMode ?? 'monthly'
+                            if (cost.costType === 'SHIPPING' || cost.costType === 'PACKAGING') {
+                              return `${formatted} (${mode === 'per_order' ? 'per order' : 'monthly'})`
+                            }
+                            return formatted
+                          })()}
                     </TableCell>
                     <TableCell>{format(new Date(cost.effectiveFrom), 'PPP')}</TableCell>
                     <TableCell>

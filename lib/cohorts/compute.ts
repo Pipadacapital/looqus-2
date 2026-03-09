@@ -6,6 +6,8 @@ import {
   hasNoOrderFilters,
   normalizeOrderFilterSettings,
 } from '@/lib/order-filters'
+import { resolveLineItemCogs, normalizeCogsSettings } from '@/lib/cogs'
+import { getDailyVariableContribution } from '@/lib/workspace-costs'
 
 const EXCHANGE_RATES: Record<string, number> = {
   USD: 1,
@@ -77,13 +79,22 @@ function buildDailyRates(
         const costFromStr = cost.effectiveFrom.toISOString().slice(0, 10)
         const costToStr = cost.effectiveTo ? cost.effectiveTo.toISOString().slice(0, 10) : '9999-12-31'
         if (dateStr < costFromStr || dateStr > costToStr) continue
-        const amount = convertCurrency(Number(cost.amount), cost.currency || 'USD', storeCurrency)
-        if (cost.costType === 'SHIPPING') shipping += amount * ordersCount
-        else if (cost.costType === 'PACKAGING') packaging += amount * ordersCount
-        else if (cost.costType === 'WEBSITE') {
-          if (cost.isPercent) website += (Number(cost.amount) / 100) * grossSales
-          else website += amount * ordersCount
-        }
+        const contribution = getDailyVariableContribution(
+          {
+            costType: cost.costType,
+            amount: Number(cost.amount),
+            currency: cost.currency,
+            isPercent: cost.isPercent,
+            billingMode: cost.billingMode ?? 'monthly',
+          },
+          dateStr,
+          ordersCount,
+          grossSales,
+          storeCurrency
+        )
+        if (cost.costType === 'SHIPPING') shipping += contribution
+        else if (cost.costType === 'PACKAGING') packaging += contribution
+        else if (cost.costType === 'WEBSITE') website += contribution
       }
       const daysInMonth = getDaysInMonth(new Date(dateStr + 'T12:00:00.000Z'))
       let misc = 0
@@ -157,7 +168,7 @@ async function getFirstOrders(
   return rows
 }
 
-/** Order-level revenue and COGS for given order IDs */
+/** Order-level COGS for given order IDs (uses shared COGS resolution). */
 async function getOrderCogs(
   prisma: PrismaClient,
   connectionId: string,
@@ -179,52 +190,21 @@ async function getOrderCogs(
     }),
   ])
   const coqMap = new Map(products.filter((p) => p.coq).map((p) => [p.shopifyId, Number(p.coq)]))
-  const overridePct = cogsSettings ? Number(cogsSettings.overrideAllCogsPercent) : 0
-  const fallbackPct = cogsSettings ? Number(cogsSettings.fallbackCogsPercent) : 0
-  const markupPct = cogsSettings ? Number(cogsSettings.cogsMarkupPercent) : 0
-
+  const settings = normalizeCogsSettings(cogsSettings)
   const cogsByOrder = new Map<string, number>()
-  let totalRevenue = 0
-  let countOverride = 0
-  let countProductCoq = 0
-  let countFallback = 0
-  let countZero = 0
   for (const it of items) {
-    const revenue = Number(it.price) * it.quantity
-    totalRevenue += revenue
-    let baseCogs: number
-    if (overridePct > 0) {
-      baseCogs = revenue * (overridePct / 100)
-      countOverride++
-    } else {
-      const coq = it.productShopifyId ? coqMap.get(it.productShopifyId) ?? 0 : 0
-      if (coq > 0) {
-        baseCogs = coq * it.quantity
-        countProductCoq++
-      } else if (fallbackPct > 0) {
-        baseCogs = revenue * (fallbackPct / 100)
-        countFallback++
-      } else {
-        baseCogs = 0
-        countZero++
-      }
-    }
-    const finalCogs = markupPct > 0 ? baseCogs * (1 + markupPct / 100) : baseCogs
-    cogsByOrder.set(it.orderId, (cogsByOrder.get(it.orderId) ?? 0) + finalCogs)
+    const cogs = resolveLineItemCogs(
+      { price: Number(it.price), quantity: it.quantity, productShopifyId: it.productShopifyId },
+      coqMap,
+      settings
+    )
+    cogsByOrder.set(it.orderId, (cogsByOrder.get(it.orderId) ?? 0) + cogs)
   }
-  if (items.length > 0) {
+  if (process.env.NODE_ENV === 'development' && items.length > 0) {
     const totalCogs = [...cogsByOrder.values()].reduce((a, b) => a + b, 0)
     console.log('[cohorts getOrderCogs] COGS', {
       orderCount: orderIds.length,
       lineItemCount: items.length,
-      overridePct,
-      fallbackPct,
-      markupPct,
-      totalLineItemRevenue: Math.round(totalRevenue * 100) / 100,
-      countOverride,
-      countProductCoq,
-      countFallback,
-      countZero,
       totalCogs: Math.round(totalCogs * 100) / 100,
     })
   }
@@ -484,7 +464,10 @@ export async function computeCohorts(
   const toDateExtended = new Date(toDate)
   toDateExtended.setUTCDate(toDateExtended.getUTCDate() + 360)
 
-  const orderFilterSettings = normalizeOrderFilterSettings(workspace as any)
+  const orderFilterSettings = normalizeOrderFilterSettings({
+    skippedShopifyOrderTags: workspace.skippedShopifyOrderTags ?? [],
+    skipZeroSalesOrders: workspace.skipZeroSalesOrders ?? false,
+  })
   const orderInclusionWhere = getOrderInclusionWhere(orderFilterSettings)
 
   const [firstOrders, dailyRates, adSpendByMonth, totalAdSpend, rtoIds, dailyReturnsAndSales, dailyAdSpend] = await Promise.all([

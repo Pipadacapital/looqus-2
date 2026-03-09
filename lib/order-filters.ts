@@ -46,9 +46,14 @@ export function getOrderInclusionWhere(
   const { skippedShopifyOrderTags, skipZeroSalesOrders } = settings
   const conditions: Prisma.ShopifyOrderWhereInput[] = []
 
+  // Include orders with null/empty tags or with no skipped tag (avoids Prisma error when tags is null in DB).
   if (skippedShopifyOrderTags.length > 0) {
     conditions.push({
-      NOT: { tags: { hasSome: skippedShopifyOrderTags } },
+      OR: [
+        { tags: { equals: null } },
+        { tags: { equals: [] } },
+        { NOT: { tags: { hasSome: skippedShopifyOrderTags } } },
+      ],
     })
   }
   if (skipZeroSalesOrders) {
@@ -125,7 +130,7 @@ export function getOrderInclusionRawFragment(
   const noTagMatch =
     skippedShopifyOrderTags.length === 0
       ? Prisma.sql`true`
-      : Prisma.sql`NOT (${tagsCol} && ${skippedShopifyOrderTags}::text[])`
+      : Prisma.sql`(${tagsCol} IS NULL OR ${tagsCol} = '{}' OR NOT (${tagsCol} && ${skippedShopifyOrderTags}::text[]))`
   const notZeroSales = skipZeroSalesOrders
     ? Prisma.sql`${totalPriceCol} > 0`
     : Prisma.sql`true`
