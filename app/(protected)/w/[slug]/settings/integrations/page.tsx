@@ -2,17 +2,14 @@ import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
 import { redirect } from 'next/navigation'
 import { getCurrentUserRole } from '@/lib/require-superadmin'
-import { DashboardContent } from './dashboard-content'
+import { IntegrationsContent } from './integrations-content'
 
-export default async function DashboardPage({
+export default async function IntegrationsPage({
   params,
-  searchParams,
 }: {
   params: Promise<{ slug: string }>
-  searchParams: Promise<{ error?: string }>
 }) {
   const { slug } = await params
-  const { error: errorParam } = await searchParams
 
   const supabase = await createClient()
   const {
@@ -93,12 +90,11 @@ export default async function DashboardPage({
     shiprocketRaw?.status === 'CONNECTED' ? shiprocketRaw : null
 
   return (
-    <DashboardContent
+    <IntegrationsContent
       workspaceSlug={slug}
       workspaceId={workspace.id}
       workspaceName={workspace.name}
       isSuperadmin={isSuperadmin}
-      connectionError={errorParam ?? null}
       shopifyConnection={
         connection
           ? {

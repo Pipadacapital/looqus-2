@@ -49,16 +49,18 @@ export async function GET(request: NextRequest) {
     )
   }
 
+  // Redirect to workspace dashboard with error so user can retry from Settings > Integrations
+  const dashboardErrorUrl = (err: string) =>
+    oauthState.workspaceSlug
+      ? new URL(`/w/${oauthState.workspaceSlug}/dashboard?error=${err}`, request.url)
+      : new URL(`/onboarding?error=${err}`, request.url)
+
   if (oauthState.nonce !== state) {
-    return NextResponse.redirect(
-      new URL('/onboarding?error=state_mismatch', request.url)
-    )
+    return NextResponse.redirect(dashboardErrorUrl('state_mismatch'))
   }
 
   if (oauthState.shopDomain !== shop) {
-    return NextResponse.redirect(
-      new URL('/onboarding?error=shop_mismatch', request.url)
-    )
+    return NextResponse.redirect(dashboardErrorUrl('shop_mismatch'))
   }
 
   // Look up the pending connection to get per-store Client ID + Secret

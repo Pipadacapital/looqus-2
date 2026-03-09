@@ -1,15 +1,12 @@
 import {
-  IconChartBar,
   IconChartLine,
   IconClock,
   IconCurrencyDollar,
   IconDashboard,
   IconDatabase,
   IconFileWord,
-  IconHelp,
-  IconRefresh,
+  IconPlugConnected,
   IconReport,
-  IconSearch,
   IconSettings,
   IconUsers,
   IconBuildingStore,
@@ -20,115 +17,67 @@ import {
   IconBrain,
   IconPackage,
   IconShoppingBag,
+  IconRefresh,
 } from "@tabler/icons-react"
 
-export const sidebarMenuData = {
-  navMain: [
-    {
-      title: "Dashboard",
-      path: "dashboard",
-      icon: IconDashboard,
-    },
-    {
-      title: "Store",
-      path: "store",
-      icon: IconBuildingStore,
-    },
-    {
-      title: "Google Ads",
-      path: "google-ads",
-      icon: IconBrandGoogle,
-    },
-    {
-      title: "Meta Ads",
-      path: "meta-ads",
-      icon: IconBrandMeta,
-    },
-    {
-      title: "Analytics",
-      path: "analytics",
-      icon: IconChartBar,
-    },
-    {
-      title: "P&L",
-      path: "pnl",
-      icon: IconCurrencyDollar,
-    },
-    {
-      title: "Cohorts",
-      path: "cohorts",
-      icon: IconChartLine,
-    },
-    {
-      title: "Lifetime Value",
-      path: "lifetime-value",
-      icon: IconReport,
-    },
-    {
-      title: "Products",
-      path: "products",
-      icon: IconShoppingBag,
-    },
-    {
-      title: "Timings",
-      path: "timings",
-      icon: IconClock,
-    },
-    {
-      title: "Inventory",
-      path: "inventory",
-      icon: IconPackage,
-    },
-    {
-      title: "AI",
-      path: "ai-2",
-      icon: IconBrain,
-    },
-    {
-      title: "Shiprocket",
-      path: "shiprocket",
-      icon: IconTruck,
-    },
-    {
-      title: "Costs",
-      path: "settings/costs",
-      icon: IconReceipt,
-    },
-    {
-      title: "Team",
-      path: "team",
-      icon: IconUsers,
-    },
-  ],
-  navSecondary: [
-    {
-      title: "Settings",
-      path: "settings",
-      icon: IconSettings,
-    },
-    {
-      title: "Ads Backfill",
-      path: "settings/ads-backfill",
-      icon: IconRefresh,
-    },
+export type SidebarNavItem = {
+  title: string
+  path: string
+  icon: typeof IconDashboard
+}
 
- 
-  ],
+export type SidebarNavSection = {
+  /** Optional group heading (non-clickable) */
+  title?: string
+  items: SidebarNavItem[]
+}
+
+/** Main nav as sections: Dashboard, Data Points (group), main pages, Settings (group). */
+export const sidebarNavSections: SidebarNavSection[] = [
+  {
+    items: [
+      { title: "Dashboard", path: "dashboard", icon: IconDashboard },
+    ],
+  },
+  {
+    title: "Data Points",
+    items: [
+      { title: "Store", path: "store", icon: IconBuildingStore },
+      { title: "Meta Ads", path: "meta-ads", icon: IconBrandMeta },
+      { title: "Google Ads", path: "google-ads", icon: IconBrandGoogle },
+      { title: "Shiprocket", path: "shiprocket", icon: IconTruck },
+    ],
+  },
+  {
+    items: [
+      { title: "P&L", path: "pnl", icon: IconCurrencyDollar },
+      { title: "Products", path: "products", icon: IconShoppingBag },
+      { title: "Lifetime Value", path: "lifetime-value", icon: IconReport },
+      { title: "Cohorts", path: "cohorts", icon: IconChartLine },
+      { title: "Timing", path: "timings", icon: IconClock },
+      { title: "Inventory", path: "inventory", icon: IconPackage },
+      { title: "Costs", path: "settings/costs", icon: IconReceipt },
+      { title: "AI", path: "ai-2", icon: IconBrain },
+      { title: "Team", path: "team", icon: IconUsers },
+    ],
+  },
+  {
+    title: "Settings",
+    items: [
+      { title: "General", path: "settings", icon: IconSettings },
+      { title: "Integrations", path: "settings/integrations", icon: IconPlugConnected },
+      { title: "Backfill", path: "settings/ads-backfill", icon: IconRefresh },
+    ],
+  },
+]
+
+/** Flat list for any consumer that still expects navMain (e.g. active state). */
+export const sidebarMenuData = {
+  navMain: sidebarNavSections.flatMap((s) => s.items),
+  navSecondary: [] as SidebarNavItem[],
   documents: [
-    {
-      name: "Data Library",
-      path: "data-library",
-      icon: IconDatabase,
-    },
-    {
-      name: "Reports",
-      path: "reports",
-      icon: IconReport,
-    },
-    {
-      name: "Word Assistant",
-      path: "word-assistant",
-      icon: IconFileWord,
-    },
+    { name: "Data Library", path: "data-library", icon: IconDatabase },
+    { name: "Reports", path: "reports", icon: IconReport },
+    { name: "Word Assistant", path: "word-assistant", icon: IconFileWord },
   ],
 }

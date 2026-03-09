@@ -123,15 +123,26 @@ export async function completeOnboarding(data: {
       },
     })
 
-    // If connecting Shopify, save a pending connection with credentials
+    // If connecting Shopify, save a pending connection with credentials (upsert so retries are safe)
     if (wantsShopify && shopDomain) {
-      await tx.shopifyConnection.create({
-        data: {
+      await tx.shopifyConnection.upsert({
+        where: {
+          workspaceId_shopDomain: {
+            workspaceId: workspace.id,
+            shopDomain,
+          },
+        },
+        create: {
           workspaceId: workspace.id,
           shopDomain,
           clientId: shopifyClientId,
           clientSecret: shopifyClientSecret,
           scopes: [],
+          status: 'DISCONNECTED',
+        },
+        update: {
+          clientId: shopifyClientId,
+          clientSecret: shopifyClientSecret,
           status: 'DISCONNECTED',
         },
       })

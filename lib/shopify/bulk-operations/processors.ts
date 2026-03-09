@@ -48,8 +48,11 @@ function isTransientPrismaConnectionError(error: unknown): boolean {
   const message = error.message.toLowerCase()
   return (
     message.includes('server has closed the connection') ||
+    message.includes("can't reach database server") ||
     message.includes('connection') ||
-    message.includes('pool')
+    message.includes('pool') ||
+    message.includes('econnreset') ||
+    message.includes('econnrefused')
   )
 }
 
@@ -155,39 +158,41 @@ export async function processOrderRows(
       const cancelledAt = order.cancelledAt ? new Date(order.cancelledAt) : null
 
       try {
-        const orderRecord = await prisma.shopifyOrder.upsert({
-          where: {
-            connectionId_shopifyId: { connectionId, shopifyId },
-          },
-          create: {
-            connectionId,
-            shopifyId,
-            orderNumber: parseGid(order.id),
-            name: order.name,
-            email: order.email ?? null,
-            totalPrice: toDecimal(order.totalPriceSet?.shopMoney?.amount),
-            subtotalPrice: toDecimal(order.subtotalPriceSet?.shopMoney?.amount),
-            totalTax: toDecimal(order.totalTaxSet?.shopMoney?.amount),
-            totalDiscount: toDecimal(order.totalDiscountsSet?.shopMoney?.amount),
-            currency: order.currencyCode ?? 'USD',
-            financialStatus: order.displayFinancialStatus ?? 'PENDING',
-            fulfillmentStatus: order.displayFulfillmentStatus ?? null,
-            customerShopifyId: order.customer?.id ?? null,
-            processedAt,
-            cancelledAt,
-            tags: order.tags ?? [],
-          },
-          update: {
-            totalPrice: toDecimal(order.totalPriceSet?.shopMoney?.amount),
-            subtotalPrice: toDecimal(order.subtotalPriceSet?.shopMoney?.amount),
-            totalTax: toDecimal(order.totalTaxSet?.shopMoney?.amount),
-            totalDiscount: toDecimal(order.totalDiscountsSet?.shopMoney?.amount),
-            financialStatus: order.displayFinancialStatus ?? 'PENDING',
-            fulfillmentStatus: order.displayFulfillmentStatus ?? null,
-            cancelledAt,
-            tags: order.tags ?? [],
-          },
-        })
+        const orderRecord = await retryTransientDbError(() =>
+          prisma.shopifyOrder.upsert({
+            where: {
+              connectionId_shopifyId: { connectionId, shopifyId },
+            },
+            create: {
+              connectionId,
+              shopifyId,
+              orderNumber: parseGid(order.id),
+              name: order.name,
+              email: order.email ?? null,
+              totalPrice: toDecimal(order.totalPriceSet?.shopMoney?.amount),
+              subtotalPrice: toDecimal(order.subtotalPriceSet?.shopMoney?.amount),
+              totalTax: toDecimal(order.totalTaxSet?.shopMoney?.amount),
+              totalDiscount: toDecimal(order.totalDiscountsSet?.shopMoney?.amount),
+              currency: order.currencyCode ?? 'USD',
+              financialStatus: order.displayFinancialStatus ?? 'PENDING',
+              fulfillmentStatus: order.displayFulfillmentStatus ?? null,
+              customerShopifyId: order.customer?.id ?? null,
+              processedAt,
+              cancelledAt,
+              tags: order.tags ?? [],
+            },
+            update: {
+              totalPrice: toDecimal(order.totalPriceSet?.shopMoney?.amount),
+              subtotalPrice: toDecimal(order.subtotalPriceSet?.shopMoney?.amount),
+              totalTax: toDecimal(order.totalTaxSet?.shopMoney?.amount),
+              totalDiscount: toDecimal(order.totalDiscountsSet?.shopMoney?.amount),
+              financialStatus: order.displayFinancialStatus ?? 'PENDING',
+              fulfillmentStatus: order.displayFulfillmentStatus ?? null,
+              cancelledAt,
+              tags: order.tags ?? [],
+            },
+          })
+        )
 
         orderGidToDbId.set(shopifyId, orderRecord.id)
         ordersProcessed++
@@ -217,17 +222,27 @@ export async function processOrderRows(
 
       if (!dbOrderId) {
         // The parent order might already exist in DB from a previous sync
-        const existingOrder = await prisma.shopifyOrder.findUnique({
-          where: {
-            connectionId_shopifyId: { connectionId, shopifyId: parentOrderGid },
-          },
-          select: { id: true },
-        })
-        if (existingOrder) {
-          orderGidToDbId.set(parentOrderGid, existingOrder.id)
-        } else {
-          console.warn(
-            `[BulkOps Processor] Skipping line item ${line.id}: parent order ${parentOrderGid} not found`
+        try {
+          const existingOrder = await retryTransientDbError(() =>
+            prisma.shopifyOrder.findUnique({
+              where: {
+                connectionId_shopifyId: { connectionId, shopifyId: parentOrderGid },
+              },
+              select: { id: true },
+            })
+          )
+          if (existingOrder) {
+            orderGidToDbId.set(parentOrderGid, existingOrder.id)
+          } else {
+            console.warn(
+              `[BulkOps Processor] Skipping line item ${line.id}: parent order ${parentOrderGid} not found`
+            )
+            continue
+          }
+        } catch (err) {
+          console.error(
+            `[BulkOps Processor] Failed to resolve parent order ${parentOrderGid} for line ${line.id}:`,
+            err instanceof Error ? err.message : err
           )
           continue
         }
@@ -238,27 +253,29 @@ export async function processOrderRows(
       const productGid = line.variant?.product?.id ?? null
 
       try {
-        await prisma.shopifyLineItem.upsert({
-          where: {
-            connectionId_shopifyId: { connectionId, shopifyId: lineShopifyId },
-          },
-          create: {
-            orderId,
-            connectionId,
-            shopifyId: lineShopifyId,
-            title: line.title,
-            quantity: line.quantity,
-            price: toDecimal(line.originalUnitPriceSet?.shopMoney?.amount),
-            sku: line.sku ?? null,
-            variantTitle: line.variant?.title ?? null,
-            productShopifyId: productGid,
-          },
-          update: {
-            quantity: line.quantity,
-            price: toDecimal(line.originalUnitPriceSet?.shopMoney?.amount),
-            productShopifyId: productGid,
-          },
-        })
+        await retryTransientDbError(() =>
+          prisma.shopifyLineItem.upsert({
+            where: {
+              connectionId_shopifyId: { connectionId, shopifyId: lineShopifyId },
+            },
+            create: {
+              orderId,
+              connectionId,
+              shopifyId: lineShopifyId,
+              title: line.title,
+              quantity: line.quantity,
+              price: toDecimal(line.originalUnitPriceSet?.shopMoney?.amount),
+              sku: line.sku ?? null,
+              variantTitle: line.variant?.title ?? null,
+              productShopifyId: productGid,
+            },
+            update: {
+              quantity: line.quantity,
+              price: toDecimal(line.originalUnitPriceSet?.shopMoney?.amount),
+              productShopifyId: productGid,
+            },
+          })
+        )
         lineItemsProcessed++
       } catch (err) {
         console.error(

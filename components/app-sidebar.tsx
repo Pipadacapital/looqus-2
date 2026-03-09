@@ -2,10 +2,9 @@
 
 import * as React from "react"
 
-import { sidebarMenuData } from "@/constants/sidebar-menu"
+import { sidebarNavSections, sidebarMenuData } from "@/constants/sidebar-menu"
 import { NavDocuments } from "@/components/nav-documents"
 import { NavMain } from "@/components/nav-main"
-import { NavSecondary } from "@/components/nav-secondary"
 import { NavUser } from "@/components/nav-user"
 import { WorkspaceSwitcher } from "@/components/workspace-switcher"
 import {
@@ -22,9 +21,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         <WorkspaceSwitcher />
       </SidebarHeader>
       <SidebarContent>
-        <NavMain items={sidebarMenuData.navMain} />
+        <NavMain sections={sidebarNavSections} />
         <NavDocuments items={sidebarMenuData.documents} />
-        <NavSecondary items={sidebarMenuData.navSecondary} className="mt-auto" />
       </SidebarContent>
       <SidebarFooter>
         <NavUser />

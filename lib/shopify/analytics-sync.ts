@@ -194,7 +194,7 @@ export async function syncShopifyAnalyticsFromOrders(
       connectionId,
       date: { gte: fromDate, lte: toDate },
     },
-    data: { totalReturns: 0, returns: 0 },
+    data: { total_returns: 0, returns: 0 },
   })
 
   let daysUpserted = 0
@@ -228,7 +228,7 @@ export async function syncShopifyAnalyticsFromOrders(
         aov: ordersCount > 0 ? netSales / ordersCount : 0,
         totalTax: taxes,
         totalDiscount: discounts,
-        totalReturns,
+        total_returns: totalReturns,
         returns: returnsVal,
         currency: 'INR',
       },
@@ -239,7 +239,7 @@ export async function syncShopifyAnalyticsFromOrders(
         aov: ordersCount > 0 ? netSales / ordersCount : 0,
         totalTax: taxes,
         totalDiscount: discounts,
-        totalReturns,
+        total_returns: totalReturns,
         returns: returnsVal,
       },
     })
