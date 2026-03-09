@@ -7,6 +7,8 @@ import {
   hasNoOrderFilters,
   normalizeOrderFilterSettings,
 } from '@/lib/order-filters'
+import { resolveLineItemCogs, normalizeCogsSettings } from '@/lib/cogs'
+import { getDailyVariableContribution } from '@/lib/workspace-costs'
 
 const EXCHANGE_RATES: Record<string, number> = {
   USD: 1,
@@ -16,6 +18,9 @@ const EXCHANGE_RATES: Record<string, number> = {
   AUD: 1.53,
   CAD: 1.35,
 }
+
+/** Max order IDs per query to stay under PostgreSQL bind limit (~32767). */
+const MAX_ORDER_IDS_IN_QUERY = 10_000
 
 function convertCurrency(amount: number, from: string, to: string) {
   if (!from || !to || from === to) return amount
@@ -88,7 +93,7 @@ async function getFirstOrdersInRange(
   return rows
 }
 
-/** Daily: orders count, gross sales, total_returns (for refund allocation), variable cost (shipping, packaging, website, custom). No ad spend, no misc/fixed. */
+/** Daily: orders count, gross sales, total_returns (for refund allocation), variable cost (shipping, packaging, website, custom). Uses shared workspace-costs resolution. */
 async function getDailyRates(
   prisma: PrismaClient,
   workspaceId: string,
@@ -130,13 +135,19 @@ async function getDailyRates(
       const costFromStr = cost.effectiveFrom.toISOString().slice(0, 10)
       const costToStr = cost.effectiveTo ? cost.effectiveTo.toISOString().slice(0, 10) : '9999-12-31'
       if (dateStr < costFromStr || dateStr > costToStr) continue
-      const amount = convertCurrency(Number(cost.amount), cost.currency || 'USD', storeCurrency)
-      if (cost.costType === 'SHIPPING') variableCost += amount * ordersCount
-      else if (cost.costType === 'PACKAGING') variableCost += amount * ordersCount
-      else if (cost.costType === 'WEBSITE') {
-        if (cost.isPercent) variableCost += (Number(cost.amount) / 100) * grossSales
-        else variableCost += amount * ordersCount
-      } else if (cost.costType === 'CUSTOM') variableCost += amount * ordersCount
+      variableCost += getDailyVariableContribution(
+        {
+          costType: cost.costType,
+          amount: Number(cost.amount),
+          currency: cost.currency,
+          isPercent: cost.isPercent,
+          billingMode: cost.billingMode ?? 'monthly',
+        },
+        dateStr,
+        ordersCount,
+        grossSales,
+        storeCurrency
+      )
     }
     // Refunds: Shopify analytics total_returns. Ensure non-negative (P&L uses Math.abs for safety).
     const rawReturns = Number(d.total_returns ?? 0)
@@ -151,7 +162,7 @@ async function getDailyRates(
   return map
 }
 
-/** COGS per order (with override/fallback like Cohorts). */
+/** COGS per order (uses shared COGS resolution). */
 async function getOrderCogs(
   prisma: PrismaClient,
   connectionId: string,
@@ -159,7 +170,7 @@ async function getOrderCogs(
   orderIds: string[]
 ): Promise<Map<string, number>> {
   if (orderIds.length === 0) return new Map()
-  const [products, cogsSettings, items] = await Promise.all([
+  const [products, cogsSettings, ...itemChunks] = await Promise.all([
     prisma.shopifyProduct.findMany({
       where: { connectionId },
       select: { shopifyId: true, coq: true },
@@ -167,34 +178,25 @@ async function getOrderCogs(
     prisma.workspaceCogsSettings.findUnique({
       where: { workspaceId },
     }),
-    prisma.shopifyLineItem.findMany({
-      where: { orderId: { in: orderIds } },
-      select: { orderId: true, productShopifyId: true, quantity: true, price: true },
+    ...Array.from({ length: Math.ceil(orderIds.length / MAX_ORDER_IDS_IN_QUERY) }, (_, i) => {
+      const chunk = orderIds.slice(i * MAX_ORDER_IDS_IN_QUERY, (i + 1) * MAX_ORDER_IDS_IN_QUERY)
+      return prisma.shopifyLineItem.findMany({
+        where: { orderId: { in: chunk } },
+        select: { orderId: true, productShopifyId: true, quantity: true, price: true },
+      })
     }),
   ])
+  const items = itemChunks.flat()
   const coqMap = new Map(products.filter((p) => p.coq).map((p) => [p.shopifyId, Number(p.coq)]))
-  const overridePct = cogsSettings ? Number(cogsSettings.overrideAllCogsPercent) : 0
-  const fallbackPct = cogsSettings ? Number(cogsSettings.fallbackCogsPercent) : 0
-  const markupPct = cogsSettings ? Number(cogsSettings.cogsMarkupPercent) : 0
-
+  const settings = normalizeCogsSettings(cogsSettings)
   const cogsByOrder = new Map<string, number>()
   for (const it of items) {
-    const revenue = Number(it.price) * it.quantity
-    let baseCogs: number
-    if (overridePct > 0) {
-      baseCogs = revenue * (overridePct / 100)
-    } else {
-      const coq = it.productShopifyId ? coqMap.get(it.productShopifyId) ?? 0 : 0
-      if (coq > 0) {
-        baseCogs = coq * it.quantity
-      } else if (fallbackPct > 0) {
-        baseCogs = revenue * (fallbackPct / 100)
-      } else {
-        baseCogs = 0
-      }
-    }
-    const finalCogs = markupPct > 0 ? baseCogs * (1 + markupPct / 100) : baseCogs
-    cogsByOrder.set(it.orderId, (cogsByOrder.get(it.orderId) ?? 0) + finalCogs)
+    const cogs = resolveLineItemCogs(
+      { price: Number(it.price), quantity: it.quantity, productShopifyId: it.productShopifyId },
+      coqMap,
+      settings
+    )
+    cogsByOrder.set(it.orderId, (cogsByOrder.get(it.orderId) ?? 0) + cogs)
   }
   return cogsByOrder
 }
@@ -231,9 +233,10 @@ export async function computeProducts(
     pageSize: number
   }
 ): Promise<{ rows: ProductsRow[]; totalRows: number; currency: string }> {
-  const connectionId = workspace.shopifyConnections[0]?.id
+  const connections = workspace?.shopifyConnections ?? []
+  const connectionId = connections[0]?.id ?? null
   const storeCurrency = 'INR'
-  if (!connectionId) {
+  if (!connectionId || !workspace?.id) {
     return { rows: [], totalRows: 0, currency: storeCurrency }
   }
 
@@ -286,18 +289,25 @@ export async function computeProducts(
     firstByCustomer.set(r.customer_shopify_id, { firstAt: r.first_at, orderId: r.order_id })
   }
 
-  const lineItems = await prisma.shopifyLineItem.findMany({
-    where: { orderId: { in: orderIds } },
-    select: {
-      id: true,
-      orderId: true,
-      productShopifyId: true,
-      title: true,
-      variantTitle: true,
-      price: true,
-      quantity: true,
-    },
-  })
+  const lineItemChunks = await Promise.all(
+    Array.from({ length: Math.ceil(orderIds.length / MAX_ORDER_IDS_IN_QUERY) }, (_, i) => {
+      const chunk = orderIds.slice(i * MAX_ORDER_IDS_IN_QUERY, (i + 1) * MAX_ORDER_IDS_IN_QUERY)
+      return prisma.shopifyLineItem.findMany({
+        where: { orderId: { in: chunk } },
+        select: {
+          id: true,
+          orderId: true,
+          shopifyId: true,
+          productShopifyId: true,
+          title: true,
+          variantTitle: true,
+          price: true,
+          quantity: true,
+        },
+      })
+    })
+  )
+  const lineItems = lineItemChunks.flat()
   const productIds = [...new Set(lineItems.map((li) => li.productShopifyId).filter(Boolean))] as string[]
   const products = await prisma.shopifyProduct.findMany({
     where: { connectionId, shopifyId: { in: productIds } },
@@ -305,25 +315,56 @@ export async function computeProducts(
   })
   const productMap = new Map(products.map((p) => [p.shopifyId, p]))
   const lineItemById = new Map(lineItems.map((li) => [li.id, li]))
+  /** Fallback when refund line has line_item_id null but shopify_line_item_id (GID) set */
+  const lineItemByShopifyId = new Map(lineItems.map((li) => [li.shopifyId, li]))
 
   // Source of truth for Product/Variant: Sold = sum(lineItems.quantity), Refunded = sum(refundLineItems.quantity),
   // Refunds = sum(refund line subtotalAmount). We do NOT use shopify_analytics_daily for product-level sold/refunded.
   // Primary source for refunds: shopify_refund_line_items. When absent, fall back to daily total_returns allocation.
-  const refundLineRows = await prisma.shopifyRefundLineItem.findMany({
-    where: {
-      connectionId,
-      orderId: { in: orderIds },
-      processedAt: { gte: fromDate, lte: toDate },
-    },
-    select: {
-      orderId: true,
-      lineItemId: true,
-      productShopifyId: true,
-      quantity: true,
-      subtotalAmount: true,
-    },
-  })
+  // Batch by orderIds to stay under PostgreSQL max bind params (~32767).
+  const refundChunks = await Promise.all(
+    Array.from({ length: Math.ceil(orderIds.length / MAX_ORDER_IDS_IN_QUERY) }, (_, i) => {
+      const chunk = orderIds.slice(i * MAX_ORDER_IDS_IN_QUERY, (i + 1) * MAX_ORDER_IDS_IN_QUERY)
+      return prisma.shopify_refund_line_items.findMany({
+        where: {
+          connection_id: connectionId,
+          order_id: { in: chunk },
+          processed_at: { gte: fromDate, lte: toDate },
+        },
+        select: {
+          order_id: true,
+          line_item_id: true,
+          shopify_line_item_id: true,
+          product_shopify_id: true,
+          quantity: true,
+          subtotal_amount: true,
+          processed_at: true,
+        },
+      })
+    })
+  )
+  const refundLineRows = refundChunks.flat()
   const useRefundLineTable = refundLineRows.length > 0
+
+  // ─── Dev diagnostics: refund data path ───
+  if (process.env.NODE_ENV === 'development') {
+    const sampleRefundRows = refundLineRows.slice(0, 5).map((r) => ({
+      order_id: r.order_id,
+      line_item_id: r.line_item_id ?? null,
+      shopify_line_item_id: r.shopify_line_item_id ?? null,
+      product_shopify_id: r.product_shopify_id ?? null,
+      quantity: r.quantity,
+      subtotal_amount: Number(r.subtotal_amount),
+      processed_at: r.processed_at?.toISOString?.() ?? null,
+    }))
+    console.log('[Products REFUND DIAG]', {
+      useRefundLineTable,
+      refundRowsLoaded: refundLineRows.length,
+      connectionId,
+      dateRange: { from: params.from, to: params.to },
+      sampleRefundRows,
+    })
+  }
 
   type Agg = {
     label: string
@@ -494,30 +535,41 @@ export async function computeProducts(
   }
 
   // Primary source: aggregate from shopify_refund_line_items (exact refund qty and amount per line).
+  // Resolve line item: by DB line_item_id first, then by shopify_line_item_id (GID) when line_item_id is null.
   // Unmapped: refund lines with no line item in DB and no productShopifyId are skipped (not attributed to any product group).
+  let refundRowsMapped = 0
+  let refundRowsDropped = 0
   if (useRefundLineTable) {
     for (const rli of refundLineRows) {
-      const li = rli.lineItemId ? lineItemById.get(rli.lineItemId) : null
+      const li =
+        (rli.line_item_id ? lineItemById.get(rli.line_item_id) : null) ??
+        (rli.shopify_line_item_id ? lineItemByShopifyId.get(rli.shopify_line_item_id) ?? null : null)
       const product = li?.productShopifyId
         ? productMap.get(li.productShopifyId)
-        : rli.productShopifyId
-          ? productMap.get(rli.productShopifyId)
+        : rli.product_shopify_id
+          ? productMap.get(rli.product_shopify_id)
           : null
-      const order = orderById.get(rli.orderId)
+      const order = orderById.get(rli.order_id)
       const orderTags = (order as { tags?: string[] } | undefined)?.tags ?? []
-      const isNc = orderIdToNc.get(rli.orderId) ?? false
-      const refundAmt = Number(rli.subtotalAmount)
+      const isNc = orderIdToNc.get(rli.order_id) ?? false
+      const refundAmt = Number(rli.subtotal_amount)
       const refundQty = rli.quantity
 
       const keys: { key: string; label: string; w: number }[] = []
       if (params.groupBy === 'product') {
-        const key = (li?.productShopifyId ?? rli.productShopifyId) ?? '__unmapped__'
-        if (key === '__unmapped__') continue
+        const key = (li?.productShopifyId ?? rli.product_shopify_id) ?? '__unmapped__'
+        if (key === '__unmapped__') {
+          refundRowsDropped++
+          continue
+        }
         const label = product?.title ?? (li?.title ?? '—')
         keys.push({ key, label, w: 1 })
       } else if (params.groupBy === 'variant') {
-        const vKey = (li?.productShopifyId ?? rli.productShopifyId ?? '') + '|' + (li?.variantTitle ?? 'default')
-        if (!(li?.productShopifyId ?? rli.productShopifyId)) continue
+        const vKey = (li?.productShopifyId ?? rli.product_shopify_id ?? '') + '|' + (li?.variantTitle ?? 'default')
+        if (!(li?.productShopifyId ?? rli.product_shopify_id)) {
+          refundRowsDropped++
+          continue
+        }
         const label = `${product?.title ?? li?.title ?? '—'}${li?.variantTitle ? ` - ${li.variantTitle}` : ''}`
         keys.push({ key: vKey, label, w: 1 })
       } else if (params.groupBy === 'vendor') {
@@ -560,6 +612,14 @@ export async function computeProducts(
           agg.ecRevenue -= refundAmt * w
         }
       }
+    }
+    refundRowsMapped = refundLineRows.length - refundRowsDropped
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[Products REFUND DIAG] mapping', {
+        refundRowsLoaded: refundLineRows.length,
+        refundRowsMapped,
+        refundRowsDropped,
+      })
     }
   }
 
@@ -771,12 +831,20 @@ export async function computeProducts(
         const agg = aggByKey.get(firstProductKey)
         let rawRefundedQty: number | null = null
         let rawRefundsAmt: number | null = null
-        if (useRefundLineTable && firstProductKey) {
-          const productRefundLines = refundLineRows.filter(
-            (r) => r.productShopifyId === firstProductKey || (r.lineItemId && lineItemById.get(r.lineItemId)?.productShopifyId === firstProductKey)
-          )
+        const productRefundLines = useRefundLineTable
+          ? refundLineRows.filter((r) => {
+              const resolvedLi =
+                (r.line_item_id ? lineItemById.get(r.line_item_id) : null) ??
+                (r.shopify_line_item_id ? lineItemByShopifyId.get(r.shopify_line_item_id) ?? null : null)
+              return (
+                r.product_shopify_id === firstProductKey ||
+                (resolvedLi?.productShopifyId === firstProductKey)
+              )
+            })
+          : []
+        if (useRefundLineTable) {
           rawRefundedQty = productRefundLines.reduce((s, r) => s + r.quantity, 0)
-          rawRefundsAmt = productRefundLines.reduce((s, r) => s + Number(r.subtotalAmount), 0)
+          rawRefundsAmt = productRefundLines.reduce((s, r) => s + Number(r.subtotal_amount), 0)
         }
         const dayRefundTotal = [...dailyRates.values()].reduce((s, d) => s + d.totalReturns, 0)
         console.log('[Products VALIDATION] one product vs raw', {
@@ -791,6 +859,32 @@ export async function computeProducts(
           rawSales: Math.round(rawSales * 100) / 100,
           aggSales: agg ? Math.round(agg.sales * 100) / 100 : null,
         })
+        // Worked example: raw refund lines → matched line item → final product row
+        if (useRefundLineTable && firstProductKey && productRefundLines.length > 0) {
+          const firstRefund = productRefundLines[0]
+          const matchedLi =
+            (firstRefund.line_item_id ? lineItemById.get(firstRefund.line_item_id) : null) ??
+            (firstRefund.shopify_line_item_id ? lineItemByShopifyId.get(firstRefund.shopify_line_item_id) ?? null : null)
+          const finalRow = rows.find((r) => r.label === (aggByKey.get(firstProductKey)?.label ?? ''))
+          console.log('[Products WORKED EXAMPLE]', {
+            productKey: firstProductKey,
+            rawRefundLine: {
+              order_id: firstRefund.order_id,
+              line_item_id: firstRefund.line_item_id ?? null,
+              shopify_line_item_id: firstRefund.shopify_line_item_id ?? null,
+              product_shopify_id: firstRefund.product_shopify_id ?? null,
+              quantity: firstRefund.quantity,
+              subtotal_amount: Number(firstRefund.subtotal_amount),
+            },
+            matchedLineItem: matchedLi
+              ? { id: matchedLi.id, orderId: matchedLi.orderId, productShopifyId: matchedLi.productShopifyId, quantity: matchedLi.quantity }
+              : null,
+            productRefundLinesCount: productRefundLines.length,
+            finalProductRow: finalRow
+              ? { sales: finalRow.sales, refunds: finalRow.refunds, revenue: finalRow.revenue, sold: finalRow.sold, refunded: finalRow.refunded, netQuantity: finalRow.netQuantity, returnRate: finalRow.returnRate }
+              : null,
+          })
+        }
       }
     }
   }

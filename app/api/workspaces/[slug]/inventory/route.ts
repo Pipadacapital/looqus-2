@@ -29,8 +29,8 @@ export async function GET(
   const { searchParams } = new URL(request.url)
   const page = Math.max(1, Number(searchParams.get('page')) || 1)
   const pageSize = Math.min(100, Math.max(1, Number(searchParams.get('pageSize')) || 20))
-  const sort = searchParams.get('sort') || 'title'
-  const dir = (searchParams.get('dir') || 'asc').toLowerCase() === 'desc' ? 'desc' : 'asc'
+  const sort = searchParams.get('sort') || 'quantity'
+  const dir = (searchParams.get('dir') || (sort === 'quantity' ? 'desc' : 'asc')).toLowerCase() === 'desc' ? 'desc' : 'asc'
   const search = (searchParams.get('search') || '').trim()
   const asOf = searchParams.get('asOf') || new Date().toISOString().slice(0, 10)
   const productId = searchParams.get('productId') || '' // variant drill-down
@@ -238,11 +238,12 @@ export async function GET(
     return NextResponse.json({ data: [], total: 0, page, pageSize, totalPages: 0 })
   }
 
-  // Sort mapping
+  // Sort mapping (status_order/days_left_raw/sell_through_raw from inv_metrics lateral)
   const sortMap: Record<string, string> = {
     title: 'p.title',
     vendor: 'p.vendor',
     quantity: 'p.total_inventory',
+    status: 'inv_metrics.status_order',
     qtyL30: 'sales.qty_l30',
     qtyL90: 'sales.qty_l90',
     qtyL180: 'sales.qty_l180',
@@ -251,8 +252,8 @@ export async function GET(
     compareAtPrice: 'vinfo.max_compare_at_price',
     price: 'vinfo.min_price',
     costValue: 'cost_val',
-    sellThrough: 'sell_through_raw',
-    daysLeft: 'days_left_raw',
+    sellThrough: 'inv_metrics.sell_through_raw',
+    daysLeft: 'inv_metrics.days_left_raw',
   }
   const sortCol = sortMap[sort] || 'p.title'
   const orderByClause = Prisma.sql`ORDER BY ${Prisma.raw(sortCol)} ${dir === 'desc' ? Prisma.sql`DESC` : Prisma.sql`ASC`} NULLS LAST`
@@ -329,6 +330,49 @@ export async function GET(
         AND o.cancelled_at IS NULL
         ${orderInclusionFragment}
     ) sales ON true
+    LEFT JOIN LATERAL (
+      SELECT
+        (CASE
+          WHEN p.total_inventory IS NULL OR p.total_inventory <= 0 THEN 0
+          WHEN sales.qty_l30 > 0 THEN (ROUND((p.total_inventory::numeric) / (sales.qty_l30::numeric / 30.0)))::int
+          WHEN sales.qty_l90 > 0 THEN (ROUND((p.total_inventory::numeric) / (sales.qty_l90::numeric / 90.0)))::int
+          WHEN sales.qty_l180 > 0 THEN (ROUND((p.total_inventory::numeric) / (sales.qty_l180::numeric / 180.0)))::int
+          WHEN sales.qty_l360 > 0 THEN (ROUND((p.total_inventory::numeric) / (sales.qty_l360::numeric / 360.0)))::int
+          ELSE 999999
+        END) as days_left_raw,
+        (CASE
+          WHEN p.total_inventory IS NULL OR p.total_inventory <= 0 THEN 0
+          WHEN (CASE
+            WHEN p.total_inventory IS NULL OR p.total_inventory <= 0 THEN 0
+            WHEN sales.qty_l30 > 0 THEN (p.total_inventory::numeric) / (sales.qty_l30::numeric / 30.0)
+            WHEN sales.qty_l90 > 0 THEN (p.total_inventory::numeric) / (sales.qty_l90::numeric / 90.0)
+            WHEN sales.qty_l180 > 0 THEN (p.total_inventory::numeric) / (sales.qty_l180::numeric / 180.0)
+            WHEN sales.qty_l360 > 0 THEN (p.total_inventory::numeric) / (sales.qty_l360::numeric / 360.0)
+            ELSE 999999
+          END) < 21 THEN 1
+          WHEN (CASE
+            WHEN p.total_inventory IS NULL OR p.total_inventory <= 0 THEN 0
+            WHEN sales.qty_l30 > 0 THEN (p.total_inventory::numeric) / (sales.qty_l30::numeric / 30.0)
+            WHEN sales.qty_l90 > 0 THEN (p.total_inventory::numeric) / (sales.qty_l90::numeric / 90.0)
+            WHEN sales.qty_l180 > 0 THEN (p.total_inventory::numeric) / (sales.qty_l180::numeric / 180.0)
+            WHEN sales.qty_l360 > 0 THEN (p.total_inventory::numeric) / (sales.qty_l360::numeric / 360.0)
+            ELSE 999999
+          END) >= 365 THEN 4
+          WHEN (CASE
+            WHEN p.total_inventory IS NULL OR p.total_inventory <= 0 THEN 0
+            WHEN sales.qty_l30 > 0 THEN (p.total_inventory::numeric) / (sales.qty_l30::numeric / 30.0)
+            WHEN sales.qty_l90 > 0 THEN (p.total_inventory::numeric) / (sales.qty_l90::numeric / 90.0)
+            WHEN sales.qty_l180 > 0 THEN (p.total_inventory::numeric) / (sales.qty_l180::numeric / 180.0)
+            WHEN sales.qty_l360 > 0 THEN (p.total_inventory::numeric) / (sales.qty_l360::numeric / 360.0)
+            ELSE 999999
+          END) >= 180 THEN 3
+          ELSE 2
+        END) as status_order,
+        (CASE
+          WHEN (COALESCE(sales.qty_l360, 0) + COALESCE(p.total_inventory, 0)) <= 0 THEN 0
+          ELSE ROUND((COALESCE(sales.qty_l360, 0)::numeric / (COALESCE(sales.qty_l360, 0) + COALESCE(p.total_inventory, 0))) * 1000) / 10.0
+        END) as sell_through_raw
+    ) inv_metrics ON true
     LEFT JOIN product_lead_times plt
       ON plt.workspace_id = ${workspace.id}::uuid
       AND plt.product_shopify_id = p.shopify_id
@@ -354,9 +398,12 @@ export async function GET(
 
   const data = rows.map((r) => {
     const currentInventory = r.total_inventory ?? 0
+    const qtyL30 = Number(r.qty_l30) || 0
+    const qtyL90 = Number(r.qty_l90) || 0
+    const qtyL180 = Number(r.qty_l180) || 0
     const salesL360 = Number(r.qty_l360) || 0
-    const daysLeft = computeDaysLeft(currentInventory, salesL360)
-    const inventoryStatus = classifyInventoryStatus(currentInventory, salesL360)
+    const daysLeft = computeDaysLeft(currentInventory, qtyL30, qtyL90, qtyL180, salesL360)
+    const inventoryStatus = classifyInventoryStatus(currentInventory, daysLeft)
     const coqPerUnit = r.coq != null ? Number(r.coq) : 0
     const costValue = coqPerUnit * currentInventory
     const sellThrough = computeSellThrough(currentInventory, salesL360)
@@ -462,11 +509,12 @@ async function handleVariantView(opts: {
     })
   }
 
-  // Sort mapping for variants
+  // Sort mapping for variants (status/daysLeft/sellThrough from inv_metrics lateral)
   const sortMap: Record<string, string> = {
     title: 'sv.title',
     sku: 'sv.sku',
     quantity: 'sv.inventory_quantity',
+    status: 'inv_metrics.status_order',
     price: 'sv.price',
     compareAtPrice: 'sv.compare_at_price',
     qtyL30: 'sales.qty_l30',
@@ -474,6 +522,8 @@ async function handleVariantView(opts: {
     qtyL180: 'sales.qty_l180',
     qtyL360: 'sales.qty_l360',
     qtyN14ly: 'sales.qty_n14ly',
+    daysLeft: 'inv_metrics.days_left_raw',
+    sellThrough: 'inv_metrics.sell_through_raw',
   }
   const sortCol = sortMap[sort] || 'sv.title'
   const orderByClause = Prisma.sql`ORDER BY ${Prisma.raw(sortCol)} ${dir === 'desc' ? Prisma.sql`DESC` : Prisma.sql`ASC`} NULLS LAST`
@@ -527,6 +577,49 @@ async function handleVariantView(opts: {
         AND o.cancelled_at IS NULL
         ${orderInclusionFragment}
     ) sales ON true
+    LEFT JOIN LATERAL (
+      SELECT
+        (CASE
+          WHEN sv.inventory_quantity IS NULL OR sv.inventory_quantity <= 0 THEN 0
+          WHEN sales.qty_l30 > 0 THEN (ROUND((sv.inventory_quantity::numeric) / (sales.qty_l30::numeric / 30.0)))::int
+          WHEN sales.qty_l90 > 0 THEN (ROUND((sv.inventory_quantity::numeric) / (sales.qty_l90::numeric / 90.0)))::int
+          WHEN sales.qty_l180 > 0 THEN (ROUND((sv.inventory_quantity::numeric) / (sales.qty_l180::numeric / 180.0)))::int
+          WHEN sales.qty_l360 > 0 THEN (ROUND((sv.inventory_quantity::numeric) / (sales.qty_l360::numeric / 360.0)))::int
+          ELSE 999999
+        END) as days_left_raw,
+        (CASE
+          WHEN sv.inventory_quantity IS NULL OR sv.inventory_quantity <= 0 THEN 0
+          WHEN (CASE
+            WHEN sv.inventory_quantity IS NULL OR sv.inventory_quantity <= 0 THEN 0
+            WHEN sales.qty_l30 > 0 THEN (sv.inventory_quantity::numeric) / (sales.qty_l30::numeric / 30.0)
+            WHEN sales.qty_l90 > 0 THEN (sv.inventory_quantity::numeric) / (sales.qty_l90::numeric / 90.0)
+            WHEN sales.qty_l180 > 0 THEN (sv.inventory_quantity::numeric) / (sales.qty_l180::numeric / 180.0)
+            WHEN sales.qty_l360 > 0 THEN (sv.inventory_quantity::numeric) / (sales.qty_l360::numeric / 360.0)
+            ELSE 999999
+          END) < 21 THEN 1
+          WHEN (CASE
+            WHEN sv.inventory_quantity IS NULL OR sv.inventory_quantity <= 0 THEN 0
+            WHEN sales.qty_l30 > 0 THEN (sv.inventory_quantity::numeric) / (sales.qty_l30::numeric / 30.0)
+            WHEN sales.qty_l90 > 0 THEN (sv.inventory_quantity::numeric) / (sales.qty_l90::numeric / 90.0)
+            WHEN sales.qty_l180 > 0 THEN (sv.inventory_quantity::numeric) / (sales.qty_l180::numeric / 180.0)
+            WHEN sales.qty_l360 > 0 THEN (sv.inventory_quantity::numeric) / (sales.qty_l360::numeric / 360.0)
+            ELSE 999999
+          END) >= 365 THEN 4
+          WHEN (CASE
+            WHEN sv.inventory_quantity IS NULL OR sv.inventory_quantity <= 0 THEN 0
+            WHEN sales.qty_l30 > 0 THEN (sv.inventory_quantity::numeric) / (sales.qty_l30::numeric / 30.0)
+            WHEN sales.qty_l90 > 0 THEN (sv.inventory_quantity::numeric) / (sales.qty_l90::numeric / 90.0)
+            WHEN sales.qty_l180 > 0 THEN (sv.inventory_quantity::numeric) / (sales.qty_l180::numeric / 180.0)
+            WHEN sales.qty_l360 > 0 THEN (sv.inventory_quantity::numeric) / (sales.qty_l360::numeric / 360.0)
+            ELSE 999999
+          END) >= 180 THEN 3
+          ELSE 2
+        END) as status_order,
+        (CASE
+          WHEN (COALESCE(sales.qty_l360, 0) + COALESCE(sv.inventory_quantity, 0)) <= 0 THEN 0
+          ELSE ROUND((COALESCE(sales.qty_l360, 0)::numeric / (COALESCE(sales.qty_l360, 0) + COALESCE(sv.inventory_quantity, 0))) * 1000) / 10.0
+        END) as sell_through_raw
+    ) inv_metrics ON true
     WHERE sv.product_id = ${productId}::uuid
     ${searchCondition}
     ${orderByClause}
@@ -548,9 +641,12 @@ async function handleVariantView(opts: {
 
   const data = rows.map((r) => {
     const currentInventory = r.inventory_quantity ?? 0
+    const qtyL30 = Number(r.qty_l30) || 0
+    const qtyL90 = Number(r.qty_l90) || 0
+    const qtyL180 = Number(r.qty_l180) || 0
     const salesL360 = Number(r.qty_l360) || 0
-    const daysLeft = computeDaysLeft(currentInventory, salesL360)
-    const inventoryStatus = classifyInventoryStatus(currentInventory, salesL360)
+    const daysLeft = computeDaysLeft(currentInventory, qtyL30, qtyL90, qtyL180, salesL360)
+    const inventoryStatus = classifyInventoryStatus(currentInventory, daysLeft)
     const sellThrough = computeSellThrough(currentInventory, salesL360)
     const costValue = coqPerUnit * currentInventory
 
@@ -566,9 +662,9 @@ async function handleVariantView(opts: {
       price: r.price != null ? Number(r.price) : null,
       compareAtPrice: r.compare_at_price != null ? Number(r.compare_at_price) : null,
       sellThrough,
-      qtyL30: Number(r.qty_l30) || 0,
-      qtyL90: Number(r.qty_l90) || 0,
-      qtyL180: Number(r.qty_l180) || 0,
+      qtyL30,
+      qtyL90,
+      qtyL180,
       qtyL360: salesL360,
       qtyN14ly: Number(r.qty_n14ly) || 0,
       daysLeft,

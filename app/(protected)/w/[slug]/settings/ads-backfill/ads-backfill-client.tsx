@@ -28,6 +28,7 @@ export function AdsBackfillClient({
 }: AdsBackfillClientProps) {
   const [loading, setLoading] = useState(false)
   const [returnsLoading, setReturnsLoading] = useState(false)
+  const [refundLinesLoading, setRefundLinesLoading] = useState(false)
   const [rebuildLoading, setRebuildLoading] = useState(false)
   const [rebuildFrom, setRebuildFrom] = useState('2026-02-01')
   const [rebuildTo, setRebuildTo] = useState('2026-02-28')
@@ -57,12 +58,38 @@ export function AdsBackfillClient({
     }
   }
 
+  async function handleSyncRefundLineItems() {
+    if (!isOwner) return
+    setRefundLinesLoading(true)
+    try {
+      const res = await fetch(`/api/workspaces/${workspaceSlug}/shopify/sync-refunds`, {
+        method: 'POST',
+        credentials: 'include',
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        toast.error(data.error || 'Refund line sync failed')
+        return
+      }
+      toast.success(
+        data.refundLinesUpserted != null
+          ? `Refund lines synced: ${data.refundLinesUpserted} rows (${data.from}–${data.to})`
+          : 'Refund line sync complete'
+      )
+    } catch {
+      toast.error('Refund line sync failed')
+    } finally {
+      setRefundLinesLoading(false)
+    }
+  }
+
   async function handleBackfillShopifyReturns() {
     if (!isOwner) return
     setReturnsLoading(true)
     try {
       const res = await fetch(`/api/workspaces/${workspaceSlug}/shopify/backfill-returns`, {
         method: 'POST',
+        credentials: 'include',
       })
       const data = await res.json()
       if (!res.ok) {
@@ -222,6 +249,33 @@ export function AdsBackfillClient({
             </Button>
           </div>
         </div>
+      </section>
+
+      <section className="space-y-4 border-t pt-6">
+        <h2 className="text-lg font-medium">Shopify Refund Line Items (Products page)</h2>
+        <p className="text-sm text-muted-foreground">
+          Populates shopify_refund_line_items from Shopify (orders → refunds → refundLineItems).
+          Required for the Products page to show exact Refunds and Refunded quantity per product/variant.
+          Default range: last 4 years. Run after orders are synced.
+        </p>
+        <Button
+          onClick={handleSyncRefundLineItems}
+          disabled={refundLinesLoading || !isOwner}
+          variant="outline"
+          className="gap-2"
+        >
+          {refundLinesLoading ? (
+            <>
+              <IconLoader2 className="h-4 w-4 animate-spin" />
+              Syncing…
+            </>
+          ) : (
+            <>
+              <IconRefresh className="h-4 w-4" />
+              Sync refund line items (last 4 years)
+            </>
+          )}
+        </Button>
       </section>
     </div>
   )

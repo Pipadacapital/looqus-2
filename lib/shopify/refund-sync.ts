@@ -7,7 +7,7 @@
  *
  * GraphQL query (OrdersWithRefunds) fetches:
  * - orders: id (order GID)
- * - refunds: id, processedAt
+ * - refunds: id, createdAt (used as processed_at for storage; processedAt not available on all API versions)
  * - refundLineItems: id, quantity, subtotalSet.shopMoney.amount,
  *   totalTaxSet.shopMoney.amount, lineItem.id (original line item GID)
  *
@@ -30,7 +30,7 @@ const REFUNDS_ORDER_QUERY = `
           id
           refunds(first: 50) {
             id
-            processedAt
+            createdAt
             refundLineItems(first: 100) {
               edges {
                 node {
@@ -57,7 +57,7 @@ type OrdersWithRefundsResponse = {
         id: string
         refunds: Array<{
           id: string
-          processedAt: string
+          createdAt: string | null
           refundLineItems: {
             edges: Array<{
               node: {
@@ -155,7 +155,7 @@ export async function syncRefunds(params: SyncRefundsParams): Promise<SyncRefund
 
       for (const refund of orderNode.refunds ?? []) {
         const refundLineItems = refund.refundLineItems?.edges ?? []
-        const processedAt = refund.processedAt ? new Date(refund.processedAt) : new Date()
+        const processedAt = refund.createdAt ? new Date(refund.createdAt) : new Date()
 
         for (const rliEdge of refundLineItems) {
           const rli = rliEdge.node
@@ -192,35 +192,35 @@ export async function syncRefunds(params: SyncRefundsParams): Promise<SyncRefund
           }
 
           try {
-            await prisma.shopifyRefundLineItem.upsert({
+            await prisma.shopify_refund_line_items.upsert({
               where: {
-                connectionId_shopifyRefundLineId: {
-                  connectionId,
-                  shopifyRefundLineId: rli.id,
+                connection_id_shopify_refund_line_id: {
+                  connection_id: connectionId,
+                  shopify_refund_line_id: rli.id,
                 },
               },
               create: {
-                connectionId,
-                shopifyRefundId: refund.id,
-                shopifyRefundLineId: rli.id,
-                shopifyOrderId: orderShopifyId,
-                orderId: ourOrder.id,
-                shopifyLineItemId: lineItemShopifyId,
-                lineItemId,
-                productShopifyId,
+                connection_id: connectionId,
+                shopify_refund_id: refund.id,
+                shopify_refund_line_id: rli.id,
+                shopify_order_id: orderShopifyId,
+                order_id: ourOrder.id,
+                shopify_line_item_id: lineItemShopifyId,
+                line_item_id: lineItemId,
+                product_shopify_id: productShopifyId,
                 sku,
                 quantity,
-                subtotalAmount,
-                totalTaxAmount,
-                processedAt,
+                subtotal_amount: subtotalAmount,
+                total_tax_amount: totalTaxAmount,
+                processed_at: processedAt,
               },
               update: {
                 quantity,
-                subtotalAmount,
-                totalTaxAmount,
-                processedAt,
-                lineItemId,
-                productShopifyId,
+                subtotal_amount: subtotalAmount,
+                total_tax_amount: totalTaxAmount,
+                processed_at: processedAt,
+                line_item_id: lineItemId,
+                product_shopify_id: productShopifyId,
                 sku,
               },
             })

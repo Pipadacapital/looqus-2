@@ -3,6 +3,8 @@ import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
 import { eachDayOfInterval, getDaysInMonth } from 'date-fns'
 import { getOrderInclusionWhereFromWorkspace } from '@/lib/order-filters'
+import { computeLineItemsCogs, normalizeCogsSettings } from '@/lib/cogs'
+import { getDailyVariableContribution } from '@/lib/workspace-costs'
 
 // MVP Exchange Rates (Fallback to standard if a live API isn't used)
 const EXCHANGE_RATES: Record<string, number> = {
@@ -139,24 +141,20 @@ export async function GET(
 
   
 
-  // Calculate COGS
+  // COGS via shared resolver (override/fallback/markup from workspace settings)
   const products = await prisma.shopifyProduct.findMany({
     where: { connectionId },
     select: { shopifyId: true, coq: true },
   })
-  const coqMap = new Map()
+  const coqMap = new Map<string, number>()
   for (const p of products) {
-    if (p.coq) {
-      coqMap.set(p.shopifyId, Number(p.coq))
-    }
+    if (p.coq) coqMap.set(p.shopifyId, Number(p.coq))
   }
 
   const lineItems = await prisma.shopifyLineItem.findMany({
     where: {
       connectionId,
-      order: {
-        processedAt: { gte: fromDate, lte: toDate },
-      },
+      order: { processedAt: { gte: fromDate, lte: toDate } },
     },
     select: {
       productShopifyId: true,
@@ -166,64 +164,30 @@ export async function GET(
     },
   })
 
-  const cogsSettings = workspace.cogsSettings
-  const overridePct = cogsSettings ? Number(cogsSettings.overrideAllCogsPercent) : 0
-  const fallbackPct = cogsSettings ? Number(cogsSettings.fallbackCogsPercent) : 0
-  const markupPct = cogsSettings ? Number(cogsSettings.cogsMarkupPercent) : 0
-
-  let totalCogs = 0
-  const dailyCogs = new Map<string, number>()
-  let totalLineItemRevenue = 0
-  let countOverride = 0
-  let countProductCoq = 0
-  let countFallback = 0
-  let countZero = 0
-
-  for (const item of lineItems) {
-    const revenue = Number(item.price) * item.quantity
-    totalLineItemRevenue += revenue
-    let baseCogs: number
-    if (overridePct > 0) {
-      baseCogs = revenue * (overridePct / 100)
-      countOverride++
-    } else {
-      const coq = item.productShopifyId ? (coqMap.get(item.productShopifyId) ?? 0) : 0
-      if (coq > 0) {
-        baseCogs = coq * item.quantity
-        countProductCoq++
-      } else if (fallbackPct > 0) {
-        baseCogs = revenue * (fallbackPct / 100)
-        countFallback++
-      } else {
-        baseCogs = 0
-        countZero++
-      }
-    }
-    const finalCogs = markupPct > 0 ? baseCogs * (1 + markupPct / 100) : baseCogs
-    totalCogs += finalCogs
-    const dateStr = item.order.processedAt.toISOString().slice(0, 10)
-    dailyCogs.set(dateStr, (dailyCogs.get(dateStr) || 0) + finalCogs)
-  }
-
-  console.log('[shopify-analytics] COGS calculation', {
-    from: fromStr,
-    to: toStr,
-    cogsSettings: {
-      overrideAllCogsPercent: overridePct,
-      fallbackCogsPercent: fallbackPct,
-      cogsMarkupPercent: markupPct,
-    },
-    lineItems: {
-      total: lineItems.length,
-      totalLineItemRevenue: Math.round(totalLineItemRevenue * 100) / 100,
-      countOverride,
-      countProductCoq,
-      countFallback,
-      countZero,
-    },
-    totalCogs: Math.round(totalCogs * 100) / 100,
-    note: 'Override and fallback both use (price × quantity) per line item as revenue base.',
+  const cogsSettings = normalizeCogsSettings(workspace.cogsSettings)
+  const lineItemsWithDate = lineItems.map((item) => ({
+    price: item.price,
+    quantity: item.quantity,
+    productShopifyId: item.productShopifyId,
+    orderProcessedAt: item.order.processedAt,
+  }))
+  const { totalCogs, dailyCogs } = computeLineItemsCogs(lineItemsWithDate, coqMap, cogsSettings, {
+    logSampleSource: process.env.NODE_ENV === 'development' ? 'analytics' : undefined,
   })
+
+  if (process.env.NODE_ENV === 'development' && lineItems.length > 0) {
+    console.log('[shopify-analytics] COGS', {
+      from: fromStr,
+      to: toStr,
+      cogsSettings: {
+        overrideAllCogsPercent: cogsSettings.overrideAllCogsPercent,
+        fallbackCogsPercent: cogsSettings.fallbackCogsPercent,
+        cogsMarkupPercent: cogsSettings.cogsMarkupPercent,
+      },
+      lineItemCount: lineItems.length,
+      totalCogs: Math.round(totalCogs * 100) / 100,
+    })
+  }
 
   // Calculate other costs based on WorkspaceCost
   const workspaceCosts = await prisma.workspaceCost.findMany({
@@ -470,31 +434,32 @@ export async function GET(
     const ordersCount = d.ordersCount
     const dayGrossSales = Number(d.grossSales)
 
-    let dayShippingPerOrder = 0
-    let dayPackagingPerOrder = 0
+    let dayShipping = 0
+    let dayPackaging = 0
     let dayWebsiteCharge = 0
 
     for (const cost of workspaceCosts) {
       const costFromStr = cost.effectiveFrom.toISOString().slice(0, 10)
       const costToStr = cost.effectiveTo ? cost.effectiveTo.toISOString().slice(0, 10) : '9999-12-31'
-      
       if (dateStr >= costFromStr && dateStr <= costToStr) {
-        if (cost.costType === 'SHIPPING') {
-          dayShippingPerOrder += convertCurrency(Number(cost.amount), cost.currency || 'USD', storeCurrency)
-        } else if (cost.costType === 'PACKAGING') {
-          dayPackagingPerOrder += convertCurrency(Number(cost.amount), cost.currency || 'USD', storeCurrency)
-        } else if (cost.costType === 'WEBSITE') {
-          if (cost.isPercent) {
-            dayWebsiteCharge += (Number(cost.amount) / 100) * dayGrossSales
-          } else {
-            dayWebsiteCharge += convertCurrency(Number(cost.amount), cost.currency || 'USD', storeCurrency) * ordersCount
-          }
-        }
+        const contribution = getDailyVariableContribution(
+          {
+            costType: cost.costType,
+            amount: Number(cost.amount),
+            currency: cost.currency,
+            isPercent: cost.isPercent,
+            billingMode: cost.billingMode ?? 'monthly',
+          },
+          dateStr,
+          ordersCount,
+          dayGrossSales,
+          storeCurrency
+        )
+        if (cost.costType === 'SHIPPING') dayShipping += contribution
+        else if (cost.costType === 'PACKAGING') dayPackaging += contribution
+        else if (cost.costType === 'WEBSITE') dayWebsiteCharge += contribution
       }
     }
-
-    const dayShipping = dayShippingPerOrder * ordersCount
-    const dayPackaging = dayPackagingPerOrder * ordersCount
 
     totalShipping += dayShipping
     totalPackaging += dayPackaging

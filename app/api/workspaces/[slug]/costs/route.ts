@@ -12,6 +12,7 @@ const createCostSchema = z.object({
   effectiveFrom: z.string().transform((str) => new Date(str)),
   effectiveTo: z.string().optional().transform((str) => str ? new Date(str) : null),
   currency: z.string().default('USD'),
+  billingMode: z.enum(['monthly', 'per_order']).optional().default('monthly'),
 })
 
 export async function GET(
@@ -113,6 +114,7 @@ export async function POST(
         effectiveFrom: body.effectiveFrom,
         effectiveTo: body.effectiveTo,
         currency: body.isPercent ? null : body.currency,
+        billingMode: body.billingMode ?? 'monthly',
       },
     })
 

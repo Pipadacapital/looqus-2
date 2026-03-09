@@ -1,11 +1,13 @@
 import type { PrismaClient } from '@prisma/client'
 import { getDaysInMonth } from 'date-fns'
+import { getDailyVariableContribution } from '@/lib/workspace-costs'
 import type { LtvDimension, LtvMetric, LtvMode, LtvRow, LtvSummary } from './types'
 import {
   getOrderInclusionWhere,
   hasNoOrderFilters,
   normalizeOrderFilterSettings,
 } from '@/lib/order-filters'
+import { resolveLineItemCogs, normalizeCogsSettings } from '@/lib/cogs'
 
 const EXCHANGE_RATES: Record<string, number> = {
   USD: 1,
@@ -26,6 +28,11 @@ function convertCurrency(amount: number, from: string, to: string) {
 export type WorkspaceForLtv = {
   id: string
   shopifyConnections: { id: string }[]
+  cogsSettings?: {
+    overrideAllCogsPercent: unknown
+    fallbackCogsPercent: unknown
+    cogsMarkupPercent: unknown
+  } | null
   meta_ads_connections: {
     id: string
     selected_ad_account_ids: string[] | null
@@ -125,13 +132,22 @@ async function getDailyRates(
       const costFromStr = cost.effectiveFrom.toISOString().slice(0, 10)
       const costToStr = cost.effectiveTo ? cost.effectiveTo.toISOString().slice(0, 10) : '9999-12-31'
       if (dateStr < costFromStr || dateStr > costToStr) continue
-      const amount = convertCurrency(Number(cost.amount), cost.currency || 'USD', storeCurrency)
-      if (cost.costType === 'SHIPPING') shipping += amount * ordersCount
-      else if (cost.costType === 'PACKAGING') packaging += amount * ordersCount
-      else if (cost.costType === 'WEBSITE') {
-        if (cost.isPercent) website += (Number(cost.amount) / 100) * grossSales
-        else website += amount * ordersCount
-      }
+      const contribution = getDailyVariableContribution(
+        {
+          costType: cost.costType,
+          amount: Number(cost.amount),
+          currency: cost.currency,
+          isPercent: cost.isPercent,
+          billingMode: cost.billingMode ?? 'monthly',
+        },
+        dateStr,
+        ordersCount,
+        grossSales,
+        storeCurrency
+      )
+      if (cost.costType === 'SHIPPING') shipping += contribution
+      else if (cost.costType === 'PACKAGING') packaging += contribution
+      else if (cost.costType === 'WEBSITE') website += contribution
     }
     map.set(dateStr, { ordersCount, grossSales, shipping, packaging, website })
   }
@@ -209,22 +225,30 @@ async function getDailyReturnsAndSales(
 async function getOrderCogs(
   prisma: PrismaClient,
   connectionId: string,
-  orderIds: string[]
+  orderIds: string[],
+  rawCogsSettings: WorkspaceForLtv['cogsSettings']
 ): Promise<Map<string, number>> {
   if (orderIds.length === 0) return new Map()
-  const products = await prisma.shopifyProduct.findMany({
-    where: { connectionId },
-    select: { shopifyId: true, coq: true },
-  })
+  const [products, items] = await Promise.all([
+    prisma.shopifyProduct.findMany({
+      where: { connectionId },
+      select: { shopifyId: true, coq: true },
+    }),
+    prisma.shopifyLineItem.findMany({
+      where: { orderId: { in: orderIds } },
+      select: { orderId: true, productShopifyId: true, quantity: true, price: true },
+    }),
+  ])
   const coqMap = new Map(products.filter((p) => p.coq).map((p) => [p.shopifyId, Number(p.coq)]))
-  const items = await prisma.shopifyLineItem.findMany({
-    where: { orderId: { in: orderIds } },
-    select: { orderId: true, productShopifyId: true, quantity: true },
-  })
+  const settings = normalizeCogsSettings(rawCogsSettings ?? null)
   const cogsByOrder = new Map<string, number>()
   for (const it of items) {
-    const coq = it.productShopifyId ? coqMap.get(it.productShopifyId) ?? 0 : 0
-    cogsByOrder.set(it.orderId, (cogsByOrder.get(it.orderId) ?? 0) + coq * it.quantity)
+    const cogs = resolveLineItemCogs(
+      { price: Number(it.price), quantity: it.quantity, productShopifyId: it.productShopifyId },
+      coqMap,
+      settings
+    )
+    cogsByOrder.set(it.orderId, (cogsByOrder.get(it.orderId) ?? 0) + cogs)
   }
   return cogsByOrder
 }
@@ -431,7 +455,7 @@ export async function computeLtv(
     },
   })
 
-  const orderCogsMap = await getOrderCogs(prisma, connectionId, orders.map((o) => o.id))
+  const orderCogsMap = await getOrderCogs(prisma, connectionId, orders.map((o) => o.id), workspace.cogsSettings ?? null)
 
   const lineItemsByOrder = new Map<string, { productShopifyId: string | null; productTitle: string; variantTitle: string | null; price: number; quantity: number }[]>()
   const lineItems = await prisma.shopifyLineItem.findMany({

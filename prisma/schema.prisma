@@ -123,17 +123,18 @@ model Invitation {
 }
 
 model WorkspaceCost {
-  id            String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  workspaceId   String            @map("workspace_id") @db.Uuid
-  costType      WorkspaceCostType @map("cost_type")
-  name          String?           @db.VarChar(120)
-  amount        Decimal           @db.Decimal(12, 2)
-  effectiveFrom DateTime          @map("effective_from") @db.Date
-  effectiveTo   DateTime?         @map("effective_to") @db.Date
-  currency      String?           @default("USD") @db.VarChar(3)
-  createdAt     DateTime          @default(now()) @map("created_at")
-  isPercent     Boolean           @default(false) @map("is_percent")
-  workspace     Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  id            String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId   String                  @map("workspace_id") @db.Uuid
+  costType      WorkspaceCostType       @map("cost_type")
+  name          String?                 @db.VarChar(120)
+  amount        Decimal                 @db.Decimal(12, 2)
+  effectiveFrom DateTime                @map("effective_from") @db.Date
+  effectiveTo   DateTime?               @map("effective_to") @db.Date
+  currency      String?                 @default("USD") @db.VarChar(3)
+  createdAt     DateTime                @default(now()) @map("created_at")
+  isPercent     Boolean                 @default(false) @map("is_percent")
+  billingMode   WorkspaceCostBillingMode @default(monthly) @map("billing_mode")
+  workspace     Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@index([workspaceId, costType, effectiveFrom, effectiveTo])
   @@map("workspace_costs")
@@ -671,4 +672,9 @@ enum WorkspaceCostType {
   PACKAGING
   WEBSITE
   CUSTOM
+}
+
+enum WorkspaceCostBillingMode {
+  monthly
+  per_order
 }

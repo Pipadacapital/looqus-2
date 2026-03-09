@@ -1,10 +1,12 @@
 /**
  * Analytics calculator for AI context.
- * Extracts logic from api/workspaces/[slug]/shopify-analytics/route.ts
+ * Uses shared COGS resolution (lib/cogs).
  */
 import type { PrismaClient } from '@prisma/client'
 import type { AiAnalyticsData, AiDailyRow, AiAnalyticsSummary } from './types'
 import { eachDayOfInterval, getDaysInMonth } from 'date-fns'
+import { computeLineItemsCogs, normalizeCogsSettings } from '@/lib/cogs'
+import { getDailyVariableContribution } from '@/lib/workspace-costs'
 
 const EXCHANGE_RATES: Record<string, number> = {
   USD: 1, INR: 83.5, EUR: 0.92, GBP: 0.79, AUD: 1.53, CAD: 1.35,
@@ -58,29 +60,14 @@ export async function calcAnalytics(
     },
   })
 
-  const cs = workspace.cogsSettings
-  const overridePct = cs ? Number(cs.overrideAllCogsPercent) : 0
-  const fallbackPct = cs ? Number(cs.fallbackCogsPercent) : 0
-  const markupPct = cs ? Number(cs.cogsMarkupPercent) : 0
-
-  let totalCogs = 0
-  const dailyCogs = new Map<string, number>()
-  for (const item of lineItems) {
-    const revenue = Number(item.price) * item.quantity
-    let baseCogs: number
-    if (overridePct > 0) {
-      baseCogs = revenue * (overridePct / 100)
-    } else {
-      const coq = item.productShopifyId ? (coqMap.get(item.productShopifyId) ?? 0) : 0
-      if (coq > 0) baseCogs = coq * item.quantity
-      else if (fallbackPct > 0) baseCogs = revenue * (fallbackPct / 100)
-      else baseCogs = 0
-    }
-    const finalCogs = markupPct > 0 ? baseCogs * (1 + markupPct / 100) : baseCogs
-    totalCogs += finalCogs
-    const dateStr = item.order.processedAt.toISOString().slice(0, 10)
-    dailyCogs.set(dateStr, (dailyCogs.get(dateStr) || 0) + finalCogs)
-  }
+  const cogsSettings = normalizeCogsSettings(workspace.cogsSettings)
+  const lineItemsWithDate = lineItems.map((item) => ({
+    price: item.price,
+    quantity: item.quantity,
+    productShopifyId: item.productShopifyId,
+    orderProcessedAt: item.order.processedAt,
+  }))
+  const { totalCogs, dailyCogs } = computeLineItemsCogs(lineItemsWithDate, coqMap, cogsSettings)
 
   // Costs
   const workspaceCosts = await prisma.workspaceCost.findMany({
@@ -103,27 +90,32 @@ export async function calcAnalytics(
     const ordersCount = d.ordersCount
     const dayGrossSales = Number(d.grossSales)
 
-    let dayShippingPerOrder = 0
-    let dayPackagingPerOrder = 0
+    let dayShipping = 0
+    let dayPackaging = 0
     let dayWebsiteCharge = 0
 
     for (const cost of workspaceCosts) {
       const costFromStr = cost.effectiveFrom.toISOString().slice(0, 10)
       const costToStr = cost.effectiveTo ? cost.effectiveTo.toISOString().slice(0, 10) : '9999-12-31'
       if (dateStr >= costFromStr && dateStr <= costToStr) {
-        if (cost.costType === 'SHIPPING') {
-          dayShippingPerOrder += convertCurrency(Number(cost.amount), cost.currency || 'USD', storeCurrency)
-        } else if (cost.costType === 'PACKAGING') {
-          dayPackagingPerOrder += convertCurrency(Number(cost.amount), cost.currency || 'USD', storeCurrency)
-        } else if (cost.costType === 'WEBSITE') {
-          if (cost.isPercent) dayWebsiteCharge += (Number(cost.amount) / 100) * dayGrossSales
-          else dayWebsiteCharge += convertCurrency(Number(cost.amount), cost.currency || 'USD', storeCurrency) * ordersCount
-        }
+        const contribution = getDailyVariableContribution(
+          {
+            costType: cost.costType,
+            amount: Number(cost.amount),
+            currency: cost.currency,
+            isPercent: cost.isPercent,
+            billingMode: cost.billingMode ?? 'monthly',
+          },
+          dateStr,
+          ordersCount,
+          dayGrossSales,
+          storeCurrency
+        )
+        if (cost.costType === 'SHIPPING') dayShipping += contribution
+        else if (cost.costType === 'PACKAGING') dayPackaging += contribution
+        else if (cost.costType === 'WEBSITE') dayWebsiteCharge += contribution
       }
     }
-
-    const dayShipping = dayShippingPerOrder * ordersCount
-    const dayPackaging = dayPackagingPerOrder * ordersCount
     totalShipping += dayShipping
     totalPackaging += dayPackaging
     totalWebsiteCharges += dayWebsiteCharge
