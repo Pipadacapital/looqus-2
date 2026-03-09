@@ -135,33 +135,82 @@ export async function pollBulkOperation(params: {
 // ─── 3. Download & parse JSONL ─────────────────────────────────────────────────
 
 /**
- * Downloads the bulk operation JSONL file and parses it line-by-line.
- * Returns all parsed JSON objects as an array.
+ * Downloads the bulk operation JSONL file and parses it using streaming.
+ * Processes the response body as a stream to avoid loading the entire file
+ * into memory at once (which can be 500MB+ for 4 years of data).
  *
- * For very large files in production you'd want to stream-process this,
- * but for a backfill script that runs as a background job this is practical.
+ * Returns all parsed JSON objects as an array.
  */
 export async function downloadAndParseJsonl(url: string): Promise<Record<string, unknown>[]> {
-  console.log(`[BulkOps] Downloading JSONL from: ${url.substring(0, 80)}...`)
+  console.log(`[BulkOps] Downloading & streaming JSONL from: ${url.substring(0, 80)}...`)
 
   const response = await fetch(url)
   if (!response.ok) {
     throw new Error(`Failed to download JSONL: ${response.status} ${response.statusText}`)
   }
 
-  const text = await response.text()
-  const lines = text.split('\n').filter((line) => line.trim().length > 0)
-
-  console.log(`[BulkOps] Downloaded ${lines.length} JSONL lines (${(text.length / 1024 / 1024).toFixed(2)} MB)`)
-
   const results: Record<string, unknown>[] = []
-  for (const line of lines) {
-    try {
-      results.push(JSON.parse(line))
-    } catch (err) {
-      console.warn(`[BulkOps] Skipping unparseable JSONL line: ${line.substring(0, 100)}`)
+  let totalBytes = 0
+  let parseErrors = 0
+
+  if (response.body) {
+    // Stream-based parsing for memory efficiency
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      totalBytes += value.byteLength
+      buffer += decoder.decode(value, { stream: true })
+
+      // Process complete lines
+      const lines = buffer.split('\n')
+      // Keep the last (potentially incomplete) line in the buffer
+      buffer = lines.pop() ?? ''
+
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (trimmed.length === 0) continue
+        try {
+          results.push(JSON.parse(trimmed))
+        } catch {
+          parseErrors++
+        }
+      }
+    }
+
+    // Process any remaining content in buffer
+    const remaining = buffer.trim()
+    if (remaining.length > 0) {
+      try {
+        results.push(JSON.parse(remaining))
+      } catch {
+        parseErrors++
+      }
+    }
+  } else {
+    // Fallback for environments without ReadableStream support
+    const text = await response.text()
+    totalBytes = text.length
+    const lines = text.split('\n')
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (trimmed.length === 0) continue
+      try {
+        results.push(JSON.parse(trimmed))
+      } catch {
+        parseErrors++
+      }
     }
   }
+
+  console.log(
+    `[BulkOps] Parsed ${results.length} JSONL rows (${(totalBytes / 1024 / 1024).toFixed(2)} MB)` +
+    (parseErrors > 0 ? ` — ${parseErrors} unparseable lines skipped` : '')
+  )
 
   return results
 }
