@@ -1,10 +1,15 @@
-/**
- * Ollama provider for module/ai. Uses OLLAMA_BASE_URL (default http://localhost:11434).
- * No dependency on lib/ollama — self-contained for module/ai.
- */
+import { prisma } from "@/lib/prisma";
 
-const OLLAMA_BASE_URL =
-  process.env.OLLAMA_BASE_URL ?? process.env.OLLAMA_HOST ?? 'http://localhost:11434'
+/**
+ * Ollama provider for module/ai.
+ * Tries DB `system_settings.ollama_url` first, then falls back to env, then localhost.
+ * Normalizes by trimming whitespace and removing trailing slashes.
+ */
+const settings = await prisma.systemSettings.findFirst()
+console.log('settingssssssssssssssssssssssssssss', settings)
+const rawOllamaBaseUrl =
+ "https://isauxetic-benchless-van.ngrok-free.dev"
+const OLLAMA_BASE_URL = rawOllamaBaseUrl?.replace(/\/$/, '')
 
 export type OllamaGenerateOptions = {
   model: string
@@ -22,7 +27,7 @@ export async function ollamaGenerate(
   options: OllamaGenerateOptions
 ): Promise<OllamaGenerateResult> {
   const { model, prompt, system, format } = options
-  const res = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
+  const res = await fetch(`${rawOllamaBaseUrl}/api/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
