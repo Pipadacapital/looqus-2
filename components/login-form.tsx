@@ -54,7 +54,7 @@ export function LoginForm({ className, ...props }: React.ComponentPropsWithoutRe
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${process.env.NEXT_PUBLIC_APP_URL}/auth/callback`,
+          redirectTo: `https://brain.pipadacapital.com/auth/callback`,
         },
       })
       if (error) throw error
