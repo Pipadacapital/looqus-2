@@ -46,6 +46,7 @@ export const sidebarNavSections: SidebarNavSection[] = [
       { title: "Meta Ads", path: "meta-ads", icon: IconBrandMeta },
       { title: "Google Ads", path: "google-ads", icon: IconBrandGoogle },
       { title: "Shiprocket", path: "shiprocket", icon: IconTruck },
+      { title: "Store Analytics", path: "analytics", icon: IconBuildingStore },
     ],
   },
   {

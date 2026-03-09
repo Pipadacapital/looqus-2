@@ -1,5 +1,5 @@
-import type { PrismaClient } from '@prisma/client'
-import { Prisma, type Prisma } from '@prisma/client'
+import { Prisma, PrismaClient } from '@prisma/client'
+
 
 /**
  * Workspace-level settings for excluding Shopify orders from analytics.

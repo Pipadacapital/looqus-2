@@ -55,8 +55,8 @@ export async function GET(
     return NextResponse.json({ error: 'Workspace not found' }, { status: 404 })
   }
 
-  const skippedTags = workspace.skippedShopifyOrderTags ?? []
-  const skipZero = workspace.skipZeroSalesOrders ?? false
+  const skippedTags = workspace.skipped_shopify_order_tags ?? []
+  const skipZero = workspace.skip_zero_sales_orders ?? false
   return NextResponse.json({
     timezone: workspace.timezone,
     taxPercent: Number(workspace.taxPercent),
@@ -100,10 +100,10 @@ export async function PATCH(
     if (body.timezone !== undefined) data.timezone = body.timezone
     if (body.taxPercent !== undefined) data.taxPercent = body.taxPercent
     if (body.skippedShopifyOrderTags !== undefined) {
-      data.skippedShopifyOrderTags = body.skippedShopifyOrderTags
+      data.skipped_shopify_order_tags = body.skippedShopifyOrderTags
     }
     if (body.skipZeroSalesOrders !== undefined) {
-      data.skipZeroSalesOrders = body.skipZeroSalesOrders
+      data.skip_zero_sales_orders = body.skipZeroSalesOrders
     }
 
     const updatedWorkspace = await prisma.workspace.update({
@@ -111,8 +111,8 @@ export async function PATCH(
       data,
     })
 
-    const skippedTags = updatedWorkspace.skippedShopifyOrderTags ?? []
-    const skipZero = updatedWorkspace.skipZeroSalesOrders ?? false
+    const skippedTags = updatedWorkspace.skipped_shopify_order_tags ?? []
+    const skipZero = updatedWorkspace.skip_zero_sales_orders ?? false
     return NextResponse.json({
       timezone: updatedWorkspace.timezone,
       taxPercent: Number(updatedWorkspace.taxPercent),

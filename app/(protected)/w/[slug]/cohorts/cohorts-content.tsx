@@ -57,7 +57,7 @@ export function CohortsContent({ workspaceSlug, workspaceName }: CohortsContentP
     rows: CohortRow[]
     currency: string
   } | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(() => !!workspaceSlug && !!from && !!to)
   const [error, setError] = useState<string | null>(null)
 
   const disabledModes = DISABLED_METRIC_MODE[metric] ?? []
@@ -65,10 +65,32 @@ export function CohortsContent({ workspaceSlug, workspaceName }: CohortsContentP
 
   const dataRef = useRef<{ from: string; to: string } | null>(null)
 
-  useEffect(() => {
-    if (!workspaceSlug || !from || !to) return
+  const handleFromChange = (value: string) => {
+    setFrom(value)
     setLoading(true)
     setError(null)
+  }
+
+  const handleToChange = (value: string) => {
+    setTo(value)
+    setLoading(true)
+    setError(null)
+  }
+
+  const handleMetricChange = (value: string) => {
+    setMetric(value as CohortMetric)
+    setLoading(true)
+    setError(null)
+  }
+
+  const handleModeChange = (value: string) => {
+    setMode(value as CohortMode)
+    setLoading(true)
+    setError(null)
+  }
+
+  useEffect(() => {
+    if (!workspaceSlug || !from || !to) return
     const requestFrom = from
     const requestTo = to
     const requestMetric = metric
@@ -143,7 +165,7 @@ export function CohortsContent({ workspaceSlug, workspaceName }: CohortsContentP
       for (const k of mCols) flat.push(r[k])
     }
     return flat
-  }, [rows])
+  }, [rows, mCols])
   const minM = useMemo(() => (allMValues.length ? Math.min(...allMValues) : 0), [allMValues])
   const maxM = useMemo(() => (allMValues.length ? Math.max(...allMValues) : 0), [allMValues])
   const rangeM = maxM - minM || 1
@@ -169,11 +191,16 @@ export function CohortsContent({ workspaceSlug, workspaceName }: CohortsContentP
       </div>
 
       <div className="flex flex-wrap items-center gap-4">
-        <DateRangeFilter from={from} to={to} onFromChange={setFrom} onToChange={setTo} />
+        <DateRangeFilter
+          from={from}
+          to={to}
+          onFromChange={handleFromChange}
+          onToChange={handleToChange}
+        />
       </div>
 
       <div className="flex flex-wrap items-center gap-4">
-        <Tabs value={metric} onValueChange={(v) => setMetric(v as CohortMetric)}>
+        <Tabs value={metric} onValueChange={handleMetricChange}>
           <TabsList variant="line" className="gap-1">
             {(Object.keys(METRIC_LABELS) as CohortMetric[]).map((m) => (
               <TabsTrigger key={m} value={m}>
@@ -182,7 +209,7 @@ export function CohortsContent({ workspaceSlug, workspaceName }: CohortsContentP
             ))}
           </TabsList>
         </Tabs>
-        <Tabs value={mode} onValueChange={(v) => setMode(v as CohortMode)}>
+        <Tabs value={mode} onValueChange={handleModeChange}>
           <TabsList variant="line" className="gap-1">
             {(Object.keys(MODE_LABELS) as CohortMode[]).map((m) => (
               <TabsTrigger

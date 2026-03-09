@@ -74,7 +74,7 @@ export async function POST(
       connectionId,
       date: { gte: fromDate, lte: toDate },
     },
-    data: { totalReturns: 0, returns: 0 },
+    data: { total_returns: 0, returns: 0 },
   })
 
   const { daysUpserted } = await syncShopifyAnalyticsFromOrders(connectionId, from, to)

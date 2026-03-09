@@ -113,7 +113,7 @@ export function ProductsContent({ workspaceSlug, workspaceName }: ProductsConten
     totalRows: 0,
     currency: 'INR',
   })
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(() => !!workspaceSlug && !!from && !!to)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -123,8 +123,6 @@ export function ProductsContent({ workspaceSlug, workspaceName }: ProductsConten
 
   useEffect(() => {
     if (!workspaceSlug || !from || !to) return
-    setLoading(true)
-    setError(null)
     const params = new URLSearchParams({
       from,
       to,
@@ -169,6 +167,8 @@ export function ProductsContent({ workspaceSlug, workspaceName }: ProductsConten
     setSort(colSortId)
     setDir((d) => (sort === colSortId && d === 'desc' ? 'asc' : 'desc'))
     setPage(1)
+    setLoading(true)
+    setError(null)
   }, [sort])
 
   const applyYtd = useCallback(() => {
@@ -176,6 +176,8 @@ export function ProductsContent({ workspaceSlug, workspaceName }: ProductsConten
     setFrom(format(startOfYear(now), 'yyyy-MM-dd'))
     setTo(format(endOfDay(now), 'yyyy-MM-dd'))
     setPage(1)
+    setLoading(true)
+    setError(null)
   }, [])
 
   return (

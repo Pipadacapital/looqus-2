@@ -63,12 +63,26 @@ export function AnalyticsContent({
     summary: ShopifyAnalyticsSummary | null
     loading: boolean
     error: string | null
-  }>({ daily: [], summary: null, loading: false, error: null })
+  }>(() => ({
+    daily: [],
+    summary: null,
+    loading: !!shopifyConnection?.id,
+    error: null,
+  }))
+
+  const handleFromChange = (value: string) => {
+    setAnalyticsFrom(value)
+    setShopifyAnalytics((prev) => ({ ...prev, loading: true, error: null }))
+  }
+
+  const handleToChange = (value: string) => {
+    setAnalyticsTo(value)
+    setShopifyAnalytics((prev) => ({ ...prev, loading: true, error: null }))
+  }
 
   useEffect(() => {
     if (!shopifyConnection?.id || !workspaceSlug || !analyticsFrom || !analyticsTo)
       return
-    setShopifyAnalytics((prev) => ({ ...prev, loading: true, error: null }))
     fetch(
       `/api/workspaces/${workspaceSlug}/shopify-analytics?from=${analyticsFrom}&to=${analyticsTo}`
     )
@@ -148,8 +162,8 @@ export function AnalyticsContent({
             <DateRangeFilter
               from={analyticsFrom}
               to={analyticsTo}
-              onFromChange={setAnalyticsFrom}
-              onToChange={setAnalyticsTo}
+              onFromChange={handleFromChange}
+              onToChange={handleToChange}
               fromId="analytics-page-from"
               toId="analytics-page-to"
             />

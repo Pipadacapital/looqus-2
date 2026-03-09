@@ -146,13 +146,29 @@ export function PnlContent({
   const [pageIndex, setPageIndex] = useState(0)
 
   const [data, setData] = useState<{ rows: PnLRow[]; currency: string }>({ rows: [], currency: 'INR' })
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(
+    () => !!workspaceSlug && !!from && !!to && !!shopifyConnection?.id
+  )
   const [error, setError] = useState<string | null>(null)
+
+  const handleFromChange = (value: string) => {
+    setFrom(value)
+    setLoading(true)
+    setError(null)
+  }
+
+  const handleToChange = (value: string) => {
+    setTo(value)
+    setLoading(true)
+    setError(null)
+  }
+
+  const handleApplyPreset = (preset: 'ytd' | 'lastYear') => {
+    applyPnlPreset(preset, handleFromChange, handleToChange)
+  }
 
   useEffect(() => {
     if (!workspaceSlug || !from || !to) return
-    setLoading(true)
-    setError(null)
     fetch(
       `/api/workspaces/${workspaceSlug}/pnl?from=${from}&to=${to}&granularity=${granularity}`
     )
@@ -190,12 +206,12 @@ export function PnlContent({
       if (key === 'label' || key === 'bucketKey') continue
       if (typeof (first as Record<string, unknown>)[key] === 'number') {
         (total as Record<string, number>)[key] = data.rows.reduce(
-          (sum, r) => sum + ((r as Record<string, number>)[key] ?? 0),
+          (sum, r) => sum + ((r as unknown as Record<string, number>)[key] ?? 0),
           0
         )
       }
     }
-    return total as Partial<PnLRow> & { label: string }
+    return total as unknown as Partial<PnLRow> & { label: string }
   }, [data.rows])
 
   const totalNetSales = useMemo(
@@ -256,8 +272,8 @@ export function PnlContent({
           <DateRangeFilter
             from={from}
             to={to}
-            onFromChange={setFrom}
-            onToChange={setTo}
+            onFromChange={handleFromChange}
+            onToChange={handleToChange}
             fromId="pnl-from"
             toId="pnl-to"
           />
@@ -265,7 +281,7 @@ export function PnlContent({
             variant="outline"
             size="sm"
             className="h-8"
-            onClick={() => applyPnlPreset('ytd', setFrom, setTo)}
+            onClick={() => handleApplyPreset('ytd')}
           >
             Year to date
           </Button>
@@ -273,7 +289,7 @@ export function PnlContent({
             variant="outline"
             size="sm"
             className="h-8"
-            onClick={() => applyPnlPreset('lastYear', setFrom, setTo)}
+            onClick={() => handleApplyPreset('lastYear')}
           >
             Last year
           </Button>
@@ -370,10 +386,10 @@ export function PnlContent({
                             : typeof (row as Record<string, unknown>)[col.id] === 'number'
                               ? formatCellValue(
                                   col.id as keyof PnLRow,
-                                  (row as Record<string, number>)[col.id],
+                                  (row as unknown as Record<string, number>)[col.id],
                                   row.netSales
                                 )
-                              : String((row as Record<string, unknown>)[col.id] ?? '')}
+                              : String((row as unknown as Record<string, unknown>)[col.id] ?? '')}
                         </TableCell>
                       ))}
                     </TableRow>

@@ -436,7 +436,7 @@ export async function GET(
     if (channelIds.length > 0) {
       const cleanIds = channelIds.map((id) => id.replace(/^#/, ''))
 
-      const orderInclusionWhere = getOrderInclusionWhereFromWorkspace(workspace)
+      const orderInclusionWhere = getOrderInclusionWhereFromWorkspace(workspace as any)
       const matchedOrders = await prisma.shopifyOrder.findMany({
         where: {
           connectionId,

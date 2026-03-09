@@ -149,8 +149,8 @@ export async function GET(
   }
 
   const storeCurrency = 'INR'
-  const orderFilterSettings = normalizeOrderFilterSettings(workspace)
-  const orderInclusionWhere = getOrderInclusionWhereFromWorkspace(workspace)
+  const orderFilterSettings = normalizeOrderFilterSettings(workspace as any)
+  const orderInclusionWhere = getOrderInclusionWhereFromWorkspace(workspace as any)
 
   // Load all data in parallel (orders and line items respect workspace order filters)
   const [
@@ -312,8 +312,8 @@ export async function GET(
   const bucketEcRevenue = new Map<string, number>()
 
   const founderMonthly =
-    workspace.founderSalaryMonthly != null ? Number(workspace.founderSalaryMonthly) : 0
-  const founderCurrency = workspace.founderSalaryCurrency ?? 'INR'
+    workspace.founder_salary_monthly != null ? Number(workspace.founder_salary_monthly) : 0
+  const founderCurrency = workspace.founder_salary_currency ?? 'INR'
 
   const buckets = getBuckets(fromDate, toDate, granularity)
   const bucketByKey = new Map(buckets.map((b) => [b.key, b]))

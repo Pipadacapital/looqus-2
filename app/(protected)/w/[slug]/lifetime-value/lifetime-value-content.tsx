@@ -77,13 +77,11 @@ export function LifetimeValueContent({
     totalRows: number
     currency: string
   } | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(() => !!workspaceSlug && !!from && !!to)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!workspaceSlug || !from || !to) return
-    setLoading(true)
-    setError(null)
     const params = new URLSearchParams({
       from,
       to,
@@ -127,7 +125,6 @@ export function LifetimeValueContent({
   const summary = data?.summary
   const rows = data?.rows ?? []
   const totalRows = data?.totalRows ?? 0
-  const currency = data?.currency ?? 'INR'
   const totalPages = Math.max(1, Math.ceil(totalRows / pageSize))
   const dimensionLabel = DIMENSION_OPTIONS.find((d) => d.value === dimension)?.label ?? dimension
 
@@ -149,7 +146,7 @@ export function LifetimeValueContent({
       for (const k of mCols) flat.push(r[k])
     }
     return flat
-  }, [rows])
+  }, [rows, mCols])
   const minM = useMemo(() => (allMValues.length ? Math.min(...allMValues) : 0), [allMValues])
   const maxM = useMemo(() => (allMValues.length ? Math.max(...allMValues) : 0), [allMValues])
   const rangeM = maxM - minM || 1

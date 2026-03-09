@@ -118,13 +118,13 @@ export async function syncRefunds(params: SyncRefundsParams): Promise<SyncRefund
   let cursor: string | null = null
 
   for (;;) {
-    const data = await shopifyGraphQL<OrdersWithRefundsResponse>({
+    const data: OrdersWithRefundsResponse = await shopifyGraphQL({
       shopDomain,
       accessToken,
       query: REFUNDS_ORDER_QUERY,
       variables: {
         query,
-        first: ORDER_PAGE_SIZE,
+        first: ORDER_PAGE_SIZE, 
         after: cursor,
       },
     })
@@ -192,35 +192,35 @@ export async function syncRefunds(params: SyncRefundsParams): Promise<SyncRefund
           }
 
           try {
-            await prisma.shopifyRefundLineItem.upsert({
+            await prisma.shopify_refund_line_items.upsert({
               where: {
-                connectionId_shopifyRefundLineId: {
-                  connectionId,
-                  shopifyRefundLineId: rli.id,
+                connection_id_shopify_refund_line_id: {
+                  connection_id: connectionId,
+                  shopify_refund_line_id: rli.id,
                 },
               },
               create: {
-                connectionId,
-                shopifyRefundId: refund.id,
-                shopifyRefundLineId: rli.id,
-                shopifyOrderId: orderShopifyId,
-                orderId: ourOrder.id,
-                shopifyLineItemId: lineItemShopifyId,
-                lineItemId,
-                productShopifyId,
+                connection_id: connectionId,
+                shopify_refund_id: refund.id,
+                shopify_refund_line_id: rli.id,
+                shopify_order_id: orderShopifyId,
+                order_id: ourOrder.id,
+                shopify_line_item_id: lineItemShopifyId,
+                line_item_id: lineItemId,
+                product_shopify_id: productShopifyId,
                 sku,
                 quantity,
-                subtotalAmount,
-                totalTaxAmount,
-                processedAt,
+                subtotal_amount: subtotalAmount,
+                total_tax_amount: totalTaxAmount,
+                processed_at: processedAt,
               },
               update: {
                 quantity,
-                subtotalAmount,
-                totalTaxAmount,
-                processedAt,
-                lineItemId,
-                productShopifyId,
+                subtotal_amount: subtotalAmount,
+                total_tax_amount: totalTaxAmount,
+                processed_at: processedAt,
+                line_item_id: lineItemId,
+                product_shopify_id: productShopifyId,
                 sku,
               },
             })

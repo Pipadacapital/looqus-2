@@ -22,7 +22,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       </SidebarHeader>
       <SidebarContent>
         <NavMain sections={sidebarNavSections} />
-        <NavDocuments items={sidebarMenuData.documents} />
+        {/* <NavDocuments items={sidebarMenuData.documents} /> */}
       </SidebarContent>
       <SidebarFooter>
         <NavUser />

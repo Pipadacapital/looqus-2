@@ -239,7 +239,7 @@ export async function computeProducts(
 
   const fromDate = new Date(params.from + 'T00:00:00.000Z')
   const toDate = new Date(params.to + 'T23:59:59.999Z')
-  const orderFilterSettings = normalizeOrderFilterSettings(workspace)
+  const orderFilterSettings = normalizeOrderFilterSettings(workspace as any)
   const orderInclusionWhere = getOrderInclusionWhere(orderFilterSettings)
 
   const filteredDailyPromise = hasNoOrderFilters(orderFilterSettings)
@@ -309,20 +309,24 @@ export async function computeProducts(
   // Source of truth for Product/Variant: Sold = sum(lineItems.quantity), Refunded = sum(refundLineItems.quantity),
   // Refunds = sum(refund line subtotalAmount). We do NOT use shopify_analytics_daily for product-level sold/refunded.
   // Primary source for refunds: shopify_refund_line_items. When absent, fall back to daily total_returns allocation.
-  const refundLineRows = await prisma.shopifyRefundLineItem.findMany({
+  // Postgres has a hard limit of 32767 bind variables per prepared statement, so we cannot
+  // use `order_id: { in: orderIds }` when there are many orders. Instead filter by
+  // connection_id + processed_at (both indexed) and do the order-id filter in-memory.
+  const orderIdSet = new Set(orderIds)
+  const allRefundLineRows = await prisma.shopify_refund_line_items.findMany({
     where: {
-      connectionId,
-      orderId: { in: orderIds },
-      processedAt: { gte: fromDate, lte: toDate },
+      connection_id: connectionId,
+      processed_at: { gte: fromDate, lte: toDate },
     },
     select: {
-      orderId: true,
-      lineItemId: true,
-      productShopifyId: true,
+      order_id: true,
+      line_item_id: true,
+      product_shopify_id: true,
       quantity: true,
-      subtotalAmount: true,
+      subtotal_amount: true,
     },
   })
+  const refundLineRows = allRefundLineRows.filter((r) => orderIdSet.has(r.order_id))
   const useRefundLineTable = refundLineRows.length > 0
 
   type Agg = {
@@ -497,27 +501,27 @@ export async function computeProducts(
   // Unmapped: refund lines with no line item in DB and no productShopifyId are skipped (not attributed to any product group).
   if (useRefundLineTable) {
     for (const rli of refundLineRows) {
-      const li = rli.lineItemId ? lineItemById.get(rli.lineItemId) : null
+      const li = rli.line_item_id ? lineItemById.get(rli.line_item_id) : null
       const product = li?.productShopifyId
         ? productMap.get(li.productShopifyId)
-        : rli.productShopifyId
-          ? productMap.get(rli.productShopifyId)
+        : rli.product_shopify_id
+          ? productMap.get(rli.product_shopify_id)
           : null
-      const order = orderById.get(rli.orderId)
+      const order = orderById.get(rli.order_id)
       const orderTags = (order as { tags?: string[] } | undefined)?.tags ?? []
-      const isNc = orderIdToNc.get(rli.orderId) ?? false
-      const refundAmt = Number(rli.subtotalAmount)
+      const isNc = orderIdToNc.get(rli.order_id) ?? false
+      const refundAmt = Number(rli.subtotal_amount)
       const refundQty = rli.quantity
 
       const keys: { key: string; label: string; w: number }[] = []
       if (params.groupBy === 'product') {
-        const key = (li?.productShopifyId ?? rli.productShopifyId) ?? '__unmapped__'
+        const key = (li?.productShopifyId ?? rli.product_shopify_id) ?? '__unmapped__'
         if (key === '__unmapped__') continue
         const label = product?.title ?? (li?.title ?? '—')
         keys.push({ key, label, w: 1 })
       } else if (params.groupBy === 'variant') {
-        const vKey = (li?.productShopifyId ?? rli.productShopifyId ?? '') + '|' + (li?.variantTitle ?? 'default')
-        if (!(li?.productShopifyId ?? rli.productShopifyId)) continue
+        const vKey = (li?.productShopifyId ?? rli.product_shopify_id ?? '') + '|' + (li?.variantTitle ?? 'default')
+        if (!(li?.productShopifyId ?? rli.product_shopify_id)) continue
         const label = `${product?.title ?? li?.title ?? '—'}${li?.variantTitle ? ` - ${li.variantTitle}` : ''}`
         keys.push({ key: vKey, label, w: 1 })
       } else if (params.groupBy === 'vendor') {
@@ -773,10 +777,10 @@ export async function computeProducts(
         let rawRefundsAmt: number | null = null
         if (useRefundLineTable && firstProductKey) {
           const productRefundLines = refundLineRows.filter(
-            (r) => r.productShopifyId === firstProductKey || (r.lineItemId && lineItemById.get(r.lineItemId)?.productShopifyId === firstProductKey)
+            (r) => r.product_shopify_id === firstProductKey || (r.line_item_id && lineItemById.get(r.line_item_id)?.productShopifyId === firstProductKey)
           )
           rawRefundedQty = productRefundLines.reduce((s, r) => s + r.quantity, 0)
-          rawRefundsAmt = productRefundLines.reduce((s, r) => s + Number(r.subtotalAmount), 0)
+          rawRefundsAmt = productRefundLines.reduce((s, r) => s + Number(r.subtotal_amount), 0)
         }
         const dayRefundTotal = [...dailyRates.values()].reduce((s, d) => s + d.totalReturns, 0)
         console.log('[Products VALIDATION] one product vs raw', {

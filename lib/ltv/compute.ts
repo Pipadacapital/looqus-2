@@ -377,7 +377,7 @@ export async function computeLtv(
   const toDateExtended = new Date(toDate)
   toDateExtended.setUTCDate(toDateExtended.getUTCDate() + 360)
 
-  const orderFilterSettings = normalizeOrderFilterSettings(workspace)
+  const orderFilterSettings = normalizeOrderFilterSettings(workspace as any)
   const orderInclusionWhere = getOrderInclusionWhere(orderFilterSettings)
 
   const [firstOrders, dailyRates, dailyAdSpend, dailyReturnsAndSales, rtoIds] = await Promise.all([

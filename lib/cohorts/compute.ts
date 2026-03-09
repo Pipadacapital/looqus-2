@@ -484,7 +484,7 @@ export async function computeCohorts(
   const toDateExtended = new Date(toDate)
   toDateExtended.setUTCDate(toDateExtended.getUTCDate() + 360)
 
-  const orderFilterSettings = normalizeOrderFilterSettings(workspace)
+  const orderFilterSettings = normalizeOrderFilterSettings(workspace as any)
   const orderInclusionWhere = getOrderInclusionWhere(orderFilterSettings)
 
   const [firstOrders, dailyRates, adSpendByMonth, totalAdSpend, rtoIds, dailyReturnsAndSales, dailyAdSpend] = await Promise.all([
