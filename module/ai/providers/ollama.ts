@@ -1,12 +1,10 @@
-import { prisma } from "@/lib/prisma";
-
 /**
  * Ollama provider for module/ai. Uses OLLAMA_BASE_URL (default http://localhost:11434).
  * No dependency on lib/ollama — self-contained for module/ai.
  */
-const settings = await prisma.systemSettings.findFirst();
-const ollamaUrl = settings?.ollamaUrl;
-const OLLAMA_BASE_URL = ollamaUrl ?? 'http://localhost:11434'
+
+const OLLAMA_BASE_URL =
+  process.env.OLLAMA_BASE_URL ?? process.env.OLLAMA_HOST ?? 'http://localhost:11434'
 
 export type OllamaGenerateOptions = {
   model: string
