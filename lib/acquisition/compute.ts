@@ -765,7 +765,7 @@ export async function computeAcquisitionComposition(
         const s = t.toISOString().slice(0, 10)
         const row = rawByDate.get(s)
         if (row) {
-          sum += (row as Record<string, number>)[key]
+          sum += (row as unknown as Record<string, number>)[key]
           n++
         }
       }
