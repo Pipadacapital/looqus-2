@@ -1,4 +1,5 @@
 import {
+  IconChartBar,
   IconChartLine,
   IconClock,
   IconCurrencyDollar,
@@ -18,6 +19,7 @@ import {
   IconPackage,
   IconShoppingBag,
   IconRefresh,
+  IconSpeakerphone,
 } from "@tabler/icons-react"
 
 export type SidebarNavItem = {
@@ -55,6 +57,8 @@ export const sidebarNavSections: SidebarNavSection[] = [
       { title: "Products", path: "products", icon: IconShoppingBag },
       { title: "Lifetime Value", path: "lifetime-value", icon: IconReport },
       { title: "Cohorts", path: "cohorts", icon: IconChartLine },
+      { title: "Acquisition", path: "acquisition", icon: IconSpeakerphone },
+      { title: "Distributions", path: "distributions", icon: IconChartBar },
       { title: "Timing", path: "timings", icon: IconClock },
       { title: "Inventory", path: "inventory", icon: IconPackage },
       { title: "Costs", path: "settings/costs", icon: IconReceipt },

@@ -93,8 +93,8 @@ async function getFirstOrdersInRange(
   return rows
 }
 
-/** Daily: orders count, gross sales, total_returns (for refund allocation), variable cost (shipping, packaging, website, custom). Uses shared workspace-costs resolution. */
-async function getDailyRates(
+/** Daily: orders count, gross sales, total_returns (for refund allocation), variable cost (shipping, packaging, website, custom). Uses shared workspace-costs resolution. Exported for use in distributions. */
+export async function getDailyRates(
   prisma: PrismaClient,
   workspaceId: string,
   connectionId: string,
@@ -162,8 +162,8 @@ async function getDailyRates(
   return map
 }
 
-/** COGS per order (uses shared COGS resolution). */
-async function getOrderCogs(
+/** COGS per order (uses shared COGS resolution). Exported for use in distributions. */
+export async function getOrderCogs(
   prisma: PrismaClient,
   connectionId: string,
   workspaceId: string,
