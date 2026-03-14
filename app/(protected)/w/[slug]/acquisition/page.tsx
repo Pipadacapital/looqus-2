@@ -1,6 +1,8 @@
-import { prisma } from '@/lib/prisma'
+import { Suspense } from 'react'
 import { redirect } from 'next/navigation'
-import { AcquisitionContent } from './acquisition-content'
+import { getCachedWorkspace } from '@/lib/server-cache'
+import { AcquisitionLoader } from './acquisition-loader'
+import Loading from './loading'
 
 export default async function AcquisitionPage({
   params,
@@ -9,25 +11,12 @@ export default async function AcquisitionPage({
 }) {
   const { slug } = await params
 
-  // Layout already validated auth — no duplicate auth.getUser() needed here.
-  const workspace = await prisma.workspace.findUnique({
-    where: { slug },
-    include: {
-      shopifyConnections: {
-        where: { status: 'CONNECTED' },
-        select: { id: true },
-        take: 1,
-      },
-    },
-  })
-
+  const workspace = await getCachedWorkspace(slug)
   if (!workspace) redirect('/')
 
   return (
-    <AcquisitionContent
-      workspaceSlug={slug}
-      workspaceName={workspace.name}
-      hasShopifyConnection={!!workspace.shopifyConnections?.[0]}
-    />
+    <Suspense fallback={<Loading />}>
+      <AcquisitionLoader slug={slug} />
+    </Suspense>
   )
 }

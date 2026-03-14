@@ -1,6 +1,8 @@
-import { prisma } from '@/lib/prisma'
+import { Suspense } from 'react'
 import { redirect } from 'next/navigation'
-import { GoogleAdsContent } from './google-ads-content'
+import { getCachedWorkspace } from '@/lib/server-cache'
+import { GoogleAdsLoader } from './google-ads-loader'
+import Loading from './loading'
 
 export default async function GoogleAdsPage({
   params,
@@ -9,24 +11,12 @@ export default async function GoogleAdsPage({
 }) {
   const { slug } = await params
 
-  // Layout already validated auth and membership — no duplicate checks needed.
-  const workspace = await prisma.workspace.findUnique({
-    where: { slug },
-    select: {
-      id: true,
-      google_ads_connections: {
-        where: { status: 'CONNECTED' },
-        select: { id: true, customer_ids: true, selected_customer_id: true },
-      },
-    },
-  })
-
+  const workspace = await getCachedWorkspace(slug)
   if (!workspace) redirect('/')
 
   return (
-    <GoogleAdsContent
-      hasConnection={!!workspace.google_ads_connections}
-      workspaceId={workspace.id}
-    />
+    <Suspense fallback={<Loading />}>
+      <GoogleAdsLoader slug={slug} />
+    </Suspense>
   )
 }

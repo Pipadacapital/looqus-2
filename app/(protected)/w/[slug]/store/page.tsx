@@ -1,6 +1,8 @@
-import { prisma } from '@/lib/prisma'
+import { Suspense } from 'react'
 import { redirect } from 'next/navigation'
-import { StoreContent } from './store-content'
+import { getCachedWorkspace } from '@/lib/server-cache'
+import { StoreLoader } from './store-loader'
+import Loading from './loading'
 
 export default async function StorePage({
   params,
@@ -9,28 +11,12 @@ export default async function StorePage({
 }) {
   const { slug } = await params
 
-  // Layout already validated auth — no duplicate auth.getUser() needed here.
-  const workspace = await prisma.workspace.findUnique({
-    where: { slug },
-    include: {
-      shopifyConnections: {
-        where: { status: 'CONNECTED' },
-        select: { id: true, lastSyncAt: true },
-        take: 1,
-      },
-    },
-  })
-
+  const workspace = await getCachedWorkspace(slug)
   if (!workspace) redirect('/')
 
-  const hasConnection = workspace.shopifyConnections.length > 0
-  const connection = workspace.shopifyConnections[0] ?? null
-
   return (
-    <StoreContent
-      hasConnection={hasConnection}
-      connectionId={connection?.id ?? null}
-      lastSyncAt={connection?.lastSyncAt?.toISOString() ?? null}
-    />
+    <Suspense fallback={<Loading />}>
+      <StoreLoader slug={slug} />
+    </Suspense>
   )
 }

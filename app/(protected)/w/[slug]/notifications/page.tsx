@@ -1,7 +1,8 @@
-import { prisma } from '@/lib/prisma'
+import { Suspense } from 'react'
 import { redirect } from 'next/navigation'
-import { getCachedUser, getCachedWorkspace } from '@/lib/server-cache'
-import { NotificationsContent } from './notifications-content'
+import { getCachedWorkspace } from '@/lib/server-cache'
+import { NotificationsLoader } from './notifications-loader'
+import Loading from './loading'
 
 export default async function NotificationsPage({
   params,
@@ -10,44 +11,12 @@ export default async function NotificationsPage({
 }) {
   const { slug } = await params
 
-  // Both return cached results from layout — no extra remote or DB calls.
-  const [user, workspace] = await Promise.all([
-    getCachedUser(),
-    getCachedWorkspace(slug),
-  ])
-
-  if (!user || !workspace) redirect('/')
-
-  const notifications = await prisma.notification.findMany({
-    where: {
-      userId: user.id,
-      workspaceId: workspace.id,
-    },
-    orderBy: { createdAt: 'desc' },
-    take: 50,
-    select: {
-      id: true,
-      type: true,
-      title: true,
-      body: true,
-      actionUrl: true,
-      read: true,
-      metadata: true,
-      createdAt: true,
-      readAt: true,
-      workspaceId: true,
-    },
-  })
+  const workspace = await getCachedWorkspace(slug)
+  if (!workspace) redirect('/')
 
   return (
-    <NotificationsContent
-      workspaceSlug={slug}
-      workspaceId={workspace.id}
-      initialNotifications={notifications.map((n) => ({
-        ...n,
-        createdAt: n.createdAt.toISOString(),
-        readAt: n.readAt?.toISOString() ?? null,
-      }))}
-    />
+    <Suspense fallback={<Loading />}>
+      <NotificationsLoader slug={slug} />
+    </Suspense>
   )
 }

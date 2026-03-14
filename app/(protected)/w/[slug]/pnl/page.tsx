@@ -1,6 +1,8 @@
-import { prisma } from '@/lib/prisma'
+import { Suspense } from 'react'
 import { redirect } from 'next/navigation'
-import { PnlContent } from './pnl-content'
+import { getCachedWorkspace } from '@/lib/server-cache'
+import { PnlLoader } from './pnl-loader'
+import Loading from './loading'
 
 export default async function PnlPage({
   params,
@@ -9,35 +11,12 @@ export default async function PnlPage({
 }) {
   const { slug } = await params
 
-  // Layout already validated auth — no duplicate auth.getUser() needed here.
-  const workspace = await prisma.workspace.findUnique({
-    where: { slug },
-    include: {
-      shopifyConnections: {
-        where: { status: 'CONNECTED' },
-        select: { id: true, shopDomain: true, status: true },
-        take: 1,
-      },
-    },
-  })
-
+  const workspace = await getCachedWorkspace(slug)
   if (!workspace) redirect('/')
 
-  const connection = workspace.shopifyConnections[0] ?? null
-
   return (
-    <PnlContent
-      workspaceSlug={slug}
-      workspaceName={workspace.name}
-      shopifyConnection={
-        connection
-          ? {
-              id: connection.id,
-              shopDomain: connection.shopDomain,
-              status: connection.status,
-            }
-          : null
-      }
-    />
+    <Suspense fallback={<Loading />}>
+      <PnlLoader slug={slug} />
+    </Suspense>
   )
 }
