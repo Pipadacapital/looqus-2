@@ -1,6 +1,8 @@
-import { prisma } from '@/lib/prisma'
+import { Suspense } from 'react'
 import { redirect } from 'next/navigation'
-import { MetaAdsContent } from './meta-ads-content'
+import { getCachedWorkspace } from '@/lib/server-cache'
+import { MetaAdsLoader } from './meta-ads-loader'
+import Loading from './loading'
 
 export default async function MetaAdsPage({
   params,
@@ -9,28 +11,12 @@ export default async function MetaAdsPage({
 }) {
   const { slug } = await params
 
-  // Layout already validated auth and membership — no duplicate checks needed.
-  const workspace = await prisma.workspace.findUnique({
-    where: { slug },
-    select: {
-      id: true,
-      meta_ads_connections: {
-        where: { status: 'CONNECTED' },
-        select: {
-          id: true,
-          ad_account_ids: true,
-          selected_ad_account_id: true,
-        },
-      },
-    },
-  })
-
+  const workspace = await getCachedWorkspace(slug)
   if (!workspace) redirect('/')
 
   return (
-    <MetaAdsContent
-      hasConnection={!!workspace.meta_ads_connections}
-      workspaceId={workspace.id}
-    />
+    <Suspense fallback={<Loading />}>
+      <MetaAdsLoader slug={slug} />
+    </Suspense>
   )
 }
