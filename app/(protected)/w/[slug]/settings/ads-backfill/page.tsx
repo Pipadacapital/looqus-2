@@ -1,6 +1,6 @@
-import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
 import { redirect } from 'next/navigation'
+import { getCachedUser, getCachedWorkspace } from '@/lib/server-cache'
 import { AdsBackfillClient } from './ads-backfill-client'
 
 export default async function AdsBackfillPage({
@@ -9,17 +9,14 @@ export default async function AdsBackfillPage({
   params: Promise<{ slug: string }>
 }) {
   const { slug } = await params
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) redirect('/auth/login')
 
-  const workspace = await prisma.workspace.findUnique({
-    where: { slug },
-    select: { id: true, name: true },
-  })
-  if (!workspace) redirect('/')
+  // Both return cached results from layout — no extra remote or DB calls.
+  const [user, workspace] = await Promise.all([
+    getCachedUser(),
+    getCachedWorkspace(slug),
+  ])
+
+  if (!user || !workspace) redirect('/')
 
   const membership = await prisma.workspaceMember.findUnique({
     where: {
@@ -27,6 +24,7 @@ export default async function AdsBackfillPage({
     },
     select: { role: true },
   })
+
   if (!membership) redirect('/')
 
   const isOwner = membership.role === 'OWNER'

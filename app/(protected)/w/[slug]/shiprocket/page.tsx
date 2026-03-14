@@ -1,4 +1,3 @@
-import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
 import { redirect } from 'next/navigation'
 import { ShiprocketContent } from './shiprocket-content'
@@ -37,13 +36,8 @@ export default async function ShiprocketPage({
 }) {
   const { slug } = await params
   const sp = await searchParams
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
 
-  if (!user) redirect('/auth/login')
-
+  // Layout already validated auth and membership — no duplicate checks needed.
   const workspace = await prisma.workspace.findUnique({
     where: { slug },
     select: {
@@ -65,13 +59,6 @@ export default async function ShiprocketPage({
   })
 
   if (!workspace) redirect('/')
-
-  const membership = await prisma.workspaceMember.findFirst({
-    where: { workspaceId: workspace.id, userId: user.id },
-    select: { role: true },
-  })
-
-  if (!membership) redirect('/')
 
   const conn = workspace.shiprocketConnection
   const isConnected = conn?.status === 'CONNECTED'

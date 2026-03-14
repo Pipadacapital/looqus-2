@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/server'
+import { getCachedUser } from '@/lib/server-cache'
 import { prisma } from '@/lib/prisma'
 
 type DbUser = { id: string; email: string; systemRole: string }
@@ -41,10 +42,8 @@ export async function requireSuperadmin(): Promise<
  * Use in server components to conditionally show admin UI (e.g. link to /admin).
  */
 export async function getCurrentUserRole(): Promise<'SUPERADMIN' | 'USER' | null> {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+  // Use cached user — no extra remote auth call when layout already called getCachedUser().
+  const user = await getCachedUser()
   if (!user) return null
 
   const dbUser = await prisma.user.findUnique({

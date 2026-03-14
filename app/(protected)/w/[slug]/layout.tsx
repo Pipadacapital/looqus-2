@@ -1,6 +1,6 @@
 import { redirect, notFound } from 'next/navigation'
-import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
+import { getCachedUser, getCachedWorkspace } from '@/lib/server-cache'
 import { WorkspaceProvider } from '@/hooks/use-workspace'
 import { AppSidebar } from '@/components/app-sidebar'
 import { SiteHeader } from '@/components/site-header'
@@ -16,51 +16,51 @@ export default async function WorkspaceLayout({
 }) {
   const { slug } = await params
 
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+  // getCachedUser() makes one remote Supabase call per request;
+  // subsequent calls from page.tsx return the cached result instantly.
+  const user = await getCachedUser()
 
   if (!user) {
     redirect('/auth/login')
   }
 
-  const workspace = await prisma.workspace.findUnique({
-    where: { slug },
-  })
+  // getCachedWorkspace() deduplicates the DB lookup across layout + page.
+  const workspace = await getCachedWorkspace(slug)
 
   if (!workspace) {
     notFound()
   }
 
-  const membership = await prisma.workspaceMember.findUnique({
-    where: {
-      userId_workspaceId: {
-        userId: user.id,
-        workspaceId: workspace.id,
+  // Fetch membership and all memberships in parallel — they're independent.
+  const [membership, allMemberships] = await Promise.all([
+    prisma.workspaceMember.findUnique({
+      where: {
+        userId_workspaceId: {
+          userId: user.id,
+          workspaceId: workspace.id,
+        },
       },
-    },
-  })
+    }),
+    prisma.workspaceMember.findMany({
+      where: { userId: user.id },
+      include: {
+        workspace: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            logoUrl: true,
+            plan: true,
+          },
+        },
+      },
+      orderBy: { joinedAt: 'asc' },
+    }),
+  ])
 
   if (!membership) {
     notFound()
   }
-
-  const allMemberships = await prisma.workspaceMember.findMany({
-    where: { userId: user.id },
-    include: {
-      workspace: {
-        select: {
-          id: true,
-          name: true,
-          slug: true,
-          logoUrl: true,
-          plan: true,
-        },
-      },
-    },
-    orderBy: { joinedAt: 'asc' },
-  })
 
   const workspaceContextValue = {
     current: {

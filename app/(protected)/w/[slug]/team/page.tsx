@@ -1,6 +1,6 @@
-import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
 import { redirect } from 'next/navigation'
+import { getCachedUser, getCachedWorkspace } from '@/lib/server-cache'
 import { TeamContent } from './team-content'
 
 export default async function TeamPage({
@@ -10,57 +10,54 @@ export default async function TeamPage({
 }) {
   const { slug } = await params
 
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+  // Layout already validated auth. Both getCachedUser and getCachedWorkspace
+  // return cached results — no extra remote or DB calls.
+  const [user, workspace] = await Promise.all([
+    getCachedUser(),
+    getCachedWorkspace(slug),
+  ])
 
-  if (!user) redirect('/auth/login')
+  if (!user || !workspace) redirect('/')
 
-  const workspace = await prisma.workspace.findUnique({
-    where: { slug },
-  })
-
-  if (!workspace) redirect('/')
-
-  const currentMembership = await prisma.workspaceMember.findUnique({
-    where: {
-      userId_workspaceId: {
-        userId: user.id,
-        workspaceId: workspace.id,
-      },
-    },
-  })
-
-  if (!currentMembership) redirect('/')
-
-  const members = await prisma.workspaceMember.findMany({
-    where: { workspaceId: workspace.id },
-    include: {
-      user: {
-        select: {
-          id: true,
-          email: true,
-          fullName: true,
-          avatarUrl: true,
+  // Fetch current membership, all members, and pending invitations in parallel.
+  const [currentMembership, members, pendingInvitations] = await Promise.all([
+    prisma.workspaceMember.findUnique({
+      where: {
+        userId_workspaceId: {
+          userId: user.id,
+          workspaceId: workspace.id,
         },
       },
-    },
-    orderBy: [{ role: 'asc' }, { joinedAt: 'asc' }],
-  })
-
-  const pendingInvitations = await prisma.invitation.findMany({
-    where: {
-      workspaceId: workspace.id,
-      status: 'PENDING',
-    },
-    include: {
-      invitedBy: {
-        select: { fullName: true, email: true },
+    }),
+    prisma.workspaceMember.findMany({
+      where: { workspaceId: workspace.id },
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            fullName: true,
+            avatarUrl: true,
+          },
+        },
       },
-    },
-    orderBy: { createdAt: 'desc' },
-  })
+      orderBy: [{ role: 'asc' }, { joinedAt: 'asc' }],
+    }),
+    prisma.invitation.findMany({
+      where: {
+        workspaceId: workspace.id,
+        status: 'PENDING',
+      },
+      include: {
+        invitedBy: {
+          select: { fullName: true, email: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    }),
+  ])
+
+  if (!currentMembership) redirect('/')
 
   const canManage = ['OWNER', 'ADMIN'].includes(currentMembership.role)
 

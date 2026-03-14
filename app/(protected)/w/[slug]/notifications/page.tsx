@@ -1,6 +1,6 @@
-import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
 import { redirect } from 'next/navigation'
+import { getCachedUser, getCachedWorkspace } from '@/lib/server-cache'
 import { NotificationsContent } from './notifications-content'
 
 export default async function NotificationsPage({
@@ -10,18 +10,13 @@ export default async function NotificationsPage({
 }) {
   const { slug } = await params
 
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+  // Both return cached results from layout — no extra remote or DB calls.
+  const [user, workspace] = await Promise.all([
+    getCachedUser(),
+    getCachedWorkspace(slug),
+  ])
 
-  if (!user) redirect('/auth/login')
-
-  const workspace = await prisma.workspace.findUnique({
-    where: { slug },
-  })
-
-  if (!workspace) redirect('/')
+  if (!user || !workspace) redirect('/')
 
   const notifications = await prisma.notification.findMany({
     where: {

@@ -1,6 +1,5 @@
-import { createClient } from '@/lib/server'
-import { prisma } from '@/lib/prisma'
 import { redirect } from 'next/navigation'
+import { getCachedWorkspace } from '@/lib/server-cache'
 import { LifetimeValueContent } from './lifetime-value-content'
 
 export default async function LifetimeValuePage({
@@ -10,17 +9,9 @@ export default async function LifetimeValuePage({
 }) {
   const { slug } = await params
 
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  if (!user) redirect('/auth/login')
-
-  const workspace = await prisma.workspace.findUnique({
-    where: { slug },
-    select: { name: true },
-  })
+  // Layout already validated auth. getCachedWorkspace returns the cached result
+  // from the layout DB call — no extra DB round-trip here.
+  const workspace = await getCachedWorkspace(slug)
 
   if (!workspace) redirect('/')
 

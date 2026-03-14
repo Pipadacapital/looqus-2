@@ -1,4 +1,3 @@
-import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
 import { redirect } from 'next/navigation'
 import { TimingsContent } from './timings-content'
@@ -10,13 +9,7 @@ export default async function TimingsPage({
 }) {
   const { slug } = await params
 
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  if (!user) redirect('/auth/login')
-
+  // Layout already validated auth — no duplicate auth.getUser() needed here.
   const workspace = await prisma.workspace.findUnique({
     where: { slug },
     include: {

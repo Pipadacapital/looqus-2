@@ -1,4 +1,3 @@
-import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
 import { redirect } from 'next/navigation'
 import { MetaAdsContent } from './meta-ads-content'
@@ -10,13 +9,7 @@ export default async function MetaAdsPage({
 }) {
   const { slug } = await params
 
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  if (!user) redirect('/auth/login')
-
+  // Layout already validated auth and membership — no duplicate checks needed.
   const workspace = await prisma.workspace.findUnique({
     where: { slug },
     select: {
@@ -33,17 +26,6 @@ export default async function MetaAdsPage({
   })
 
   if (!workspace) redirect('/')
-
-  const membership = await prisma.workspaceMember.findUnique({
-    where: {
-      userId_workspaceId: {
-        userId: user.id,
-        workspaceId: workspace.id,
-      },
-    },
-  })
-
-  if (!membership) redirect('/')
 
   return (
     <MetaAdsContent
