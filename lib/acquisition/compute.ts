@@ -5,12 +5,14 @@
  */
 
 import type { PrismaClient } from '@prisma/client'
+import type { Prisma } from '@prisma/client'
 import { eachDayOfInterval, subDays } from 'date-fns'
 import {
   getOrderInclusionWhere,
   hasNoOrderFilters,
   normalizeOrderFilterSettings,
 } from '@/lib/order-filters'
+import { getEffectiveDailyAggregates } from '@/lib/effective-daily'
 import { resolveLineItemCogs, normalizeCogsSettings } from '@/lib/cogs'
 import { getDailyVariableContribution } from '@/lib/workspace-costs'
 
@@ -100,20 +102,23 @@ async function getDailyRates(
   workspaceId: string,
   connectionId: string,
   fromDate: Date,
-  toDate: Date
+  toDate: Date,
+  orderInclusionWhere?: Prisma.ShopifyOrderWhereInput
 ): Promise<Map<string, { ordersCount: number; grossSales: number; shipping: number; packaging: number; website: number }>> {
-  const daily = await prisma.shopifyAnalyticsDaily.findMany({
-    where: { connectionId, date: { gte: fromDate, lte: toDate } },
-    select: { date: true, ordersCount: true, grossSales: true },
-  })
+  const effective = await getEffectiveDailyAggregates(
+    prisma,
+    connectionId,
+    fromDate,
+    toDate,
+    orderInclusionWhere
+  )
   const workspaceCosts = await prisma.workspaceCost.findMany({
     where: { workspaceId, effectiveFrom: { lte: toDate } },
   })
   const map = new Map<string, { ordersCount: number; grossSales: number; shipping: number; packaging: number; website: number }>()
-  for (const d of daily) {
-    const dateStr = d.date.toISOString().slice(0, 10)
+  for (const [dateStr, d] of effective) {
     const ordersCount = d.ordersCount
-    const grossSales = Number(d.grossSales)
+    const grossSales = d.grossSales
     let shipping = 0,
       packaging = 0,
       website = 0
@@ -204,19 +209,19 @@ async function getDailyReturnsAndSales(
   prisma: PrismaClient,
   connectionId: string,
   fromDate: Date,
-  toDate: Date
+  toDate: Date,
+  orderInclusionWhere?: Prisma.ShopifyOrderWhereInput
 ): Promise<Map<string, { grossSales: number; totalReturns: number }>> {
-  const rows = await prisma.shopifyAnalyticsDaily.findMany({
-    where: { connectionId, date: { gte: fromDate, lte: toDate } },
-    select: { date: true, grossSales: true, total_returns: true },
-  })
+  const effective = await getEffectiveDailyAggregates(
+    prisma,
+    connectionId,
+    fromDate,
+    toDate,
+    orderInclusionWhere
+  )
   const map = new Map<string, { grossSales: number; totalReturns: number }>()
-  for (const r of rows) {
-    const dateStr = r.date.toISOString().slice(0, 10)
-    map.set(dateStr, {
-      grossSales: Number(r.grossSales),
-      totalReturns: Number(r.total_returns ?? 0),
-    })
+  for (const [dateStr, d] of effective) {
+    map.set(dateStr, { grossSales: d.grossSales, totalReturns: d.totalReturns })
   }
   return map
 }
@@ -340,9 +345,9 @@ export async function computeAcquisition(
 
   const [firstOrders, dailyRates, adSpendMaps, dailyReturnsAndSales, rtoIds] = await Promise.all([
     getFirstOrdersInRange(prisma, connectionId, fromDate, toDate, orderFilterSettings),
-    getDailyRates(prisma, workspace.id, connectionId, fromDate, toDateExtended),
+    getDailyRates(prisma, workspace.id, connectionId, fromDate, toDateExtended, orderInclusionWhere),
     getDailyAdSpend(prisma, workspace, fromDate, toDateExtended),
-    getDailyReturnsAndSales(prisma, connectionId, fromDate, toDateExtended),
+    getDailyReturnsAndSales(prisma, connectionId, fromDate, toDateExtended, orderInclusionWhere),
     getRtoOrderIds(prisma, workspace.id, connectionId, fromDate, toDateExtended),
   ])
 
@@ -613,9 +618,9 @@ export async function computeAcquisitionComposition(
 
   const [firstOrders, dailyRates, adSpendMaps, dailyReturnsAndSales, rtoIds] = await Promise.all([
     getFirstOrdersInRange(prisma, connectionId, fromExtended, toDate, orderFilterSettings),
-    getDailyRates(prisma, workspace.id, connectionId, fromExtended, toDateExtended),
+    getDailyRates(prisma, workspace.id, connectionId, fromExtended, toDateExtended, orderInclusionWhere),
     getDailyAdSpend(prisma, workspace, fromExtended, toDateExtended),
-    getDailyReturnsAndSales(prisma, connectionId, fromExtended, toDateExtended),
+    getDailyReturnsAndSales(prisma, connectionId, fromExtended, toDateExtended, orderInclusionWhere),
     getRtoOrderIds(prisma, workspace.id, connectionId, fromExtended, toDateExtended),
   ])
 

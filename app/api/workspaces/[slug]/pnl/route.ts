@@ -267,47 +267,58 @@ export async function GET(
       : getFilteredDailyAggregates(prisma, connectionId, fromDate, toDate, orderFilterSettings),
   ])
 
-  // Diagnostic: workspace and source row counts (temporary for debugging new-workspace issues)
+  // Diagnostic: latest order date, latest analytics date, row counts (for debugging P&L after 2026-03-08)
+  const latestOrderDate =
+    allOrdersInRange.length > 0
+      ? allOrdersInRange.reduce((max, o) => (o.processedAt > max ? o.processedAt : max), allOrdersInRange[0].processedAt)
+      : null
+  const latestAnalyticsDate =
+    dailyAnalytics.length > 0
+      ? dailyAnalytics.reduce((max, d) => (d.date > max ? d.date : max), dailyAnalytics[0].date)
+      : null
   if (process.env.NODE_ENV === 'development') {
-    const ordersCount = allOrdersInRange.length
-    const dailyCount = dailyAnalytics.length
-    console.log('[P&L] workspace scope', {
+    console.log('[P&L] data scope', {
       workspaceId: workspace.id,
       slug,
       connectionId,
-      dailyAnalyticsRows: dailyCount,
-      ordersInRange: ordersCount,
+      dailyAnalyticsRows: dailyAnalytics.length,
+      ordersInRange: allOrdersInRange.length,
       lineItemsInRange: lineItemsInRange.length,
-      bucketsCount: 0,
+      latestShopifyOrderDate: latestOrderDate?.toISOString().slice(0, 10) ?? null,
+      latestShopifyAnalyticsDailyDate: latestAnalyticsDate?.toISOString().slice(0, 10) ?? null,
     })
   }
 
-  // Fallback: when shopify_analytics_daily is empty but we have orders, derive daily totals from orders
-  // so P&L shows data for newly onboarded workspaces that haven't run analytics sync yet.
-  let effectiveDaily = dailyAnalytics
-  if (effectiveDaily.length === 0 && allOrdersInRange.length > 0) {
-    const byDate = new Map<
-      string,
-      { grossSales: number; totalDiscount: number; totalTax: number; ordersCount: number; total_returns: number; returns: number }
-    >()
-    for (const o of allOrdersInRange) {
-      const dateStr = o.processedAt.toISOString().slice(0, 10)
-      const cur = byDate.get(dateStr) ?? {
-        grossSales: 0,
-        totalDiscount: 0,
-        totalTax: 0,
-        ordersCount: 0,
-        total_returns: 0,
-        returns: 0,
-      }
-      cur.grossSales += Number(o.totalPrice)
-      cur.totalDiscount += Number(o.totalDiscount ?? 0)
-      cur.totalTax += Number(o.totalTax)
-      cur.ordersCount += 1
-      byDate.set(dateStr, cur)
+  // Build order-derived daily totals for every date that has orders (for fallback / fill-in).
+  const orderDerivedByDate = new Map<
+    string,
+    { grossSales: number; totalDiscount: number; totalTax: number; ordersCount: number; total_returns: number; returns: number }
+  >()
+  for (const o of allOrdersInRange) {
+    const dateStr = o.processedAt.toISOString().slice(0, 10)
+    const cur = orderDerivedByDate.get(dateStr) ?? {
+      grossSales: 0,
+      totalDiscount: 0,
+      totalTax: 0,
+      ordersCount: 0,
+      total_returns: 0,
+      returns: 0,
     }
-    effectiveDaily = [...byDate.entries()].map(([dateStr, v]) => ({
-      date: new Date(dateStr + 'T00:00:00.000Z'),
+    cur.grossSales += Number(o.totalPrice)
+    cur.totalDiscount += Number(o.totalDiscount ?? 0)
+    cur.totalTax += Number(o.totalTax)
+    cur.ordersCount += 1
+    orderDerivedByDate.set(dateStr, cur)
+  }
+
+  const analyticsDateSet = new Set(dailyAnalytics.map((d) => d.date.toISOString().slice(0, 10)))
+  // Merge: use shopify_analytics_daily when present; for dates with orders but no analytics row, use order-derived totals.
+  // This fixes P&L showing 0 for recent days when ShopifyQL hasn't returned data yet (e.g. after 2026-03-08).
+  const orderOnlyDates = [...orderDerivedByDate.keys()].filter((dateStr) => !analyticsDateSet.has(dateStr))
+  const orderDerivedRows = orderOnlyDates.map((dateStr) => {
+    const v = orderDerivedByDate.get(dateStr)!
+    return {
+      date: new Date(`${dateStr}T00:00:00.000Z`),
       netSales: new Decimal(v.grossSales - Math.abs(v.totalDiscount)),
       grossSales: new Decimal(v.grossSales),
       totalTax: new Decimal(v.totalTax),
@@ -316,10 +327,16 @@ export async function GET(
       currency: storeCurrency,
       total_returns: new Decimal(0),
       returns: new Decimal(0),
-    }))
-    if (process.env.NODE_ENV === 'development') {
-      console.log('[P&L] fallback: derived daily from orders', { days: effectiveDaily.length })
     }
+  })
+  let effectiveDaily = [...dailyAnalytics, ...orderDerivedRows].sort(
+    (a, b) => a.date.getTime() - b.date.getTime()
+  )
+  if (process.env.NODE_ENV === 'development' && orderDerivedRows.length > 0) {
+    console.log('[P&L] filled missing dates from orders', {
+      filledDays: orderDerivedRows.length,
+      dates: orderDerivedRows.map((r) => r.date.toISOString().slice(0, 10)),
+    })
   }
 
   const coqMap = new Map(products.filter((p) => p.coq).map((p) => [p.shopifyId, Number(p.coq)]))

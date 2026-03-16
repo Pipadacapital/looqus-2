@@ -7,6 +7,7 @@ import {
   hasNoOrderFilters,
   normalizeOrderFilterSettings,
 } from '@/lib/order-filters'
+import { getEffectiveDailyAggregates } from '@/lib/effective-daily'
 import { resolveLineItemCogs, normalizeCogsSettings } from '@/lib/cogs'
 import { getDailyVariableContribution } from '@/lib/workspace-costs'
 
@@ -93,7 +94,7 @@ async function getFirstOrdersInRange(
   return rows
 }
 
-/** Daily: orders count, gross sales, total_returns (for refund allocation), variable cost (shipping, packaging, website, custom). Uses shared workspace-costs resolution. Exported for use in distributions. */
+/** Daily: orders count, gross sales, total_returns (for refund allocation), variable cost (shipping, packaging, website, custom). Uses effective daily (analytics + order-derived fallback for recent dates). Exported for use in distributions. */
 export async function getDailyRates(
   prisma: PrismaClient,
   workspaceId: string,
@@ -114,10 +115,14 @@ export async function getDailyRates(
     }
   >
 > {
-  const daily = await prisma.shopifyAnalyticsDaily.findMany({
-    where: { connectionId, date: { gte: fromDate, lte: toDate } },
-    select: { date: true, ordersCount: true, grossSales: true, total_returns: true },
-  })
+  const orderInclusionWhere = getOrderInclusionWhere(orderFilterSettings)
+  const effective = await getEffectiveDailyAggregates(
+    prisma,
+    connectionId,
+    fromDate,
+    toDate,
+    Object.keys(orderInclusionWhere).length > 0 ? orderInclusionWhere : undefined
+  )
   const workspaceCosts = await prisma.workspaceCost.findMany({
     where: { workspaceId, effectiveFrom: { lte: toDate } },
   })
@@ -125,11 +130,10 @@ export async function getDailyRates(
     string,
     { ordersCount: number; grossSales: number; totalReturns: number; variableCost: number }
   >()
-  for (const d of daily) {
-    const dateStr = d.date.toISOString().slice(0, 10)
+  for (const [dateStr, d] of effective) {
     const filtered = filteredDaily?.get(dateStr)
     const ordersCount = filtered ? filtered.ordersCount : d.ordersCount
-    const grossSales = filtered ? filtered.grossSales : Number(d.grossSales)
+    const grossSales = filtered ? filtered.grossSales : d.grossSales
     let variableCost = 0
     for (const cost of workspaceCosts) {
       const costFromStr = cost.effectiveFrom.toISOString().slice(0, 10)
@@ -149,13 +153,10 @@ export async function getDailyRates(
         storeCurrency
       )
     }
-    // Refunds: Shopify analytics total_returns. Ensure non-negative (P&L uses Math.abs for safety).
-    const rawReturns = Number(d.total_returns ?? 0)
-    const totalReturns = Math.max(0, rawReturns)
     map.set(dateStr, {
       ordersCount: ordersCount || 1,
       grossSales,
-      totalReturns,
+      totalReturns: d.totalReturns,
       variableCost,
     })
   }

@@ -258,8 +258,13 @@ export async function syncShopifyAnalyticsFromOrders(
     total_returns: row['total_returns'],
     returns: row['returns'],
   }))
+  const latestDateWritten =
+    table.rows.length > 0
+      ? toDateOnly(table.rows[table.rows.length - 1]!)
+      : null
   console.log('[syncShopifyAnalytics] first 3 parsed days:', JSON.stringify(first3))
   console.log('[syncShopifyAnalytics] rows upserted:', daysUpserted)
+  console.log('[syncShopifyAnalytics] latest shopify_analytics_daily date written:', latestDateWritten)
 
   return { daysUpserted }
 }

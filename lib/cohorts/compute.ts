@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@prisma/client'
+import type { Prisma } from '@prisma/client'
 import { eachDayOfInterval, getDaysInMonth } from 'date-fns'
 import type { CohortMetric, CohortMode, CohortRow, CohortsSummary } from './types'
 import {
@@ -6,6 +7,7 @@ import {
   hasNoOrderFilters,
   normalizeOrderFilterSettings,
 } from '@/lib/order-filters'
+import { getEffectiveDailyAggregates } from '@/lib/effective-daily'
 import { resolveLineItemCogs, normalizeCogsSettings } from '@/lib/cogs'
 import { getDailyVariableContribution } from '@/lib/workspace-costs'
 
@@ -47,65 +49,68 @@ type FirstOrderRow = { customer_shopify_id: string; first_at: Date; order_id: st
 type OrderWithCogs = { order_id: string; customer_shopify_id: string; processed_at: Date; total_price: number; cogs: number }
 type RepeatRow = { order_id: string; customer_shopify_id: string; processed_at: Date; first_at: Date; bucket: number; total_price: number; cogs: number }
 
-/** Daily per-order rates: shipping, packaging, website, misc (same logic as analytics) */
-function buildDailyRates(
+/** Daily per-order rates: shipping, packaging, website, misc (effective daily = analytics + order-derived fallback). */
+async function buildDailyRates(
   prisma: PrismaClient,
   workspaceId: string,
   connectionId: string,
   fromDate: Date,
   toDate: Date,
-  storeCurrency: string
+  storeCurrency: string,
+  orderInclusionWhere?: Prisma.ShopifyOrderWhereInput
 ): Promise<Map<string, { ordersCount: number; grossSales: number; shipping: number; packaging: number; website: number; misc: number }>> {
-  return (async () => {
-    const daily = await prisma.shopifyAnalyticsDaily.findMany({
-      where: { connectionId, date: { gte: fromDate, lte: toDate } },
-      select: { date: true, ordersCount: true, grossSales: true },
-    })
-    const workspaceCosts = await prisma.workspaceCost.findMany({
+  const effective = await getEffectiveDailyAggregates(
+    prisma,
+    connectionId,
+    fromDate,
+    toDate,
+    orderInclusionWhere
+  )
+  const [workspaceCosts, miscExpenses] = await Promise.all([
+    prisma.workspaceCost.findMany({
       where: { workspaceId, effectiveFrom: { lte: toDate } },
-    })
-    const miscExpenses = await prisma.workspaceMiscExpense.findMany({
+    }),
+    prisma.workspaceMiscExpense.findMany({
       where: { workspaceId, effectiveStartDate: { lte: toDate } },
-    })
-    const map = new Map<string, { ordersCount: number; grossSales: number; shipping: number; packaging: number; website: number; misc: number }>()
-    for (const d of daily) {
-      const dateStr = d.date.toISOString().slice(0, 10)
-      const ordersCount = d.ordersCount
-      const grossSales = Number(d.grossSales)
-      let shipping = 0,
-        packaging = 0,
-        website = 0
-      for (const cost of workspaceCosts) {
-        const costFromStr = cost.effectiveFrom.toISOString().slice(0, 10)
-        const costToStr = cost.effectiveTo ? cost.effectiveTo.toISOString().slice(0, 10) : '9999-12-31'
-        if (dateStr < costFromStr || dateStr > costToStr) continue
-        const contribution = getDailyVariableContribution(
-          {
-            costType: cost.costType,
-            amount: Number(cost.amount),
-            currency: cost.currency,
-            isPercent: cost.isPercent,
-            billingMode: cost.billingMode ?? 'monthly',
-          },
-          dateStr,
-          ordersCount,
-          grossSales,
-          storeCurrency
-        )
-        if (cost.costType === 'SHIPPING') shipping += contribution
-        else if (cost.costType === 'PACKAGING') packaging += contribution
-        else if (cost.costType === 'WEBSITE') website += contribution
-      }
-      const daysInMonth = getDaysInMonth(new Date(dateStr + 'T12:00:00.000Z'))
-      let misc = 0
-      for (const e of miscExpenses) {
-        if (dateStr < e.effectiveStartDate.toISOString().slice(0, 10)) continue
-        misc += convertCurrency(Number(e.amount), e.currency || 'INR', storeCurrency) / daysInMonth
-      }
-      map.set(dateStr, { ordersCount, grossSales, shipping, packaging, website, misc })
+    }),
+  ])
+  const map = new Map<string, { ordersCount: number; grossSales: number; shipping: number; packaging: number; website: number; misc: number }>()
+  for (const [dateStr, d] of effective) {
+    const ordersCount = d.ordersCount
+    const grossSales = d.grossSales
+    let shipping = 0,
+      packaging = 0,
+      website = 0
+    for (const cost of workspaceCosts) {
+      const costFromStr = cost.effectiveFrom.toISOString().slice(0, 10)
+      const costToStr = cost.effectiveTo ? cost.effectiveTo.toISOString().slice(0, 10) : '9999-12-31'
+      if (dateStr < costFromStr || dateStr > costToStr) continue
+      const contribution = getDailyVariableContribution(
+        {
+          costType: cost.costType,
+          amount: Number(cost.amount),
+          currency: cost.currency,
+          isPercent: cost.isPercent,
+          billingMode: cost.billingMode ?? 'monthly',
+        },
+        dateStr,
+        ordersCount,
+        grossSales,
+        storeCurrency
+      )
+      if (cost.costType === 'SHIPPING') shipping += contribution
+      else if (cost.costType === 'PACKAGING') packaging += contribution
+      else if (cost.costType === 'WEBSITE') website += contribution
     }
-    return map
-  })()
+    const daysInMonth = getDaysInMonth(new Date(dateStr + 'T12:00:00.000Z'))
+    let misc = 0
+    for (const e of miscExpenses) {
+      if (dateStr < e.effectiveStartDate.toISOString().slice(0, 10)) continue
+      misc += convertCurrency(Number(e.amount), e.currency || 'INR', storeCurrency) / daysInMonth
+    }
+    map.set(dateStr, { ordersCount, grossSales, shipping, packaging, website, misc })
+  }
+  return map
 }
 
 /**
@@ -211,24 +216,24 @@ async function getOrderCogs(
   return cogsByOrder
 }
 
-/** Daily total_returns and gross_sales by date (for First Order R: attribute refunds to first orders by day) */
+/** Daily total_returns and gross_sales by date (effective daily; for First Order R: attribute refunds to first orders by day) */
 async function getDailyReturnsAndSales(
   prisma: PrismaClient,
   connectionId: string,
   fromDate: Date,
-  toDate: Date
+  toDate: Date,
+  orderInclusionWhere?: Prisma.ShopifyOrderWhereInput
 ): Promise<Map<string, { grossSales: number; totalReturns: number }>> {
-  const rows = await prisma.shopifyAnalyticsDaily.findMany({
-    where: { connectionId, date: { gte: fromDate, lte: toDate } },
-    select: { date: true, grossSales: true, total_returns: true },
-  })
+  const effective = await getEffectiveDailyAggregates(
+    prisma,
+    connectionId,
+    fromDate,
+    toDate,
+    orderInclusionWhere
+  )
   const map = new Map<string, { grossSales: number; totalReturns: number }>()
-  for (const r of rows) {
-    const dateStr = r.date.toISOString().slice(0, 10)
-    map.set(dateStr, {
-      grossSales: Number(r.grossSales),
-      totalReturns: Number(r.total_returns ?? 0),
-    })
+  for (const [dateStr, d] of effective) {
+    map.set(dateStr, { grossSales: d.grossSales, totalReturns: d.totalReturns })
   }
   return map
 }
@@ -472,11 +477,11 @@ export async function computeCohorts(
 
   const [firstOrders, dailyRates, adSpendByMonth, totalAdSpend, rtoIds, dailyReturnsAndSales, dailyAdSpend] = await Promise.all([
     getFirstOrders(prisma, connectionId, fromDate, toDate, orderFilterSettings),
-    buildDailyRates(prisma, workspace.id, connectionId, fromDate, toDateExtended, 'INR'),
+    buildDailyRates(prisma, workspace.id, connectionId, fromDate, toDateExtended, 'INR', orderInclusionWhere),
     getAdSpendByMonth(prisma, workspace, fromDate, toDate),
     getTotalAdSpend(prisma, workspace, fromDate, toDate),
     getRtoOrderIdentifiers(prisma, workspace.id, connectionId, fromDate, toDateExtended),
-    getDailyReturnsAndSales(prisma, connectionId, fromDate, toDateExtended),
+    getDailyReturnsAndSales(prisma, connectionId, fromDate, toDateExtended, orderInclusionWhere),
     getDailyAdSpend(prisma, workspace, fromDate, toDateExtended),
   ])
 
