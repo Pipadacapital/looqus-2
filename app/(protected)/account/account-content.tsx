@@ -49,6 +49,7 @@ type AccountUser = {
 interface AccountContentProps {
   user: AccountUser
   hasPassword: boolean
+  isGoogleAuth: boolean
   backSlug: string | null
 }
 
@@ -64,7 +65,7 @@ function getInitials(name: string, email: string) {
   return email[0]?.toUpperCase() ?? 'U'
 }
 
-export function AccountContent({ user, hasPassword, backSlug }: AccountContentProps) {
+export function AccountContent({ user, hasPassword, isGoogleAuth, backSlug }: AccountContentProps) {
   const router = useRouter()
 
   // Profile state
@@ -229,103 +230,127 @@ export function AccountContent({ user, hasPassword, backSlug }: AccountContentPr
               <CardTitle className="text-base">Profile</CardTitle>
             </div>
             <CardDescription>
-              Update your display name and role visible to teammates.
+              {isGoogleAuth
+                ? 'Your name and email are managed by your Google account.'
+                : 'Update your display name and role visible to teammates.'}
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
             <div className="grid gap-2">
               <Label htmlFor="fullName">Full name</Label>
-              <Input
-                id="fullName"
-                value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
-                placeholder="Your full name"
-              />
+              {isGoogleAuth ? (
+                <p id="fullName" className="text-sm py-2 px-3 rounded-md bg-muted/50">
+                  {user.fullName || user.email}
+                </p>
+              ) : (
+                <Input
+                  id="fullName"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  placeholder="Your full name"
+                />
+              )}
             </div>
             <div className="grid gap-2">
               <Label htmlFor="email">Email</Label>
               <Input id="email" value={user.email} disabled />
               <p className="text-xs text-muted-foreground">
-                Contact support to change your email address.
+                {isGoogleAuth
+                  ? 'Email is managed by your Google account.'
+                  : 'Contact support to change your email address.'}
               </p>
             </div>
-            <div className="grid gap-2">
-              <Label htmlFor="jobRole">Job role</Label>
-              <Input
-                id="jobRole"
-                value={jobRole}
-                onChange={(e) => setJobRole(e.target.value)}
-                placeholder="e.g. Head of Growth"
-              />
-            </div>
-            <div className="flex justify-end">
-              <Button onClick={handleSaveProfile} disabled={savingProfile}>
-                {savingProfile && (
-                  <IconLoader2 className="mr-2 h-4 w-4 animate-spin" />
-                )}
-                Save profile
-              </Button>
-            </div>
+            {!isGoogleAuth && (
+              <>
+                <div className="grid gap-2">
+                  <Label htmlFor="jobRole">Job role</Label>
+                  <Input
+                    id="jobRole"
+                    value={jobRole}
+                    onChange={(e) => setJobRole(e.target.value)}
+                    placeholder="e.g. Head of Growth"
+                  />
+                </div>
+                <div className="flex justify-end">
+                  <Button onClick={handleSaveProfile} disabled={savingProfile}>
+                    {savingProfile && (
+                      <IconLoader2 className="mr-2 h-4 w-4 animate-spin" />
+                    )}
+                    Save profile
+                  </Button>
+                </div>
+              </>
+            )}
+            {isGoogleAuth && user.jobRole && (
+              <div className="grid gap-2">
+                <Label>Job role</Label>
+                <p className="text-sm py-2 px-3 rounded-md bg-muted/50">
+                  {user.jobRole}
+                </p>
+              </div>
+            )}
           </CardContent>
         </Card>
 
-        {/* ── Security ────────────────────────────────────────────────────── */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <IconShieldLock className="h-4 w-4 text-muted-foreground" />
-              <CardTitle className="text-base">Password</CardTitle>
-            </div>
-            <CardDescription>
-              Change your account password. Must be at least 8 characters.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-4">
-            {hasPassword && (
+        {/* ── Security (hidden for Google sign-in) ─────────────────────────── */}
+        {!isGoogleAuth && (
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <IconShieldLock className="h-4 w-4 text-muted-foreground" />
+                <CardTitle className="text-base">Password</CardTitle>
+              </div>
+              <CardDescription>
+                Change your account password. Must be at least 8 characters.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              {hasPassword && (
+                <div className="grid gap-2">
+                  <Label htmlFor="currentPassword">Current password</Label>
+                  <Input
+                    id="currentPassword"
+                    type="password"
+                    value={currentPassword}
+                    onChange={(e) => setCurrentPassword(e.target.value)}
+                    placeholder="Enter current password"
+                    autoComplete="current-password"
+                  />
+                </div>
+              )}
               <div className="grid gap-2">
-                <Label htmlFor="currentPassword">Current password</Label>
+                <Label htmlFor="newPassword">New password</Label>
                 <Input
-                  id="currentPassword"
+                  id="newPassword"
                   type="password"
-                  value={currentPassword}
-                  onChange={(e) => setCurrentPassword(e.target.value)}
-                  placeholder="Enter current password"
-                  autoComplete="current-password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="At least 8 characters"
+                  autoComplete="new-password"
                 />
               </div>
-            )}
-            <div className="grid gap-2">
-              <Label htmlFor="newPassword">New password</Label>
-              <Input
-                id="newPassword"
-                type="password"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="At least 8 characters"
-                autoComplete="new-password"
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="confirmPassword">Confirm new password</Label>
-              <Input
-                id="confirmPassword"
-                type="password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="Repeat new password"
-                autoComplete="new-password"
-              />
-            </div>
-            <div className="flex justify-end">
-              <Button onClick={handleChangePassword} disabled={savingPassword}>
-                {savingPassword && (
-                  <IconLoader2 className="mr-2 h-4 w-4 animate-spin" />
-                )}
-                Update password
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+              <div className="grid gap-2">
+                <Label htmlFor="confirmPassword">Confirm new password</Label>
+                <Input
+                  id="confirmPassword"
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="Repeat new password"
+                  autoComplete="new-password"
+                />
+              </div>
+              <div className="flex justify-end">
+                <Button onClick={handleChangePassword} disabled={savingPassword}>
+                  {savingPassword && (
+                    <IconLoader2 className="mr-2 h-4 w-4 animate-spin" />
+                  )}
+                  Update password
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* ── Sessions ────────────────────────────────────────────────────── */}
         <Card>

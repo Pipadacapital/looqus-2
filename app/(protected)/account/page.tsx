@@ -39,6 +39,7 @@ async function AccountLoader() {
   })
 
   const hasPassword = user.app_metadata?.providers?.includes('email') ?? true
+  const isGoogleAuth = user.app_metadata?.providers?.includes('google') ?? false
 
   return (
     <AccountContent
@@ -51,6 +52,7 @@ async function AccountLoader() {
         createdAt: dbUser.createdAt.toISOString(),
       }}
       hasPassword={hasPassword}
+      isGoogleAuth={isGoogleAuth}
       backSlug={membership?.workspace.slug ?? null}
     />
   )

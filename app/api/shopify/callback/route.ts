@@ -6,6 +6,7 @@ import {
   exchangeCodeForToken,
   fetchShopInfo,
 } from '@/lib/shopify/client'
+import { registerWebhooks } from '@/lib/shopify/webhooks'
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
@@ -146,6 +147,20 @@ export async function GET(request: NextRequest) {
       where: { id: workspace.id },
       data: { storeUrl: shop },
     })
+
+    // Register webhooks so we receive real-time orders, products, customers, inventory
+    try {
+      const { registered, errors } = await registerWebhooks(shop, accessToken)
+      if (errors.length > 0 && process.env.NODE_ENV === 'development') {
+        console.warn('[Shopify callback] Webhook registration had errors:', errors)
+      }
+      if (registered > 0 && process.env.NODE_ENV === 'development') {
+        console.log(`[Shopify callback] Registered ${registered} webhook(s) for ${shop}`)
+      }
+    } catch (webhookErr) {
+      console.warn('[Shopify callback] Webhook registration failed:', webhookErr)
+      // Do not block redirect; user can still use manual sync
+    }
 
     // Clear cookie and redirect to dashboard
     const response = NextResponse.redirect(
