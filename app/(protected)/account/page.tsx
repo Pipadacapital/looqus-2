@@ -40,7 +40,7 @@ async function AccountLoader() {
 
   const hasPassword = user.app_metadata?.providers?.includes('email') ?? true
   const isGoogleAuth = user.app_metadata?.providers?.includes('google') ?? false
-// s
+// ss
   return (
     <AccountContent
       user={{
