@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
         syncProducts(c.id),
         syncCustomers(c.id),
       ])
-      await syncShopifyAnalyticsFromOrders(c.id, from, to)
+      const { daysUpserted } = await syncShopifyAnalyticsFromOrders(c.id, from, to)
       try {
         await syncShopifySessionsFromShopifyQL(c.id, from, to)
       } catch {
@@ -76,6 +76,19 @@ export async function POST(request: NextRequest) {
         where: { id: c.id },
         data: { lastSyncAt: new Date() },
       })
+      // Temporary diagnostic: latest order date and latest analytics date after sync
+      const [latestOrder, latestAnalytics] = await Promise.all([
+        prisma.shopifyOrder.findFirst({ where: { connectionId: c.id }, orderBy: { processedAt: 'desc' }, select: { processedAt: true } }),
+        prisma.shopifyAnalyticsDaily.findFirst({ where: { connectionId: c.id }, orderBy: { date: 'desc' }, select: { date: true } }),
+      ])
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[cron/sync-ads] Shopify sync diagnostic', {
+          connectionId: c.id,
+          analyticsRowsWritten: daysUpserted,
+          latestShopifyOrderDate: latestOrder?.processedAt?.toISOString().slice(0, 10) ?? null,
+          latestShopifyAnalyticsDailyDate: latestAnalytics?.date?.toISOString().slice(0, 10) ?? null,
+        })
+      }
     }
     results.shopify = 'ok'
   } catch (err) {
