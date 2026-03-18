@@ -3,6 +3,8 @@ import { redirect } from 'next/navigation'
 import { getCachedWorkspace } from '@/lib/server-cache'
 import { IntegrationsLoader } from './integrations-loader'
 import Loading from './loading'
+import { prisma } from '@/lib/prisma'
+import { createClient } from '@/lib/server'
 
 export default async function IntegrationsPage({
   params,
@@ -11,7 +13,7 @@ export default async function IntegrationsPage({
 }) {
   const { slug } = await params
 
-  const workspace = await getCachedWorkspace(slug)
+  // const workspace = await getCachedWorkspace(slug)
   const supabase = await createClient()
   const {
     data: { user },

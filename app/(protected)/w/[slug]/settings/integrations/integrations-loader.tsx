@@ -57,6 +57,15 @@ export async function IntegrationsLoader({ slug }: { slug: string }) {
             createdAt: true,
           },
         },
+        klaviyoConnection: {
+          select: {
+            id: true,
+            status: true,
+            lastSyncAt: true,
+            lastSyncError: true,
+            createdAt: true,
+          },
+        },
       },
     }),
     getCurrentUserRole(),
@@ -75,10 +84,13 @@ export async function IntegrationsLoader({ slug }: { slug: string }) {
   const shiprocketRaw = workspace.shiprocketConnection
   const shiprocketConnection =
     shiprocketRaw?.status === 'CONNECTED' ? shiprocketRaw : null
+  const klaviyoRaw = workspace.klaviyoConnection
+  const klaviyoConnection =
+    klaviyoRaw?.status === 'CONNECTED' ? klaviyoRaw : null
 
   return (
     <IntegrationsContent
-      workspaceSlug={slug}
+      workspaceSlug={slug} 
       workspaceId={workspace.id}
       workspaceName={workspace.name}
       isSuperadmin={isSuperadmin}
@@ -132,6 +144,17 @@ export async function IntegrationsLoader({ slug }: { slug: string }) {
               lastSyncAt: shiprocketConnection.lastSyncAt?.toISOString() ?? null,
               lastSyncError: shiprocketConnection.lastSyncError,
               createdAt: shiprocketConnection.createdAt.toISOString(),
+            }
+          : null
+      }
+      klaviyoConnection={
+        klaviyoConnection
+          ? {
+              id: klaviyoConnection.id,
+              status: klaviyoConnection.status,
+              lastSyncAt: klaviyoConnection.lastSyncAt?.toISOString() ?? null,
+              lastSyncError: klaviyoConnection.lastSyncError,
+              createdAt: klaviyoConnection.createdAt.toISOString(),
             }
           : null
       }
