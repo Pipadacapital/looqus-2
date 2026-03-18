@@ -3,6 +3,8 @@ import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
 import { startOfYear, endOfDay, format } from 'date-fns'
 import { computeAcquisition, computeAcquisitionTrend, computeAcquisitionComposition } from '@/lib/acquisition/compute'
+import { fetchGoalRowsMap, buildGoalEvaluations } from '@/lib/metrics/goals'
+import type { GoalMetricId } from '@/lib/metrics/goal-metrics-registry'
 
 export async function GET(
   request: NextRequest,
@@ -80,8 +82,25 @@ export async function GET(
     computeAcquisitionComposition(prisma, workspace as any, { from: fromStr, to: toStr }),
   ])
 
+  const goalRowMap = await fetchGoalRowsMap(
+    prisma,
+    workspace.id,
+    ['mer', 'amer', 'cac', 'new_customers'] as GoalMetricId[],
+    toDate
+  )
+  const me = result.summary.marketingEfficiency
+  const goalEvaluations = buildGoalEvaluations(
+    {
+      mer: me.mer ?? undefined,
+      amer: me.aMer ?? undefined,
+      cac: result.summary.blendedCac,
+      new_customers: result.summary.newCustomers,
+    },
+    goalRowMap
+  )
+
   return NextResponse.json({
-    summary: result.summary,
+    summary: { ...result.summary, goalEvaluations },
     daily: result.daily,
     currency: result.currency,
     trend,

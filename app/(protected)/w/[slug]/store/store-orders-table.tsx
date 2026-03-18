@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
-import { useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import {
   flexRender,
   getCoreRowModel,
@@ -54,7 +54,7 @@ export type OrderRow = {
   cancelledAt: string | null
 }
 
-type OrdersResponse = {
+export type OrdersResponse = {
   data: OrderRow[]
   total: number
   page: number
@@ -97,7 +97,11 @@ function useOrdersParams() {
   }
 }
 
-export function StoreOrdersTable() {
+export function StoreOrdersTable({
+  initialOrders,
+}: {
+  initialOrders?: OrdersResponse
+}) {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -131,7 +135,17 @@ export function StoreOrdersTable() {
     [pathname, router, searchParams]
   )
 
-  const { data, isLoading, isError, error } = useQuery<OrdersResponse>({
+  const isDefaultParams =
+    params.page === 1 &&
+    params.pageSize === 10 &&
+    params.sort === 'processedAt' &&
+    params.order === 'desc' &&
+    params.search === '' &&
+    params.financialStatus === '' &&
+    params.fulfillmentStatus === ''
+
+  const initialDataForQuery = isDefaultParams ? initialOrders : undefined
+  const { data, isLoading, isError, error, isFetching } = useQuery<OrdersResponse>({
     queryKey: ['store', 'orders', slug, params],
     queryFn: async () => {
       const q = new URLSearchParams()
@@ -141,7 +155,8 @@ export function StoreOrdersTable() {
       q.set('order', params.order)
       if (params.search) q.set('search', params.search)
       if (params.financialStatus) q.set('financialStatus', params.financialStatus)
-      if (params.fulfillmentStatus) q.set('fulfillmentStatus', params.fulfillmentStatus)
+      if (params.fulfillmentStatus)
+        q.set('fulfillmentStatus', params.fulfillmentStatus)
       const res = await fetch(`/api/workspaces/${slug}/store/orders?${q.toString()}`)
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
@@ -149,7 +164,18 @@ export function StoreOrdersTable() {
       }
       return res.json()
     },
+    // When filters change, keep previous rows visible while the new request is in-flight.
+    // (TanStack Query v5 uses `placeholderData`, not `keepPreviousData`.)
+    placeholderData: keepPreviousData,
+    ...(initialDataForQuery
+      ? {
+          initialData: initialDataForQuery,
+          initialDataUpdatedAt: Date.now(),
+        }
+      : {}),
   })
+
+  const shouldShowFilterLoader = isFetching && !isLoading && !isDefaultParams
 
   const columns = useMemo<ColumnDef<OrderRow>[]>(
     () => [
@@ -282,15 +308,25 @@ export function StoreOrdersTable() {
             ))}
           </SelectContent>
         </Select>
+        {shouldShowFilterLoader ? (
+          <div className="ml-2 inline-flex items-center gap-2 text-muted-foreground">
+            <IconLoader2 className="size-4 animate-spin" />
+          </div>
+        ) : null}
       </div>
 
-      <div className="min-h-[400px] rounded-lg border bg-card">
-        {isLoading ? (
+      <div className="relative min-h-[400px] rounded-lg border bg-card">
+        {isLoading && !data ? (
           <div className="flex items-center justify-center py-16">
             <IconLoader2 className="size-8 animate-spin text-muted-foreground" />
           </div>
         ) : (
           <>
+            {shouldShowFilterLoader ? (
+              <div className="pointer-events-none absolute right-4 top-4 z-10 flex items-center">
+                <IconLoader2 className="size-4 animate-spin text-muted-foreground" />
+              </div>
+            ) : null}
             <Table>
               <TableHeader>
                 {table.getHeaderGroups().map((headerGroup) => (

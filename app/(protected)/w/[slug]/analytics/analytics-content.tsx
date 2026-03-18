@@ -178,6 +178,16 @@ export function AnalyticsContent({
               </p>
             ) : shopifyAnalytics.summary ? (
               <>
+                <p className="text-xs text-muted-foreground">
+                  Goals vs actual (RAG) use the period containing the range end — set targets in{' '}
+                  <Link
+                    href={`/w/${workspaceSlug}/settings/goals`}
+                    className="underline font-medium text-foreground"
+                  >
+                    Settings → Goals
+                  </Link>
+                  .
+                </p>
                 <AnalyticsMetricsCards summary={shopifyAnalytics.summary} />
 
                 {shopifyAnalytics.daily.length > 0 && (

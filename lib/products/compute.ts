@@ -1,6 +1,7 @@
 import type { PrismaClient } from '@prisma/client'
 import { getDaysInMonth } from 'date-fns'
 import type { ProductsGroupBy, ProductsRow, ProductsSortColumn } from './types'
+import { fetchCustomerFirstOrdersInRange } from '@/lib/metrics'
 import {
   getOrderInclusionWhere,
   getFilteredDailyAggregates,
@@ -35,63 +36,6 @@ export type WorkspaceForProducts = {
   shopifyConnections: { id: string }[]
   skippedShopifyOrderTags?: string[] | null
   skipZeroSalesOrders?: boolean | null
-}
-
-type FirstOrderRow = { customer_shopify_id: string; first_at: Date; order_id: string }
-
-/** First order per customer (all-time) for orders in range; uses same logic as Cohorts/LTV. */
-async function getFirstOrdersInRange(
-  prisma: PrismaClient,
-  connectionId: string,
-  fromDate: Date,
-  toDate: Date,
-  orderFilterSettings: { skippedShopifyOrderTags: string[]; skipZeroSalesOrders: boolean }
-): Promise<FirstOrderRow[]> {
-  if (!hasNoOrderFilters(orderFilterSettings)) {
-    const inclusionWhere = getOrderInclusionWhere(orderFilterSettings)
-    const orders = await prisma.shopifyOrder.findMany({
-      where: {
-        connectionId,
-        customerShopifyId: { not: null, notIn: [''] },
-        processedAt: { lte: toDate },
-        ...inclusionWhere,
-      },
-      select: { id: true, customerShopifyId: true, processedAt: true },
-    })
-    const firstByCustomer = new Map<string, { firstAt: Date; orderId: string }>()
-    for (const o of orders) {
-      const cid = o.customerShopifyId!
-      const existing = firstByCustomer.get(cid)
-      if (!existing || o.processedAt < existing.firstAt) {
-        firstByCustomer.set(cid, { firstAt: o.processedAt, orderId: o.id })
-      }
-    }
-    return [...firstByCustomer.entries()]
-      .filter(([, v]) => v.firstAt >= fromDate && v.firstAt <= toDate)
-      .map(([customer_shopify_id, v]) => ({
-        customer_shopify_id,
-        first_at: v.firstAt,
-        order_id: v.orderId,
-      }))
-  }
-  const rows = await prisma.$queryRaw<FirstOrderRow[]>`
-    WITH first_orders AS (
-      SELECT customer_shopify_id, MIN(processed_at) AS first_at
-      FROM shopify_orders
-      WHERE connection_id = ${connectionId}::uuid
-        AND customer_shopify_id IS NOT NULL
-        AND customer_shopify_id != ''
-      GROUP BY customer_shopify_id
-    )
-    SELECT fo.customer_shopify_id, fo.first_at, o.id AS order_id
-    FROM first_orders fo
-    JOIN shopify_orders o ON o.customer_shopify_id = fo.customer_shopify_id
-      AND o.processed_at = fo.first_at
-      AND o.connection_id = ${connectionId}::uuid
-    WHERE fo.first_at >= ${fromDate}
-      AND fo.first_at <= ${toDate}
-  `
-  return rows
 }
 
 /** Daily: orders count, gross sales, total_returns (for refund allocation), variable cost (shipping, packaging, website, custom). Uses effective daily (analytics + order-derived fallback for recent dates). Exported for use in distributions. */
@@ -251,7 +195,7 @@ export async function computeProducts(
     : getFilteredDailyAggregates(prisma, connectionId, fromDate, toDate, orderFilterSettings)
 
   const [firstOrders, filteredDaily, orders] = await Promise.all([
-    getFirstOrdersInRange(prisma, connectionId, fromDate, toDate, orderFilterSettings),
+    fetchCustomerFirstOrdersInRange(prisma, connectionId, fromDate, toDate, orderFilterSettings),
     filteredDailyPromise,
     prisma.shopifyOrder.findMany({
       where: {

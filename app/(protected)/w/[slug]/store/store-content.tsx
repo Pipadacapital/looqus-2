@@ -6,6 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { StoreOrdersTable } from './store-orders-table'
+import type { OrdersResponse } from './store-orders-table'
 import { StoreProductsTable } from './store-products-table'
 import { StoreCustomersTable } from './store-customers-table'
 import {
@@ -24,10 +25,12 @@ export function StoreContent({
   hasConnection,
   connectionId,
   lastSyncAt,
+  initialOrders,
 }: {
   hasConnection: boolean
   connectionId: string | null
   lastSyncAt: string | null
+  initialOrders?: OrdersResponse
 }) {
   const { current } = useWorkspace()
   const slug = current.slug
@@ -185,7 +188,7 @@ export function StoreContent({
           </TabsTrigger>
         </TabsList>
         <TabsContent value="orders" className="mt-6">
-          <StoreOrdersTable />
+          <StoreOrdersTable initialOrders={initialOrders} />
         </TabsContent>
         <TabsContent value="products" className="mt-6">
           <div className="mb-4 flex items-center justify-between">

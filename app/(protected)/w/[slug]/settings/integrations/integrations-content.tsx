@@ -13,6 +13,7 @@ import {
   IconBrandGoogle,
   IconUnlink,
   IconTruck,
+  IconMail,
 } from '@tabler/icons-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -71,6 +72,14 @@ type ShiprocketConnectionInfo = {
   createdAt: string
 }
 
+type KlaviyoConnectionInfo = {
+  id: string
+  status: string
+  lastSyncAt: string | null
+  lastSyncError: string | null
+  createdAt: string
+}
+
 interface IntegrationsContentProps {
   workspaceSlug: string
   workspaceId: string
@@ -80,6 +89,7 @@ interface IntegrationsContentProps {
   metaConnection: MetaConnectionInfo | null
   googleConnection: GoogleConnectionInfo | null
   shiprocketConnection: ShiprocketConnectionInfo | null
+  klaviyoConnection: KlaviyoConnectionInfo | null
 }
 
 export function IntegrationsContent({
@@ -91,6 +101,7 @@ export function IntegrationsContent({
   metaConnection,
   googleConnection,
   shiprocketConnection,
+  klaviyoConnection,
 }: IntegrationsContentProps) {
   const [storeHandle, setStoreHandle] = useState('')
   const [clientId, setClientId] = useState('')
@@ -112,6 +123,11 @@ export function IntegrationsContent({
   const [srPassword, setSrPassword] = useState('')
   const [srConnecting, setSrConnecting] = useState(false)
   const [srError, setSrError] = useState<string | null>(null)
+
+  const [kvDialogOpen, setKvDialogOpen] = useState(false)
+  const [kvApiKey, setKvApiKey] = useState('')
+  const [kvConnecting, setKvConnecting] = useState(false)
+  const [kvError, setKvError] = useState<string | null>(null)
 
   const canConnect =
     storeHandle.trim() && clientId.trim() && clientSecret.trim()
@@ -345,6 +361,69 @@ export function IntegrationsContent({
     }
   }
 
+  const handleKlaviyoConnect = async () => {
+    if (!kvApiKey.trim()) return
+    setKvConnecting(true)
+    setKvError(null)
+    try {
+      const res = await fetch('/api/integrations/klaviyo/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspaceId, apiKey: kvApiKey.trim() }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setKvError(data.error || 'Failed to connect')
+        return
+      }
+      setKvDialogOpen(false)
+      setKvApiKey('')
+      toast.success('Klaviyo connected — run sync to import campaigns')
+      window.location.reload()
+    } catch {
+      setKvError('Network error')
+    } finally {
+      setKvConnecting(false)
+    }
+  }
+
+  const handleKlaviyoSync = async () => {
+    setSyncing('klaviyo')
+    toast.info('Klaviyo sync started — may take several minutes (API rate limits).')
+    try {
+      const res = await fetch('/api/integrations/klaviyo/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspaceId }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast.error(data.error || 'Klaviyo sync failed')
+        return
+      }
+      toast.success(
+        `Synced ${data.campaignsSynced ?? 0} campaigns, ${data.flowDaysSynced ?? 0} flow day-rows`
+      )
+      window.location.reload()
+    } finally {
+      setSyncing(null)
+    }
+  }
+
+  const handleKlaviyoDisconnect = async () => {
+    setDisconnecting('klaviyo')
+    try {
+      await fetch('/api/integrations/klaviyo/disconnect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspaceId }),
+      })
+      window.location.reload()
+    } finally {
+      setDisconnecting(null)
+    }
+  }
+
   return (
     <div className="flex flex-col gap-6 py-4 md:py-6">
       <div>
@@ -352,7 +431,7 @@ export function IntegrationsContent({
           Integrations
         </h1>
         <p className="text-sm text-muted-foreground">
-          Connect and manage Shopify, Meta Ads, Google Ads, and Shiprocket for your workspace.
+          Connect Shopify, Meta, Google, Shiprocket, and Klaviyo for your workspace.
         </p>
       </div>
 
@@ -881,6 +960,131 @@ export function IntegrationsContent({
                         <><IconLoader2 className="mr-1.5 h-4 w-4 animate-spin" />Connecting...</>
                       ) : (
                         <><IconTruck className="mr-1.5 h-4 w-4" />Connect</>
+                      )}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Klaviyo */}
+      <div className="rounded-xl border bg-card shadow-sm">
+        <div className="flex items-center gap-3 border-b px-6 py-4">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-500/10">
+            <IconMail className="h-5 w-5 text-violet-600" />
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-medium">Klaviyo</p>
+            <p className="text-xs text-muted-foreground">
+              {klaviyoConnection
+                ? 'Private API key — syncs campaigns & flow performance'
+                : 'Email/SMS reporting & calendar send overlays'}
+            </p>
+          </div>
+          {klaviyoConnection ? (
+            <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-600">
+              <IconCheck className="mr-1 h-3 w-3" />
+              Connected
+            </Badge>
+          ) : (
+            <Badge variant="secondary">Not connected</Badge>
+          )}
+        </div>
+        <div className="px-6 py-4">
+          {klaviyoConnection ? (
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="space-y-1 text-xs text-muted-foreground">
+                <p>
+                  Connected{' '}
+                  {formatDistanceToNow(new Date(klaviyoConnection.createdAt), { addSuffix: true })}
+                  {klaviyoConnection.lastSyncAt && (
+                    <>
+                      {' · '}Last sync{' '}
+                      {formatDistanceToNow(new Date(klaviyoConnection.lastSyncAt), { addSuffix: true })}
+                    </>
+                  )}
+                </p>
+                {klaviyoConnection.lastSyncError && (
+                  <p className="text-destructive">{klaviyoConnection.lastSyncError}</p>
+                )}
+                <p className="text-[11px]">
+                  Scopes: campaigns:read, flows:read, metrics:read. Key never shown after save.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleKlaviyoSync}
+                  disabled={syncing === 'klaviyo'}
+                >
+                  {syncing === 'klaviyo' ? (
+                    <IconLoader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <IconRefresh className="mr-1.5 h-3.5 w-3.5" />
+                  )}
+                  Sync now
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleKlaviyoDisconnect}
+                  disabled={disconnecting === 'klaviyo'}
+                >
+                  <IconUnlink className="mr-1.5 h-3.5 w-3.5" />
+                  Disconnect
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center gap-4 py-4 text-center">
+              <p className="text-xs text-muted-foreground max-w-md">
+                Create a Private API key in Klaviyo (Settings → API keys) with campaigns, flows, and
+                metrics read access.
+              </p>
+              <Dialog open={kvDialogOpen} onOpenChange={setKvDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button>
+                    <IconMail className="mr-1.5 h-4 w-4" />
+                    Connect Klaviyo
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="sm:max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>Klaviyo Private API key</DialogTitle>
+                    <DialogDescription>
+                      Stored encrypted at rest is not implemented in v1 — use a restricted key with
+                      read-only scopes.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="grid gap-3 py-2">
+                    <div className="grid gap-2">
+                      <Label>API key</Label>
+                      <Input
+                        type="password"
+                        placeholder="pk_..."
+                        value={kvApiKey}
+                        onChange={(e) => setKvApiKey(e.target.value)}
+                        autoComplete="off"
+                      />
+                    </div>
+                    {kvError && <p className="text-sm text-destructive">{kvError}</p>}
+                  </div>
+                  <DialogFooter>
+                    <Button variant="ghost" onClick={() => setKvDialogOpen(false)} disabled={kvConnecting}>
+                      Cancel
+                    </Button>
+                    <Button onClick={handleKlaviyoConnect} disabled={!kvApiKey.trim() || kvConnecting}>
+                      {kvConnecting ? (
+                        <>
+                          <IconLoader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                          Verifying…
+                        </>
+                      ) : (
+                        'Save & connect'
                       )}
                     </Button>
                   </DialogFooter>

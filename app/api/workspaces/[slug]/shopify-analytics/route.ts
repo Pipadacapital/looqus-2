@@ -5,6 +5,8 @@ import { eachDayOfInterval, getDaysInMonth } from 'date-fns'
 import { getOrderInclusionWhereFromWorkspace } from '@/lib/order-filters'
 import { computeLineItemsCogs, normalizeCogsSettings } from '@/lib/cogs'
 import { getDailyVariableContribution } from '@/lib/workspace-costs'
+import { fetchGoalRowsMap, buildGoalEvaluations } from '@/lib/metrics/goals'
+import type { GoalMetricId } from '@/lib/metrics/goal-metrics-registry'
 
 // MVP Exchange Rates (Fallback to standard if a live API isn't used)
 const EXCHANGE_RATES: Record<string, number> = {
@@ -31,7 +33,7 @@ export async function GET(
   const {
     data: { user },
   } = await supabase.auth.getUser()
-// s
+
   if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
@@ -492,6 +494,10 @@ export async function GET(
     return sum + contribution
   }, 0)
   const totalCm3 = totalCm2 - miscExpensesTotal
+  const cm3Pct =
+    totalNetSales > 0
+      ? Math.round((totalCm3 / totalNetSales) * 10000) / 100
+      : null
 
   const summary = {
     totalNetSales,
@@ -508,6 +514,7 @@ export async function GET(
     cm2: totalCm2,
     miscExpensesTotal,
     cm3: totalCm3,
+    cm3Pct,
     currency: storeCurrency,
     from: fromDate.toISOString().slice(0, 10),
     to: toDate.toISOString().slice(0, 10),
@@ -517,6 +524,11 @@ export async function GET(
     metaAdSpend: metaAdSpend,
     googleAdSpend: googleAdSpend,
     totalAdSpend: totalAdSpend,
+    /** Same ratio as blended ROAS: net sales / ad spend (spec label: MER). */
+    mer:
+      totalAdSpend > 0
+        ? Math.round((totalNetSales / totalAdSpend) * 100) / 100
+        : null,
     acos:
       totalNetSales > 0
         ? Math.round((totalAdSpend / totalNetSales) * 10000) / 100
@@ -528,6 +540,24 @@ export async function GET(
     rtoUnmapped,
     totalShipmentsInRange,
   }
+
+  const goalRowMap = await fetchGoalRowsMap(
+    prisma,
+    workspace.id,
+    ['revenue', 'cm3', 'cm3_pct', 'mer', 'aov', 'acos'] as GoalMetricId[],
+    toDate
+  )
+  const goalEvaluations = buildGoalEvaluations(
+    {
+      revenue: totalNetSales,
+      cm3: totalCm3,
+      cm3_pct: cm3Pct ?? undefined,
+      mer: summary.mer ?? undefined,
+      aov: summary.avgAov,
+      acos: summary.acos ?? undefined,
+    },
+    goalRowMap
+  )
 
   return NextResponse.json({
     daily: daily.map((d) => {
@@ -555,7 +585,7 @@ export async function GET(
         conversionRate: d.conversionRate != null ? Number(d.conversionRate) : null,
       }
     }),
-    summary,
+    summary: { ...summary, goalEvaluations },
     error: null,
   })
 }

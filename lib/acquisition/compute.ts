@@ -1,17 +1,22 @@
 /**
  * Acquisition page: New Customer Contribution Margin 2 and related metrics.
  * Uses app-wide CM2 logic (revenue - COGS - variable costs - ad spend, with refunds allocated to order date).
- * New customer = first order in selected period (same first-order logic as Cohorts / LTV).
+ * New customer = first order in selected period (`fetchCustomerFirstOrdersInRange` — Cohorts / LTV / Products / Timings).
  */
 
 import type { PrismaClient } from '@prisma/client'
 import type { Prisma } from '@prisma/client'
 import { eachDayOfInterval, subDays } from 'date-fns'
 import {
+  computeMarketingEfficiency,
+  fetchAdSpendMapsWithClassification,
+  fetchCustomerFirstOrdersInRange,
+  fetchStoreNetRevenueForPeriod,
   getOrderInclusionWhere,
-  hasNoOrderFilters,
   normalizeOrderFilterSettings,
-} from '@/lib/order-filters'
+  sumDailyMapInRange,
+  type MarketingEfficiencySnapshot,
+} from '@/lib/metrics'
 import { getEffectiveDailyAggregates } from '@/lib/effective-daily'
 import { resolveLineItemCogs, normalizeCogsSettings } from '@/lib/cogs'
 import { getDailyVariableContribution } from '@/lib/workspace-costs'
@@ -38,63 +43,6 @@ export type WorkspaceForAcquisition = {
   } | null
   skippedShopifyOrderTags?: string[] | null
   skipZeroSalesOrders?: boolean | null
-}
-
-type FirstOrderRow = { customer_shopify_id: string; first_at: Date; order_id: string }
-
-async function getFirstOrdersInRange(
-  prisma: PrismaClient,
-  connectionId: string,
-  fromDate: Date,
-  toDate: Date,
-  orderFilterSettings?: { skippedShopifyOrderTags: string[]; skipZeroSalesOrders: boolean }
-): Promise<FirstOrderRow[]> {
-  if (orderFilterSettings && !hasNoOrderFilters(orderFilterSettings)) {
-    const inclusionWhere = getOrderInclusionWhere(orderFilterSettings)
-    const orders = await prisma.shopifyOrder.findMany({
-      where: {
-        connectionId,
-        customerShopifyId: { not: null, notIn: [''] },
-        processedAt: { lte: toDate },
-        ...inclusionWhere,
-      },
-      select: { id: true, customerShopifyId: true, processedAt: true },
-    })
-    const firstByCustomer = new Map<string, { firstAt: Date; orderId: string }>()
-    for (const o of orders) {
-      const cid = o.customerShopifyId
-      if (!cid) continue
-      const existing = firstByCustomer.get(cid)
-      if (!existing || o.processedAt < existing.firstAt) {
-        firstByCustomer.set(cid, { firstAt: o.processedAt, orderId: o.id })
-      }
-    }
-    return [...firstByCustomer.entries()]
-      .filter(([, v]) => v.firstAt >= fromDate && v.firstAt <= toDate)
-      .map(([customer_shopify_id, v]) => ({
-        customer_shopify_id,
-        first_at: v.firstAt,
-        order_id: v.orderId,
-      }))
-  }
-  const rows = await prisma.$queryRaw<FirstOrderRow[]>`
-    WITH first_orders AS (
-      SELECT customer_shopify_id, MIN(processed_at) AS first_at
-      FROM shopify_orders
-      WHERE connection_id = ${connectionId}::uuid
-        AND customer_shopify_id IS NOT NULL
-        AND customer_shopify_id != ''
-      GROUP BY customer_shopify_id
-    )
-    SELECT fo.customer_shopify_id, fo.first_at, o.id AS order_id
-    FROM first_orders fo
-    JOIN shopify_orders o ON o.customer_shopify_id = fo.customer_shopify_id
-      AND o.processed_at = fo.first_at
-      AND o.connection_id = ${connectionId}::uuid
-    WHERE fo.first_at >= ${fromDate}
-      AND fo.first_at <= ${toDate}
-  `
-  return rows
 }
 
 async function getDailyRates(
@@ -146,63 +94,6 @@ async function getDailyRates(
     map.set(dateStr, { ordersCount, grossSales, shipping, packaging, website })
   }
   return map
-}
-
-async function getDailyAdSpend(
-  prisma: PrismaClient,
-  workspace: WorkspaceForAcquisition,
-  fromDate: Date,
-  toDate: Date
-): Promise<{
-  byDate: Map<string, number>
-  metaByDate: Map<string, number>
-  googleByDate: Map<string, number>
-}> {
-  const byDate = new Map<string, number>()
-  const metaByDate = new Map<string, number>()
-  const googleByDate = new Map<string, number>()
-  const meta = workspace.meta_ads_connections
-  const google = workspace.google_ads_connections
-  const metaIds = meta?.selected_ad_account_ids?.length ? meta.selected_ad_account_ids : meta?.selected_ad_account_id ? [meta.selected_ad_account_id] : undefined
-  const googleIds = google?.selected_customer_ids?.length ? google.selected_customer_ids : google?.selected_customer_id ? [google.selected_customer_id] : undefined
-
-  if (meta?.id) {
-    const metaWhere: { connection_id: string; date: { gte: Date; lte: Date }; ad_account_id?: { in: string[] } } = {
-      connection_id: meta.id,
-      date: { gte: fromDate, lte: toDate },
-    }
-    if (metaIds?.length) metaWhere.ad_account_id = { in: metaIds }
-    const rows = await prisma.meta_ads_daily_metrics.groupBy({
-      by: ['date'],
-      where: metaWhere as Parameters<typeof prisma.meta_ads_daily_metrics.groupBy>[0]['where'],
-      _sum: { spend: true },
-    })
-    for (const r of rows) {
-      const dateStr = r.date.toISOString().slice(0, 10)
-      const spend = Number(r._sum.spend ?? 0)
-      metaByDate.set(dateStr, (metaByDate.get(dateStr) ?? 0) + spend)
-      byDate.set(dateStr, (byDate.get(dateStr) ?? 0) + spend)
-    }
-  }
-  if (google?.id) {
-    const googleWhere: { connection_id: string; date: { gte: Date; lte: Date }; customer_id?: { in: string[] } } = {
-      connection_id: google.id,
-      date: { gte: fromDate, lte: toDate },
-    }
-    if (googleIds?.length) googleWhere.customer_id = { in: googleIds }
-    const rows = await prisma.google_ads_daily_metrics.groupBy({
-      by: ['date'],
-      where: googleWhere as Parameters<typeof prisma.google_ads_daily_metrics.groupBy>[0]['where'],
-      _sum: { spend: true },
-    })
-    for (const r of rows) {
-      const dateStr = r.date.toISOString().slice(0, 10)
-      const spend = Number(r._sum.spend ?? 0)
-      googleByDate.set(dateStr, (googleByDate.get(dateStr) ?? 0) + spend)
-      byDate.set(dateStr, (byDate.get(dateStr) ?? 0) + spend)
-    }
-  }
-  return { byDate, metaByDate, googleByDate }
 }
 
 async function getDailyReturnsAndSales(
@@ -300,6 +191,8 @@ export type AcquisitionSummary = {
   google: number
   totalAdSpend: number
   blendedCac: number
+  /** MER / aMER / ACOS; aMER uses acquisition-classified spend only. */
+  marketingEfficiency: MarketingEfficiencySnapshot
 }
 
 export type AcquisitionDailyRow = {
@@ -311,6 +204,11 @@ export type AcquisitionDailyRow = {
   newCustomers: number
   meta: number
   google: number
+  /** Acquisition-classified ad spend (for aMER denominator). */
+  acquisitionAdSpend: number
+  /** New-customer revenue ÷ acquisition ad spend when spend > 0. */
+  aMerDaily: number | null
+  ncRevenue: number
 }
 
 export async function computeAcquisition(
@@ -329,6 +227,12 @@ export async function computeAcquisition(
         google: 0,
         totalAdSpend: 0,
         blendedCac: 0,
+        marketingEfficiency: computeMarketingEfficiency({
+          storeNetRevenue: 0,
+          totalAdSpend: 0,
+          newCustomerRevenue: 0,
+          acquisitionAdSpend: 0,
+        }),
       },
       daily: [],
       currency: storeCurrency,
@@ -343,15 +247,31 @@ export async function computeAcquisition(
   const orderFilterSettings = normalizeOrderFilterSettings(workspace as any)
   const orderInclusionWhere = getOrderInclusionWhere(orderFilterSettings)
 
-  const [firstOrders, dailyRates, adSpendMaps, dailyReturnsAndSales, rtoIds] = await Promise.all([
-    getFirstOrdersInRange(prisma, connectionId, fromDate, toDate, orderFilterSettings),
-    getDailyRates(prisma, workspace.id, connectionId, fromDate, toDateExtended, orderInclusionWhere),
-    getDailyAdSpend(prisma, workspace, fromDate, toDateExtended),
-    getDailyReturnsAndSales(prisma, connectionId, fromDate, toDateExtended, orderInclusionWhere),
-    getRtoOrderIds(prisma, workspace.id, connectionId, fromDate, toDateExtended),
-  ])
+  const [firstOrders, dailyRates, adSpendMaps, dailyReturnsAndSales, rtoIds, storeNetRevenue] =
+    await Promise.all([
+      fetchCustomerFirstOrdersInRange(prisma, connectionId, fromDate, toDate, orderFilterSettings),
+      getDailyRates(prisma, workspace.id, connectionId, fromDate, toDateExtended, orderInclusionWhere),
+      fetchAdSpendMapsWithClassification(
+        prisma,
+        workspace.id,
+        workspace,
+        fromDate,
+        toDateExtended
+      ),
+      getDailyReturnsAndSales(prisma, connectionId, fromDate, toDateExtended, orderInclusionWhere),
+      getRtoOrderIds(prisma, workspace.id, connectionId, fromDate, toDateExtended),
+      fetchStoreNetRevenueForPeriod(
+        prisma,
+        connectionId,
+        fromDate,
+        toDate,
+        orderFilterSettings
+      ),
+    ])
 
-  const { byDate: dailyAdSpend, metaByDate, googleByDate } = adSpendMaps
+  const { byDate: dailyAdSpend, metaByDate, googleByDate, acquisitionByDate } = adSpendMaps
+  const fromStr = params.from
+  const toStr = params.to
 
   if (firstOrders.length === 0) {
     const daily: AcquisitionDailyRow[] = []
@@ -359,8 +279,12 @@ export async function computeAcquisition(
     for (const [d] of dailyAdSpend) allDays.add(d)
     for (const [d] of dailyRates) allDays.add(d)
     const sortedDays = [...allDays].sort()
+    const totalMeta = [...metaByDate.values()].reduce((a, b) => a + b, 0)
+    const totalGoogle = [...googleByDate.values()].reduce((a, b) => a + b, 0)
+    const totalAdSpendEmpty = totalMeta + totalGoogle
     for (const dateStr of sortedDays) {
       const adSpend = dailyAdSpend.get(dateStr) ?? 0
+      const acq = acquisitionByDate.get(dateStr) ?? 0
       daily.push({
         date: dateStr,
         ncCm2: 0,
@@ -370,6 +294,9 @@ export async function computeAcquisition(
         newCustomers: 0,
         meta: metaByDate.get(dateStr) ?? 0,
         google: googleByDate.get(dateStr) ?? 0,
+        acquisitionAdSpend: acq,
+        aMerDaily: acq > 0 ? 0 : null,
+        ncRevenue: 0,
       })
     }
     return {
@@ -377,10 +304,16 @@ export async function computeAcquisition(
         cm2: 0,
         newCustomers: 0,
         cm2PerNc: 0,
-        meta: [...metaByDate.values()].reduce((a, b) => a + b, 0),
-        google: [...googleByDate.values()].reduce((a, b) => a + b, 0),
-        totalAdSpend: [...dailyAdSpend.values()].reduce((a, b) => a + b, 0),
+        meta: totalMeta,
+        google: totalGoogle,
+        totalAdSpend: totalAdSpendEmpty,
         blendedCac: 0,
+        marketingEfficiency: computeMarketingEfficiency({
+          storeNetRevenue,
+          totalAdSpend: sumDailyMapInRange(dailyAdSpend, fromStr, toStr),
+          newCustomerRevenue: 0,
+          acquisitionAdSpend: sumDailyMapInRange(acquisitionByDate, fromStr, toStr),
+        }),
       },
       daily: daily.sort((a, b) => a.date.localeCompare(b.date)),
       currency: storeCurrency,
@@ -404,6 +337,7 @@ export async function computeAcquisition(
       customerShopifyId: true,
       processedAt: true,
       totalPrice: true,
+      totalTax: true,
       orderNumber: true,
       name: true,
     },
@@ -412,9 +346,17 @@ export async function computeAcquisition(
   const orderCogsMap = await getOrderCogs(prisma, connectionId, orders.map((o) => o.id), workspace.cogsSettings ?? null)
 
   let totalNcCm2 = 0
+  let newCustomerRevenue = 0
   const byDay: Map<
     string,
-    { ncCm2: number; newCustomers: number; adSpend: number; meta: number; google: number }
+    {
+      ncCm2: number
+      newCustomers: number
+      adSpend: number
+      meta: number
+      google: number
+      ncRevenue: number
+    }
   > = new Map()
 
   for (const order of orders) {
@@ -434,15 +376,27 @@ export async function computeAcquisition(
     const totalReturns = daily?.totalReturns ?? 0
     const orderShareRefunds = grossSales > 0 ? (totalPrice / grossSales) * totalReturns : 0
     const ncCm2Order = isRto ? 0 : cm2 - orderShareRefunds
+    const totalTax = Number(order.totalTax ?? 0)
+    if (!isRto) {
+      newCustomerRevenue += totalPrice - totalTax - orderShareRefunds
+    }
 
     totalNcCm2 += ncCm2Order
 
-    const cur = byDay.get(dateStr) ?? { ncCm2: 0, newCustomers: 0, adSpend: 0, meta: 0, google: 0 }
+    const cur = byDay.get(dateStr) ?? {
+      ncCm2: 0,
+      newCustomers: 0,
+      adSpend: 0,
+      meta: 0,
+      google: 0,
+      ncRevenue: 0,
+    }
     cur.ncCm2 += ncCm2Order
     cur.newCustomers += 1
     cur.adSpend = dailyAdSpend.get(dateStr) ?? 0
     cur.meta = metaByDate.get(dateStr) ?? 0
     cur.google = googleByDate.get(dateStr) ?? 0
+    if (!isRto) cur.ncRevenue += totalPrice - totalTax - orderShareRefunds
     byDay.set(dateStr, cur)
   }
 
@@ -461,6 +415,12 @@ export async function computeAcquisition(
     google: totalGoogle,
     totalAdSpend,
     blendedCac,
+    marketingEfficiency: computeMarketingEfficiency({
+      storeNetRevenue,
+      totalAdSpend: sumDailyMapInRange(dailyAdSpend, fromStr, toStr),
+      newCustomerRevenue,
+      acquisitionAdSpend: sumDailyMapInRange(acquisitionByDate, fromStr, toStr),
+    }),
   }
 
   const allDays = new Set<string>()
@@ -472,6 +432,8 @@ export async function computeAcquisition(
     const adSpend = dailyAdSpend.get(dateStr) ?? 0
     const nc = day?.newCustomers ?? 0
     const ncCm2 = day?.ncCm2 ?? 0
+    const acqSpend = acquisitionByDate.get(dateStr) ?? 0
+    const ncRev = day?.ncRevenue ?? 0
     return {
       date: dateStr,
       ncCm2,
@@ -481,6 +443,9 @@ export async function computeAcquisition(
       newCustomers: nc,
       meta: day?.meta ?? metaByDate.get(dateStr) ?? 0,
       google: day?.google ?? googleByDate.get(dateStr) ?? 0,
+      acquisitionAdSpend: acqSpend,
+      aMerDaily: acqSpend > 0 ? ncRev / acqSpend : null,
+      ncRevenue: ncRev,
     }
   })
 
@@ -516,7 +481,7 @@ export async function computeAcquisitionTrend(
   const fromExtended = subDays(fromDate, 364)
 
   const orderFilterSettings = normalizeOrderFilterSettings(workspace as any)
-  const firstOrders = await getFirstOrdersInRange(
+  const firstOrders = await fetchCustomerFirstOrdersInRange(
     prisma,
     connectionId,
     fromExtended,
@@ -617,9 +582,15 @@ export async function computeAcquisitionComposition(
   const orderInclusionWhere = getOrderInclusionWhere(orderFilterSettings)
 
   const [firstOrders, dailyRates, adSpendMaps, dailyReturnsAndSales, rtoIds] = await Promise.all([
-    getFirstOrdersInRange(prisma, connectionId, fromExtended, toDate, orderFilterSettings),
+    fetchCustomerFirstOrdersInRange(prisma, connectionId, fromExtended, toDate, orderFilterSettings),
     getDailyRates(prisma, workspace.id, connectionId, fromExtended, toDateExtended, orderInclusionWhere),
-    getDailyAdSpend(prisma, workspace, fromExtended, toDateExtended),
+    fetchAdSpendMapsWithClassification(
+      prisma,
+      workspace.id,
+      workspace,
+      fromExtended,
+      toDateExtended
+    ),
     getDailyReturnsAndSales(prisma, connectionId, fromExtended, toDateExtended, orderInclusionWhere),
     getRtoOrderIds(prisma, workspace.id, connectionId, fromExtended, toDateExtended),
   ])
@@ -758,7 +729,8 @@ export async function computeAcquisitionComposition(
 
   const rawByDate = new Map(rawDaily.map((r) => [r.date, r]))
 
-  function getMa7(key: keyof typeof rawDaily[0]): (dateStr: string) => number {
+  type PctKey = 'discountsPct' | 'cm2Pct' | 'adSpendPct' | 'cogsPct' | 'variableCostsPct' | 'refundsPct'
+  function getMa7(key: PctKey): (dateStr: string) => number {
     return (dateStr: string) => {
       const d = new Date(dateStr + 'T00:00:00.000Z')
       const start = subDays(d, 6)

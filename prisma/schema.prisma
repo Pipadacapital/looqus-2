@@ -20,10 +20,28 @@ model User {
   auditLogs       AuditLog[]
   invitationsSent Invitation[]      @relation("InvitedBy")
   notifications   Notification[]
-  memberships     WorkspaceMember[]
-  ownedWorkspaces Workspace[]       @relation("WorkspaceCreator")
+  memberships            WorkspaceMember[]
+  ownedWorkspaces        Workspace[]         @relation("WorkspaceCreator")
+  marketingActionsCreated MarketingAction[] @relation("MarketingActionCreator")
 
   @@map("users")
+}
+
+model MarketingAction {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId   String    @map("workspace_id") @db.Uuid
+  actionDate    DateTime  @map("action_date") @db.Date
+  actionType    String    @map("action_type") @db.VarChar(48)
+  actionName    String    @map("action_name") @db.VarChar(256)
+  notes         String?   @db.Text
+  createdById   String?   @map("created_by") @db.Uuid
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy     User?     @relation("MarketingActionCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, actionDate])
+  @@map("marketing_actions")
 }
 
 model Workspace {
@@ -50,16 +68,66 @@ model Workspace {
   meta_ads_connections       meta_ads_connections?
   notifications              Notification[]
   shiprocketConnection       ShiprocketConnection?
+  klaviyoConnection          KlaviyoConnection?
   shopifyConnections         ShopifyConnection[]
+  emailPerformanceRows       EmailPerformance[]
   aiInsightsCache            WorkspaceAiInsightsCache[]
   cogsSettings               WorkspaceCogsSettings?
   costs                      WorkspaceCost[]
   workspaceDailyMetrics      WorkspaceDailyMetrics[]
   members                    WorkspaceMember[]
   miscExpenses               WorkspaceMiscExpense[]
+  adCampaignClassifications  WorkspaceAdCampaignClassification[]
+  metricGoals                WorkspaceMetricGoal[]
+  marketingActions           MarketingAction[]
   createdBy                  User                       @relation("WorkspaceCreator", fields: [createdById], references: [id])
 
   @@map("workspaces")
+}
+
+enum WorkspaceGoalPeriodType {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+enum WorkspaceGoalValueType {
+  MINIMUM
+  MAXIMUM
+  TARGET
+}
+
+model WorkspaceMetricGoal {
+  id          String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId String                  @map("workspace_id") @db.Uuid
+  metricName  String                  @map("metric_name") @db.VarChar(64)
+  periodType  WorkspaceGoalPeriodType @map("period_type")
+  periodStart DateTime                @map("period_start") @db.Date
+  goalValue   Decimal                 @map("goal_value") @db.Decimal(18, 6)
+  goalType    WorkspaceGoalValueType  @map("goal_type")
+  createdAt   DateTime                @default(now()) @map("created_at")
+  updatedAt   DateTime                @updatedAt @map("updated_at")
+  workspace   Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, metricName, periodType, periodStart])
+  @@index([workspaceId])
+  @@map("workspace_metric_goals")
+}
+
+model WorkspaceAdCampaignClassification {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId  String    @map("workspace_id") @db.Uuid
+  platform     String    @db.VarChar(32)
+  campaignId   String    @map("campaign_id") @db.VarChar(128)
+  intent       String    @db.VarChar(32)
+  campaignName String?   @map("campaign_name") @db.VarChar(512)
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, platform, campaignId])
+  @@index([workspaceId])
+  @@map("workspace_ad_campaign_classifications")
 }
 
 model WorkspaceAiInsightsCache {
@@ -230,6 +298,9 @@ model ShopifyOrder {
 
   @@unique([connectionId, shopifyId])
   @@index([connectionId, processedAt])
+  // Faster filtering for the Orders table (we filter by exact status values).
+  @@index([connectionId, financialStatus])
+  @@index([connectionId, fulfillmentStatus])
   @@map("shopify_orders")
 }
 
@@ -351,6 +422,49 @@ model ShiprocketConnection {
   @@map("shiprocket_connections")
 }
 
+model KlaviyoConnection {
+  id                   String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId          String             @unique @map("workspace_id") @db.Uuid
+  apiKey               String             @map("api_key")
+  conversionMetricId   String?            @map("conversion_metric_id")
+  status               ConnectionStatus   @default(CONNECTED)
+  lastSyncAt           DateTime?          @map("last_sync_at")
+  lastSyncError        String?            @map("last_sync_error")
+  createdAt            DateTime           @default(now()) @map("created_at")
+  updatedAt            DateTime           @updatedAt @map("updated_at")
+  workspace            Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  emailPerformance     EmailPerformance[]
+
+  @@map("klaviyo_connections")
+}
+
+/// Klaviyo campaign / flow send performance (one row per send date for flows).
+model EmailPerformance {
+  id                    String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId         String            @map("workspace_id") @db.Uuid
+  klaviyoConnectionId String            @map("klaviyo_connection_id") @db.Uuid
+  channel             String            @db.VarChar(16)
+  sourceType          String            @map("source_type") @db.VarChar(24)
+  klaviyoResourceId   String            @map("klaviyo_resource_id") @db.VarChar(64)
+  name                String            @db.VarChar(512)
+  sendDate            DateTime          @map("send_date") @db.Date
+  delivered           Int               @default(0)
+  uniqueOpens         Int               @default(0) @map("unique_opens")
+  uniqueClicks        Int               @default(0) @map("unique_clicks")
+  orders              Int               @default(0)
+  revenue             Decimal           @default(0) @map("revenue") @db.Decimal(18, 4)
+  unsubscribes        Int               @default(0)
+  spamComplaints      Int               @default(0) @map("spam_complaints")
+  syncedAt            DateTime          @default(now()) @map("synced_at")
+  workspace           Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  klaviyoConnection   KlaviyoConnection @relation(fields: [klaviyoConnectionId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, sourceType, klaviyoResourceId, sendDate])
+  @@index([workspaceId, sendDate])
+  @@index([klaviyoConnectionId])
+  @@map("email_performance")
+}
+
 model ShiprocketOrder {
   id             String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   connectionId   String               @map("connection_id") @db.Uuid
@@ -460,7 +574,27 @@ model google_ads_connections {
   selected_customer_id     String?
   selected_customer_ids    String[]
   workspaces               Workspace                  @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
-  google_ads_daily_metrics google_ads_daily_metrics[]
+  google_ads_daily_metrics   google_ads_daily_metrics[]
+  google_ads_funnel_daily      google_ads_funnel_daily[]
+}
+
+/// Per campaign-day funnel stages (from GAQL segmented by conversion_action).
+model google_ads_funnel_daily {
+  id                String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  connection_id     String                 @db.Uuid
+  customer_id       String
+  campaign_id       String
+  date              DateTime               @db.Date
+  /// add_to_cart | checkout_initiated | purchase
+  stage             String                 @db.VarChar(32)
+  conversions       Decimal                @default(0) @db.Decimal(14, 4)
+  conversion_value  Decimal                @default(0) @db.Decimal(14, 4)
+  created_at        DateTime               @default(now())
+  google_ads_connections google_ads_connections @relation(fields: [connection_id], references: [id], onDelete: Cascade)
+
+  @@unique([connection_id, customer_id, campaign_id, date, stage])
+  @@index([connection_id, customer_id, date])
+  @@map("google_ads_funnel_daily")
 }
 
 model google_ads_daily_metrics {
@@ -504,7 +638,44 @@ model meta_ads_connections {
   selected_ad_account_id  String?
   selected_ad_account_ids String[]
   workspaces              Workspace                @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
-  meta_ads_daily_metrics  meta_ads_daily_metrics[]
+  meta_ads_daily_metrics    meta_ads_daily_metrics[]
+  meta_ads_creative_daily   meta_ads_creative_daily[]
+}
+
+/// Ad-level daily video + performance (Insights level=ad). Synced separately from campaign rows.
+model meta_ads_creative_daily {
+  id                 String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  connection_id      String               @db.Uuid
+  ad_account_id      String
+  ad_id              String
+  ad_name            String               @default("")
+  campaign_id        String
+  campaign_name      String               @default("")
+  adset_id           String?
+  adset_name         String?
+  date               DateTime             @db.Date
+  impressions        Int                  @default(0)
+  clicks             Int                  @default(0)
+  spend              Decimal              @default(0) @db.Decimal(12, 4)
+  /// From actions 3_second_video_view when present; null if Meta omitted (hook N/A)
+  video_3s_views     Int?
+  /// ThruPlay (15s or complete)
+  video_thruplay     Int                  @default(0)
+  /// video_avg_time_watched_actions (seconds, ad-reported)
+  avg_watch_sec      Decimal              @default(0) @db.Decimal(12, 4)
+  video_p25          Int                  @default(0)
+  video_p50          Int                  @default(0)
+  video_p75          Int                  @default(0)
+  video_p95          Int                  @default(0)
+  conversions        Int                  @default(0)
+  revenue            Decimal              @default(0) @db.Decimal(12, 4)
+  raw_json           Json?
+  created_at         DateTime             @default(now())
+  meta_ads_connections meta_ads_connections @relation(fields: [connection_id], references: [id], onDelete: Cascade)
+
+  @@unique([connection_id, ad_account_id, ad_id, date])
+  @@index([connection_id, ad_account_id, date])
+  @@map("meta_ads_creative_daily")
 }
 
 model meta_ads_daily_metrics {

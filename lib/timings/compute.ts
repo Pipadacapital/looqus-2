@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@prisma/client'
+import { fetchCustomerFirstOrdersInRange, normalizeOrderFilterSettings } from '@/lib/metrics'
 import type {
   TimingsGroupBy,
   TimingsGroupRow,
@@ -7,12 +8,6 @@ import type {
 } from './types'
 
 const REACTIVATION_PCT_OF_1TO2 = 0.8 // 80% of typical 1→2 interval = recommended reactivation timing
-
-type FirstOrderRow = {
-  customer_shopify_id: string
-  first_at: Date
-  order_id: string
-}
 
 type OrderRow = {
   id: string
@@ -138,32 +133,6 @@ function getGroupIdentity(params: {
   }
 }
 
-async function getFirstOrders(
-  prisma: PrismaClient,
-  connectionId: string,
-  fromDate: Date,
-  toDate: Date
-): Promise<FirstOrderRow[]> {
-  const rows = await prisma.$queryRaw<FirstOrderRow[]>`
-    WITH first_orders AS (
-      SELECT customer_shopify_id, MIN(processed_at) AS first_at
-      FROM shopify_orders
-      WHERE connection_id = ${connectionId}::uuid
-        AND customer_shopify_id IS NOT NULL
-        AND customer_shopify_id != ''
-      GROUP BY customer_shopify_id
-    )
-    SELECT fo.customer_shopify_id, fo.first_at, o.id AS order_id
-    FROM first_orders fo
-    JOIN shopify_orders o ON o.customer_shopify_id = fo.customer_shopify_id
-      AND o.processed_at = fo.first_at
-      AND o.connection_id = ${connectionId}::uuid
-    WHERE fo.first_at >= ${fromDate}
-      AND fo.first_at <= ${toDate}
-  `
-  return rows
-}
-
 export type WorkspaceForTimings = {
   id: string
   shopifyConnections: { id: string }[]
@@ -195,7 +164,13 @@ export async function computeTimings(
   const toDateExtended = new Date(toDate)
   toDateExtended.setUTCDate(toDateExtended.getUTCDate() + 365)
 
-  const firstOrders = await getFirstOrders(prisma, connectionId, fromDate, toDate)
+  const firstOrders = await fetchCustomerFirstOrdersInRange(
+    prisma,
+    connectionId,
+    fromDate,
+    toDate,
+    normalizeOrderFilterSettings(null)
+  )
   if (firstOrders.length === 0) {
     return {
       summary: emptySummary(),
