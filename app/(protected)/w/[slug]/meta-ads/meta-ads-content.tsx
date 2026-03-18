@@ -1,6 +1,7 @@
 'use client'
 
 import { useMemo, useState } from 'react'
+import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
 import { format, subDays } from 'date-fns'
 import {
@@ -36,7 +37,12 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Input } from '@/components/ui/input'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { DateRangeFilter } from '@/components/analytics'
+import type { GoalEvaluation } from '@/lib/metrics/goals'
+import { KpiGoalLine } from '@/components/goals/kpi-goal-line'
+
+export type CampaignIntent = 'acquisition' | 'non_acquisition' | 'brand' | 'unclassified'
 
 export type MetaAdsCampaignRow = {
   campaignId: string
@@ -47,9 +53,13 @@ export type MetaAdsCampaignRow = {
   conversions: number
   revenue: number
   roas: number
+  intent: CampaignIntent
+  acqRoas: number | null
+  nonAcqRoas: number | null
   ctr: number
   cpc: number
   cpm: number
+  funnel?: MetaFunnelRow
 }
 
 export type MetaAdsAdsetRow = MetaAdsCampaignRow & {
@@ -59,6 +69,50 @@ export type MetaAdsAdsetRow = MetaAdsCampaignRow & {
 
 export type MetaAdsDailyRow = MetaAdsAdsetRow & { date: string }
 
+type IntentSplit = {
+  byIntent: Record<
+    CampaignIntent,
+    { spend: number; revenue: number; campaignCount: number }
+  >
+  sumSpendByIntent: number
+  totalSpend: number
+  totalRevenue: number
+  spendReconciles: boolean
+  revenueReconciles: boolean
+  spendDelta: number
+  revenueDelta: number
+  acquisitionRoas: number | null
+  nonAcquisitionPoolRoas: number | null
+}
+
+type FunnelBand = 'low' | 'medium' | 'strong' | 'na'
+
+type MetaFunnelRow = {
+  impressions: number
+  clicks: number
+  spend: number
+  addToCart: number | null
+  checkoutInitiated: number | null
+  purchases: number
+  attributedRevenue: number
+  ctrPct: number
+  atcRatePct: number | null
+  checkoutPerAtcPct: number | null
+  purchasePerCheckoutPct: number | null
+  overallCvrPct: number
+  costPerAtc: number | null
+  costPerCheckout: number | null
+  costPerPurchase: number | null
+  roas: number
+  coverage: string
+  diagnostics: {
+    atcRate: FunnelBand
+    checkoutFromAtc: FunnelBand
+    purchaseFromCheckout: FunnelBand
+    clickToPurchase: FunnelBand
+  }
+}
+
 type MetricsResponse = {
   error?: string
   adAccountIds: string[]
@@ -66,6 +120,8 @@ type MetricsResponse = {
   totalDailyRows?: number
   view?: 'campaigns' | 'daily'
   groupBy?: 'campaign' | 'adset'
+  intentFilter?: string
+  intentSplit?: IntentSplit
   summary: {
     impressions: number
     clicks: number
@@ -76,10 +132,16 @@ type MetricsResponse = {
     from: string
     to: string
     days: number
+    goalEvaluations?: { meta_roas?: GoalEvaluation }
   } | null
   byCampaign: MetaAdsCampaignRow[]
   byAdset: MetaAdsAdsetRow[]
   dailyRows?: MetaAdsDailyRow[]
+  funnel?: {
+    coverage: 'meta_full'
+    summary: MetaFunnelRow
+    note: string
+  }
 }
 
 function formatCurrency(value: number) {
@@ -107,6 +169,215 @@ function formatPercent(value: number) {
   }).format(value / 100)
 }
 
+const INTENT_OPTIONS = [
+  { value: 'all', label: 'All intents' },
+  { value: 'acquisition', label: 'Acquisition' },
+  { value: 'non_acquisition', label: 'Non-acquisition' },
+  { value: 'brand', label: 'Brand' },
+  { value: 'unclassified', label: 'Unclassified' },
+] as const
+
+function intentLabel(i: CampaignIntent) {
+  return INTENT_OPTIONS.find((o) => o.value === i)?.label ?? i
+}
+
+export type MetaCreativeAdRow = {
+  adId: string
+  adName: string
+  campaignId: string
+  campaignName: string
+  adsetId: string | null
+  adsetName: string | null
+  intent: CampaignIntent
+  impressions: number
+  clicks: number
+  spend: number
+  isVideo: boolean
+  hookRatePct: number | null
+  holdRatePct: number | null
+  p25RatePct: number | null
+  p50RatePct: number | null
+  p75RatePct: number | null
+  p95RatePct: number | null
+  avgWatchSec: number | null
+  ctrPct: number
+  roas: number
+  conversions: number
+  diagnosticLabels: string[]
+}
+
+function CreativeAdsTable({
+  rows,
+  search,
+  note,
+  totalDailyRows,
+}: {
+  rows: MetaCreativeAdRow[]
+  search: string
+  note?: string
+  totalDailyRows: number
+}) {
+  const filtered = useMemo(() => {
+    if (!search.trim()) return rows
+    const q = search.trim().toLowerCase()
+    return rows.filter(
+      (r) =>
+        r.adName.toLowerCase().includes(q) ||
+        r.adId.toLowerCase().includes(q) ||
+        r.campaignName.toLowerCase().includes(q) ||
+        (r.campaignId && r.campaignId.toLowerCase().includes(q))
+    )
+  }, [rows, search])
+
+  const pctOrNa = (v: number | null) =>
+    v == null ? (
+      <span className="text-muted-foreground">N/A</span>
+    ) : (
+      <span className="tabular-nums">{v.toFixed(2)}%</span>
+    )
+
+  return (
+    <div className="overflow-x-auto">
+      {note ? (
+        <p className="text-sm text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-950/40 border-b px-4 py-2">
+          {note}
+        </p>
+      ) : null}
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="min-w-[140px]">Ad</TableHead>
+            <TableHead className="min-w-[120px]">Campaign</TableHead>
+            <TableHead>Intent</TableHead>
+            <TableHead className="text-right">Spend</TableHead>
+            <TableHead className="text-right">Impr</TableHead>
+            <TableHead className="text-right">Hook %</TableHead>
+            <TableHead className="text-right">Hold %</TableHead>
+            <TableHead className="text-right">P25</TableHead>
+            <TableHead className="text-right">P50</TableHead>
+            <TableHead className="text-right">P75</TableHead>
+            <TableHead className="text-right">P95</TableHead>
+            <TableHead className="text-right">Avg watch (s)</TableHead>
+            <TableHead className="text-right">CTR</TableHead>
+            <TableHead className="text-right">ROAS</TableHead>
+            <TableHead className="min-w-[180px]">Diagnostics</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {filtered.length === 0 ? (
+            <TableRow>
+              <TableCell colSpan={15} className="h-24 text-center text-muted-foreground">
+                {search.trim()
+                  ? 'No ads match your search.'
+                  : 'No ad-level creative data in this range. Run Meta sync after connecting.'}
+              </TableCell>
+            </TableRow>
+          ) : (
+            filtered.map((r) => (
+              <TableRow key={r.adId}>
+                <TableCell>
+                  <div className="max-w-[200px] truncate font-medium" title={r.adName || r.adId}>
+                    {r.adName || r.adId}
+                  </div>
+                  <div className="text-xs text-muted-foreground truncate max-w-[200px]">{r.adId}</div>
+                </TableCell>
+                <TableCell>
+                  <div className="max-w-[160px] truncate text-sm" title={r.campaignName}>
+                    {r.campaignName || r.campaignId}
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <IntentBadge intent={r.intent} />
+                </TableCell>
+                <TableCell className="text-right tabular-nums font-medium">
+                  {formatCurrency(r.spend)}
+                </TableCell>
+                <TableCell className="text-right tabular-nums text-muted-foreground">
+                  {formatNumber(r.impressions)}
+                </TableCell>
+                <TableCell className="text-right">{pctOrNa(r.hookRatePct)}</TableCell>
+                <TableCell className="text-right">{pctOrNa(r.holdRatePct)}</TableCell>
+                <TableCell className="text-right">{pctOrNa(r.p25RatePct)}</TableCell>
+                <TableCell className="text-right">{pctOrNa(r.p50RatePct)}</TableCell>
+                <TableCell className="text-right">{pctOrNa(r.p75RatePct)}</TableCell>
+                <TableCell className="text-right">{pctOrNa(r.p95RatePct)}</TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {r.avgWatchSec == null ? (
+                    <span className="text-muted-foreground">N/A</span>
+                  ) : (
+                    r.avgWatchSec.toFixed(2)
+                  )}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">{r.ctrPct.toFixed(2)}%</TableCell>
+                <TableCell className="text-right font-medium tabular-nums">{r.roas.toFixed(2)}x</TableCell>
+                <TableCell className="text-sm">
+                  {r.diagnosticLabels.length === 0 ? (
+                    <span className="text-muted-foreground">—</span>
+                  ) : (
+                    <ul className="list-disc list-inside space-y-0.5 text-amber-800 dark:text-amber-200">
+                      {r.diagnosticLabels.map((d) => (
+                        <li key={d}>{d}</li>
+                      ))}
+                    </ul>
+                  )}
+                </TableCell>
+              </TableRow>
+            ))
+          )}
+        </TableBody>
+      </Table>
+      {filtered.length > 0 && (
+        <div className="border-t px-4 py-2 text-xs text-muted-foreground">
+          {filtered.length} ad{filtered.length !== 1 ? 's' : ''}
+          {totalDailyRows > 0 && (
+            <>
+              {' '}
+              · {totalDailyRows} ad-day row{totalDailyRows !== 1 ? 's' : ''} in range
+            </>
+          )}
+          {search.trim() && rows.length !== filtered.length && (
+            <> · filtered from {rows.length}</>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function bandClass(b: FunnelBand) {
+  if (b === 'low') return 'text-amber-600 dark:text-amber-400'
+  if (b === 'medium') return 'text-slate-600 dark:text-slate-400'
+  if (b === 'strong') return 'text-emerald-600 dark:text-emerald-400'
+  return 'text-muted-foreground'
+}
+
+function PctCell({
+  pct,
+  band,
+}: {
+  pct: number | null
+  band: FunnelBand
+}) {
+  if (pct == null) return <span className="text-muted-foreground">—</span>
+  return <span className={bandClass(band)}>{pct.toFixed(2)}%</span>
+}
+
+function IntentBadge({ intent }: { intent: CampaignIntent }) {
+  const cls =
+    intent === 'acquisition'
+      ? 'bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-200'
+      : intent === 'unclassified'
+        ? 'bg-amber-100 text-amber-950 dark:bg-amber-950 dark:text-amber-200 ring-1 ring-amber-400/60'
+        : intent === 'brand'
+          ? 'bg-violet-100 text-violet-900 dark:bg-violet-950 dark:text-violet-200'
+          : 'bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200'
+  return (
+    <span className={`inline-flex rounded px-1.5 py-0.5 text-xs font-medium ${cls}`}>
+      {intentLabel(intent)}
+    </span>
+  )
+}
+
 export function MetaAdsContent({
   hasConnection,
   workspaceId,
@@ -122,21 +393,43 @@ export function MetaAdsContent({
   const [view, setView] = useState<'campaigns' | 'adsets' | 'daily'>('campaigns')
   const [selectingAccount, setSelectingAccount] = useState(false)
   const [sorting, setSorting] = useState<SortingState>([{ id: 'spend', desc: true }])
+  const [intentFilter, setIntentFilter] = useState<string>('all')
+  const [adsView, setAdsView] = useState<'performance' | 'funnel' | 'creative'>('performance')
 
   const viewParam = view === 'daily' ? 'daily' : 'campaigns'
   const groupByParam = view === 'adsets' ? 'adset' : 'campaign'
 
   const { data, isLoading, isError, error, refetch } = useQuery<MetricsResponse>({
-    queryKey: ['meta-ads', 'metrics', slug, dateFrom, dateTo, viewParam, groupByParam],
+    queryKey: ['meta-ads', 'metrics', slug, dateFrom, dateTo, viewParam, groupByParam, intentFilter],
     queryFn: async () => {
       const res = await fetch(
-        `/api/workspaces/${slug}/meta-ads/metrics?from=${dateFrom}&to=${dateTo}&view=${viewParam}&groupBy=${groupByParam}`
+        `/api/workspaces/${slug}/meta-ads/metrics?from=${dateFrom}&to=${dateTo}&view=${viewParam}&groupBy=${groupByParam}&intent=${encodeURIComponent(intentFilter)}`
       )
       const json = await res.json()
       if (!res.ok) throw new Error(json.error || 'Failed to load')
       return json
     },
     enabled: hasConnection,
+  })
+
+  type CreativeResponse = {
+    ads: MetaCreativeAdRow[]
+    note?: string
+    formulasNote?: string
+    totalDailyRows?: number
+  }
+
+  const { data: creativeData, isLoading: creativeLoading } = useQuery<CreativeResponse>({
+    queryKey: ['meta-ads', 'creative', slug, dateFrom, dateTo, intentFilter],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/workspaces/${slug}/meta-ads/creative?from=${dateFrom}&to=${dateTo}&intent=${encodeURIComponent(intentFilter)}`
+      )
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || 'Failed to load creative metrics')
+      return json
+    },
+    enabled: hasConnection && adsView === 'creative',
   })
 
   const adAccountIds = data?.adAccountIds ?? []
@@ -179,7 +472,10 @@ export function MetaAdsContent({
         (String((r as MetaAdsAdsetRow).adsetName).toLowerCase().includes(q) ||
           String((r as MetaAdsAdsetRow).adsetId).toLowerCase().includes(q))
       const dateMatch = 'date' in r && (r as MetaAdsDailyRow).date.includes(q)
-      return campaignMatch || adsetMatch || dateMatch
+      const intentMatch =
+        'intent' in r &&
+        intentLabel((r as MetaAdsCampaignRow).intent).toLowerCase().includes(q)
+      return campaignMatch || adsetMatch || dateMatch || intentMatch
     })
   }, [rowsForView, search])
 
@@ -196,6 +492,11 @@ export function MetaAdsContent({
             {row.original.campaignName || row.original.campaignId}
           </div>
         ),
+      },
+      {
+        accessorKey: 'intent',
+        header: 'Intent',
+        cell: ({ row }) => <IntentBadge intent={row.original.intent} />,
       },
       {
         accessorKey: 'spend',
@@ -278,6 +579,28 @@ export function MetaAdsContent({
           </div>
         ),
       },
+      {
+        id: 'acqRoas',
+        accessorFn: (r) => r.acqRoas ?? -1,
+        header: () => <div className="text-right text-xs max-w-[4.5rem] leading-tight">Acq ROAS</div>,
+        cell: ({ row }) => (
+          <div className="text-right tabular-nums text-muted-foreground text-sm">
+            {row.original.acqRoas != null ? `${row.original.acqRoas.toFixed(2)}x` : '—'}
+          </div>
+        ),
+      },
+      {
+        id: 'nonAcqRoas',
+        accessorFn: (r) => r.nonAcqRoas ?? -1,
+        header: () => (
+          <div className="text-right text-xs max-w-[4.5rem] leading-tight">Non-acq ROAS</div>
+        ),
+        cell: ({ row }) => (
+          <div className="text-right tabular-nums text-muted-foreground text-sm">
+            {row.original.nonAcqRoas != null ? `${row.original.nonAcqRoas.toFixed(2)}x` : '—'}
+          </div>
+        ),
+      },
     ],
     []
   )
@@ -308,7 +631,12 @@ export function MetaAdsContent({
           </div>
         ),
       },
-      ...(campaignColumns.slice(1) as ColumnDef<MetaAdsAdsetRow>[]),
+      {
+        accessorKey: 'intent',
+        header: 'Intent',
+        cell: ({ row }) => <IntentBadge intent={row.original.intent} />,
+      },
+      ...(campaignColumns.slice(2) as ColumnDef<MetaAdsAdsetRow>[]),
     ],
     [campaignColumns]
   )
@@ -347,6 +675,11 @@ export function MetaAdsContent({
             {row.original.adsetName || '—'}
           </div>
         ),
+      },
+      {
+        accessorKey: 'intent',
+        header: 'Intent',
+        cell: ({ row }) => <IntentBadge intent={row.original.intent} />,
       },
       {
         accessorKey: 'spend',
@@ -470,6 +803,43 @@ export function MetaAdsContent({
   const summary = data?.summary
   const hasError = data?.error && !summary
 
+  const funnelRowsForTable = useMemo(() => {
+    if (!data?.funnel) return []
+    if (view === 'daily') {
+      return (data.dailyRows ?? []).map((r) => ({
+        key: `${r.campaignId}-${r.adsetId}-${r.date}`,
+        label: `${r.date} · ${r.campaignName}`,
+        sub: r.adsetName,
+        f: r.funnel as MetaFunnelRow,
+      }))
+    }
+    if (view === 'adsets') {
+      return (data.byAdset ?? []).map((r) => ({
+        key: r.adsetId,
+        label: r.adsetName || r.adsetId,
+        sub: r.campaignName,
+        f: r.funnel as MetaFunnelRow,
+      }))
+    }
+    return (data.byCampaign ?? []).map((r) => ({
+      key: r.campaignId,
+      label: r.campaignName || r.campaignId,
+      sub: '',
+      f: r.funnel as MetaFunnelRow,
+    }))
+  }, [data, view])
+
+  const filteredFunnelRows = useMemo(() => {
+    if (!search.trim()) return funnelRowsForTable
+    const q = search.trim().toLowerCase()
+    return funnelRowsForTable.filter(
+      (x) =>
+        x.label.toLowerCase().includes(q) ||
+        x.sub.toLowerCase().includes(q) ||
+        x.key.toLowerCase().includes(q)
+    )
+  }, [funnelRowsForTable, search])
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-1">
@@ -480,13 +850,107 @@ export function MetaAdsContent({
         </p>
       </div>
 
+      <Tabs
+        value={adsView}
+        onValueChange={(v) => setAdsView(v as 'performance' | 'funnel' | 'creative')}
+      >
+        <TabsList>
+          <TabsTrigger value="performance">Performance</TabsTrigger>
+          <TabsTrigger value="funnel">Funnel</TabsTrigger>
+          <TabsTrigger value="creative">Creative</TabsTrigger>
+        </TabsList>
+      </Tabs>
+
       {hasError && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/50 px-4 py-3 text-sm text-amber-800 dark:text-amber-200">
           {data.error}
         </div>
       )}
 
-      {summary && (
+      {summary && adsView === 'funnel' && data?.funnel && (
+        <div className="space-y-3 rounded-xl border bg-card p-4">
+          <p className="text-xs text-muted-foreground">{data.funnel.note}</p>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 text-sm">
+            {(
+              [
+                ['Spend', formatCurrency(data.funnel.summary.spend), null],
+                ['Impressions', formatNumber(data.funnel.summary.impressions), null],
+                ['Clicks', formatNumber(data.funnel.summary.clicks), null],
+                ['CTR', `${data.funnel.summary.ctrPct.toFixed(2)}%`, null],
+                [
+                  'ATC',
+                  formatNumber(data.funnel.summary.addToCart ?? 0, 1),
+                  data.funnel.summary.diagnostics.atcRate,
+                ],
+                [
+                  'ATC %',
+                  `${(data.funnel.summary.atcRatePct ?? 0).toFixed(2)}%`,
+                  data.funnel.summary.diagnostics.atcRate,
+                ],
+                [
+                  'Checkout',
+                  formatNumber(data.funnel.summary.checkoutInitiated ?? 0, 1),
+                  data.funnel.summary.diagnostics.checkoutFromAtc,
+                ],
+                [
+                  'CI % of ATC',
+                  data.funnel.summary.checkoutPerAtcPct != null
+                    ? `${data.funnel.summary.checkoutPerAtcPct.toFixed(1)}%`
+                    : '—',
+                  data.funnel.summary.diagnostics.checkoutFromAtc,
+                ],
+                [
+                  'Purchases',
+                  formatNumber(data.funnel.summary.purchases, 2),
+                  data.funnel.summary.diagnostics.purchaseFromCheckout,
+                ],
+                [
+                  'CVR',
+                  `${data.funnel.summary.overallCvrPct.toFixed(2)}%`,
+                  data.funnel.summary.diagnostics.clickToPurchase,
+                ],
+                ['ROAS', `${data.funnel.summary.roas.toFixed(2)}x`, null],
+                [
+                  'Cost / ATC',
+                  data.funnel.summary.costPerAtc != null
+                    ? formatCurrency(data.funnel.summary.costPerAtc)
+                    : '—',
+                  null,
+                ],
+                [
+                  'Cost / checkout',
+                  data.funnel.summary.costPerCheckout != null
+                    ? formatCurrency(data.funnel.summary.costPerCheckout)
+                    : '—',
+                  null,
+                ],
+                [
+                  'Cost / purchase',
+                  data.funnel.summary.costPerPurchase != null
+                    ? formatCurrency(data.funnel.summary.costPerPurchase)
+                    : '—',
+                  null,
+                ],
+              ] as const
+            ).map(([label, val, band]) => (
+              <div key={label} className="rounded-lg border bg-muted/20 px-3 py-2">
+                <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  {label}
+                </p>
+                <p className={`mt-0.5 font-semibold tabular-nums ${band ? bandClass(band) : ''}`}>
+                  {val}
+                </p>
+              </div>
+            ))}
+          </div>
+          <p className="text-[10px] text-muted-foreground">
+            Bands: ATC %, CI÷ATC, Purchase÷Checkout, CVR — heuristic low/medium/strong vs rough
+            benchmarks.
+          </p>
+        </div>
+      )}
+
+      {summary && adsView === 'performance' && (
         <>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
             <div className="rounded-xl border bg-card p-4 shadow-sm">
@@ -521,6 +985,13 @@ export function MetaAdsContent({
               <p className="text-xs text-muted-foreground mt-0.5">
                 {summary.from} – {summary.to}
               </p>
+              {data?.summary?.goalEvaluations?.meta_roas ? (
+                <KpiGoalLine
+                  metricId="meta_roas"
+                  evaluation={data.summary.goalEvaluations.meta_roas}
+                  currency="INR"
+                />
+              ) : null}
             </div>
             <div className="rounded-xl border bg-card p-4 shadow-sm">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
@@ -557,6 +1028,93 @@ export function MetaAdsContent({
             </div>
           </div>
 
+          {data?.intentSplit && summary.spend > 0 && (
+            <div className="rounded-xl border bg-card p-4 shadow-sm space-y-3">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-semibold">Spend by campaign intent</h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Platform-attributed revenue ROAS (Meta). Classify in{' '}
+                    <Link
+                      href={`/w/${slug}/settings/ad-campaigns`}
+                      className="underline font-medium text-foreground"
+                    >
+                      Ad campaigns
+                    </Link>
+                    .
+                  </p>
+                </div>
+                <div
+                  className={`text-xs tabular-nums ${data.intentSplit.spendReconciles && data.intentSplit.revenueReconciles ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}`}
+                >
+                  {data.intentSplit.spendReconciles && data.intentSplit.revenueReconciles
+                    ? '✓ Spend & revenue reconcile to totals'
+                    : `Reconcile check: spend Δ${data.intentSplit.spendDelta} · rev Δ${data.intentSplit.revenueDelta}`}
+                </div>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {(
+                  ['acquisition', 'non_acquisition', 'brand', 'unclassified'] as CampaignIntent[]
+                ).map((k) => {
+                  const b = data.intentSplit!.byIntent[k]
+                  const pct = summary.spend > 0 ? (b.spend / summary.spend) * 100 : 0
+                  return (
+                    <div
+                      key={k}
+                      className={
+                        k === 'unclassified'
+                          ? 'rounded-lg border-2 border-amber-400/70 bg-amber-50/50 dark:bg-amber-950/30 p-3'
+                          : 'rounded-lg border bg-muted/30 p-3'
+                      }
+                    >
+                      <p className="text-xs font-medium text-muted-foreground">{intentLabel(k)}</p>
+                      <p className="text-lg font-semibold tabular-nums mt-1">
+                        {formatCurrency(b.spend)}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {formatPercent(pct)} of spend · {b.campaignCount} campaign
+                        {b.campaignCount !== 1 ? 's' : ''}
+                      </p>
+                    </div>
+                  )
+                })}
+              </div>
+              <div className="flex flex-wrap gap-4 text-sm border-t pt-3">
+                <span>
+                  <span className="text-muted-foreground">Acq ROAS (pool): </span>
+                  <span className="font-semibold tabular-nums">
+                    {data.intentSplit.acquisitionRoas != null
+                      ? `${data.intentSplit.acquisitionRoas.toFixed(2)}x`
+                      : '—'}
+                  </span>
+                </span>
+                <span>
+                  <span className="text-muted-foreground">Non-acq ROAS (pool): </span>
+                  <span className="font-semibold tabular-nums">
+                    {data.intentSplit.nonAcquisitionPoolRoas != null
+                      ? `${data.intentSplit.nonAcquisitionPoolRoas.toFixed(2)}x`
+                      : '—'}
+                  </span>
+                  <span className="text-xs text-muted-foreground ml-1">(non-acq + brand + uncl.)</span>
+                </span>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {hasConnection && (summary != null || adsView === 'creative') && (
+        <>
+          {adsView === 'creative' && (
+            <p className="text-sm text-muted-foreground max-w-3xl">
+              Ad-level video metrics (hook, hold, quartiles, watch time) vs clicks and ROAS. Use with
+              Funnel to separate creative issues from landing-page problems. Non-video ads show N/A for
+              video rates.{' '}
+              {creativeData?.formulasNote ? (
+                <span className="text-xs block mt-1 opacity-90">{creativeData.formulasNote}</span>
+              ) : null}
+            </p>
+          )}
           <div className="flex flex-wrap items-center gap-3">
             <DateRangeFilter
               from={dateFrom}
@@ -566,6 +1124,18 @@ export function MetaAdsContent({
               fromId="meta-ads-from"
               toId="meta-ads-to"
             />
+            <Select value={intentFilter} onValueChange={setIntentFilter}>
+              <SelectTrigger className="w-[200px]">
+                <SelectValue placeholder="Intent filter" />
+              </SelectTrigger>
+              <SelectContent>
+                {INTENT_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             {adAccountIds.length > 1 && (
               <Select
                 value={activeAdAccountId ?? ''}
@@ -590,24 +1160,28 @@ export function MetaAdsContent({
                 </SelectContent>
               </Select>
             )}
-            <Select
-              value={view}
-              onValueChange={(v) => setView(v as 'campaigns' | 'adsets' | 'daily')}
-            >
-              <SelectTrigger className="w-[200px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="campaigns">Campaign totals</SelectItem>
-                <SelectItem value="adsets">Ad set totals</SelectItem>
-                <SelectItem value="daily">Daily breakdown</SelectItem>
-              </SelectContent>
-            </Select>
+            {adsView !== 'creative' && (
+              <Select
+                value={view}
+                onValueChange={(v) => setView(v as 'campaigns' | 'adsets' | 'daily')}
+              >
+                <SelectTrigger className="w-[200px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="campaigns">Campaign totals</SelectItem>
+                  <SelectItem value="adsets">Ad set totals</SelectItem>
+                  <SelectItem value="daily">Daily breakdown</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
             <Input
               placeholder={
-                view === 'daily'
-                  ? 'Search campaign, ad set or date...'
-                  : 'Search campaign or ad set...'
+                adsView === 'creative'
+                  ? 'Search ad, campaign...'
+                  : view === 'daily'
+                    ? 'Search campaign, ad set or date...'
+                    : 'Search campaign or ad set...'
               }
               className="max-w-xs"
               value={search}
@@ -616,9 +1190,87 @@ export function MetaAdsContent({
           </div>
 
           <div className="rounded-lg border bg-card overflow-hidden">
-            {isLoading ? (
+            {adsView === 'creative' ? (
+              creativeLoading ? (
+                <div className="flex items-center justify-center py-16">
+                  <IconLoader2 className="size-8 animate-spin text-muted-foreground" />
+                </div>
+              ) : (
+                <CreativeAdsTable
+                  rows={creativeData?.ads ?? []}
+                  search={search}
+                  note={creativeData?.note}
+                  totalDailyRows={creativeData?.totalDailyRows ?? 0}
+                />
+              )
+            ) : isLoading ? (
               <div className="flex items-center justify-center py-16">
                 <IconLoader2 className="size-8 animate-spin text-muted-foreground" />
+              </div>
+            ) : adsView === 'funnel' && data?.funnel ? (
+              <div className="overflow-x-auto p-1">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>{view === 'daily' ? 'Date / Campaign' : view === 'adsets' ? 'Ad set' : 'Campaign'}</TableHead>
+                      <TableHead className="text-right">Spend</TableHead>
+                      <TableHead className="text-right">Impr</TableHead>
+                      <TableHead className="text-right">Clicks</TableHead>
+                      <TableHead className="text-right">CTR</TableHead>
+                      <TableHead className="text-right">ATC</TableHead>
+                      <TableHead className="text-right">ATC%</TableHead>
+                      <TableHead className="text-right">Checkout</TableHead>
+                      <TableHead className="text-right">CI%</TableHead>
+                      <TableHead className="text-right">Purch</TableHead>
+                      <TableHead className="text-right">CVR</TableHead>
+                      <TableHead className="text-right">ROAS</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredFunnelRows.map(({ key, label, sub, f }) => (
+                      <TableRow key={key}>
+                        <TableCell>
+                          <div className="max-w-[200px] truncate font-medium" title={label}>
+                            {label}
+                          </div>
+                          {sub ? (
+                            <div className="text-muted-foreground max-w-[200px] truncate text-xs">
+                              {sub}
+                            </div>
+                          ) : null}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">{formatCurrency(f.spend)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatNumber(f.impressions)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatNumber(f.clicks)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{f.ctrPct.toFixed(2)}%</TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatNumber(f.addToCart ?? 0, 1)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          <PctCell pct={f.atcRatePct} band={f.diagnostics.atcRate} />
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatNumber(f.checkoutInitiated ?? 0, 1)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          <PctCell pct={f.checkoutPerAtcPct} band={f.diagnostics.checkoutFromAtc} />
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatNumber(f.purchases, 2)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          <PctCell pct={f.overallCvrPct} band={f.diagnostics.clickToPurchase} />
+                        </TableCell>
+                        <TableCell className="text-right font-medium tabular-nums">
+                          {f.roas.toFixed(2)}x
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                {filteredFunnelRows.length === 0 && (
+                  <p className="text-muted-foreground py-8 text-center text-sm">No rows match filters.</p>
+                )}
               </div>
             ) : (
               <>

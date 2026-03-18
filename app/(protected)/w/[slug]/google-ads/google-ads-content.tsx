@@ -1,6 +1,7 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
+import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
 import { format, subDays } from 'date-fns'
 import {
@@ -36,7 +37,40 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Input } from '@/components/ui/input'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { DateRangeFilter } from '@/components/analytics'
+import type { GoalEvaluation } from '@/lib/metrics/goals'
+import { KpiGoalLine } from '@/components/goals/kpi-goal-line'
+
+export type CampaignIntent = 'acquisition' | 'non_acquisition' | 'brand' | 'unclassified'
+
+type FunnelBandG = 'low' | 'medium' | 'strong' | 'na'
+
+export type GoogleFunnelRow = {
+  impressions: number
+  clicks: number
+  spend: number
+  addToCart: number | null
+  checkoutInitiated: number | null
+  purchases: number
+  attributedRevenue: number
+  ctrPct: number
+  atcRatePct: number | null
+  checkoutPerAtcPct: number | null
+  purchasePerCheckoutPct: number | null
+  overallCvrPct: number
+  costPerAtc: number | null
+  costPerCheckout: number | null
+  costPerPurchase: number | null
+  roas: number
+  coverage: 'google_purchase_only' | 'google_full' | string
+  diagnostics: {
+    atcRate: FunnelBandG
+    checkoutFromAtc: FunnelBandG
+    purchaseFromCheckout: FunnelBandG
+    clickToPurchase: FunnelBandG
+  }
+}
 
 export type GoogleAdsCampaignRow = {
   campaignId: string
@@ -47,9 +81,29 @@ export type GoogleAdsCampaignRow = {
   conversions: number
   conversionValue: number
   roas: number
+  intent: CampaignIntent
+  acqRoas: number | null
+  nonAcqRoas: number | null
+  funnel?: GoogleFunnelRow
 }
 
 export type GoogleAdsDailyRow = GoogleAdsCampaignRow & { date: string }
+
+type IntentSplit = {
+  byIntent: Record<
+    CampaignIntent,
+    { spend: number; revenue: number; campaignCount: number }
+  >
+  sumSpendByIntent: number
+  totalSpend: number
+  totalRevenue: number
+  spendReconciles: boolean
+  revenueReconciles: boolean
+  spendDelta: number
+  revenueDelta: number
+  acquisitionRoas: number | null
+  nonAcquisitionPoolRoas: number | null
+}
 
 type MetricsResponse = {
   error?: string
@@ -57,6 +111,8 @@ type MetricsResponse = {
   activeCustomerId: string | null
   totalDailyRows?: number
   view?: 'campaigns' | 'daily'
+  intentFilter?: string
+  intentSplit?: IntentSplit
   summary: {
     impressions: number
     clicks: number
@@ -67,9 +123,16 @@ type MetricsResponse = {
     from: string
     to: string
     days: number
+    goalEvaluations?: { google_roas?: GoalEvaluation }
   } | null
   byCampaign: GoogleAdsCampaignRow[]
   dailyRows?: GoogleAdsDailyRow[]
+  funnel?: {
+    coverage: 'google_purchase_only' | 'google_full'
+    hasStagedData?: boolean
+    summary: GoogleFunnelRow
+    note: string
+  }
 }
 
 function formatCurrency(value: number) {
@@ -97,6 +160,52 @@ function formatPercent(value: number) {
   }).format(value / 100)
 }
 
+const INTENT_OPTIONS = [
+  { value: 'all', label: 'All intents' },
+  { value: 'acquisition', label: 'Acquisition' },
+  { value: 'non_acquisition', label: 'Non-acquisition' },
+  { value: 'brand', label: 'Brand' },
+  { value: 'unclassified', label: 'Unclassified' },
+] as const
+
+function intentLabel(i: CampaignIntent) {
+  return INTENT_OPTIONS.find((o) => o.value === i)?.label ?? i
+}
+
+function bandClass(b: FunnelBandG) {
+  if (b === 'low') return 'text-amber-600 dark:text-amber-400'
+  if (b === 'medium') return 'text-slate-600 dark:text-slate-400'
+  if (b === 'strong') return 'text-emerald-600 dark:text-emerald-400'
+  return 'text-muted-foreground'
+}
+
+function FunnelPct({
+  pct,
+  band,
+}: {
+  pct: number | null | undefined
+  band: FunnelBandG
+}) {
+  if (pct == null) return <span className="text-muted-foreground">—</span>
+  return <span className={bandClass(band)}>{pct.toFixed(2)}%</span>
+}
+
+function IntentBadge({ intent }: { intent: CampaignIntent }) {
+  const cls =
+    intent === 'acquisition'
+      ? 'bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-200'
+      : intent === 'unclassified'
+        ? 'bg-amber-100 text-amber-950 dark:bg-amber-950 dark:text-amber-200 ring-1 ring-amber-400/60'
+        : intent === 'brand'
+          ? 'bg-violet-100 text-violet-900 dark:bg-violet-950 dark:text-violet-200'
+          : 'bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200'
+  return (
+    <span className={`inline-flex rounded px-1.5 py-0.5 text-xs font-medium ${cls}`}>
+      {intentLabel(intent)}
+    </span>
+  )
+}
+
 export function GoogleAdsContent({
   hasConnection,
   workspaceId,
@@ -114,12 +223,14 @@ export function GoogleAdsContent({
   const [sorting, setSorting] = useState<SortingState>([
     { id: 'spend', desc: true },
   ])
+  const [intentFilter, setIntentFilter] = useState('all')
+  const [adsView, setAdsView] = useState<'performance' | 'funnel'>('performance')
 
   const { data, isLoading, isError, error, refetch } = useQuery<MetricsResponse>({
-    queryKey: ['google-ads', 'metrics', slug, dateFrom, dateTo, view],
+    queryKey: ['google-ads', 'metrics', slug, dateFrom, dateTo, view, intentFilter],
     queryFn: async () => {
       const res = await fetch(
-        `/api/workspaces/${slug}/google-ads/metrics?from=${dateFrom}&to=${dateTo}&view=${view}`
+        `/api/workspaces/${slug}/google-ads/metrics?from=${dateFrom}&to=${dateTo}&view=${view}&intent=${encodeURIComponent(intentFilter)}`
       )
       const json = await res.json()
       if (!res.ok) throw new Error(json.error || 'Failed to load')
@@ -155,12 +266,13 @@ export function GoogleAdsContent({
       const list = data?.dailyRows ?? []
       if (!search.trim()) return list
       const q = search.trim().toLowerCase()
-      return list.filter(
-        (r) =>
-          r.campaignName.toLowerCase().includes(q) ||
-          r.campaignId.toLowerCase().includes(q) ||
-          r.date.includes(q)
-      )
+    return list.filter(
+      (r) =>
+        r.campaignName.toLowerCase().includes(q) ||
+        r.campaignId.toLowerCase().includes(q) ||
+        r.date.includes(q) ||
+        intentLabel(r.intent).toLowerCase().includes(q)
+    )
     }
     const list = data?.byCampaign ?? []
     if (!search.trim()) return list
@@ -168,7 +280,8 @@ export function GoogleAdsContent({
     return list.filter(
       (r) =>
         r.campaignName.toLowerCase().includes(q) ||
-        r.campaignId.toLowerCase().includes(q)
+        r.campaignId.toLowerCase().includes(q) ||
+        intentLabel(r.intent).toLowerCase().includes(q)
     )
   }, [view, data?.byCampaign, data?.dailyRows, search])
 
@@ -182,6 +295,11 @@ export function GoogleAdsContent({
             {row.original.campaignName || row.original.campaignId}
           </div>
         ),
+      },
+      {
+        accessorKey: 'intent',
+        header: 'Intent',
+        cell: ({ row }) => <IntentBadge intent={row.original.intent} />,
       },
       {
         accessorKey: 'spend',
@@ -253,6 +371,26 @@ export function GoogleAdsContent({
           </div>
         ),
       },
+      {
+        id: 'acqRoas',
+        accessorFn: (r) => r.acqRoas ?? -1,
+        header: () => <div className="text-right text-xs max-w-[4.5rem]">Acq ROAS</div>,
+        cell: ({ row }) => (
+          <div className="text-right tabular-nums text-muted-foreground text-sm">
+            {row.original.acqRoas != null ? `${row.original.acqRoas.toFixed(2)}x` : '—'}
+          </div>
+        ),
+      },
+      {
+        id: 'nonAcqRoas',
+        accessorFn: (r) => r.nonAcqRoas ?? -1,
+        header: () => <div className="text-right text-xs max-w-[4.5rem]">Non-acq ROAS</div>,
+        cell: ({ row }) => (
+          <div className="text-right tabular-nums text-muted-foreground text-sm">
+            {row.original.nonAcqRoas != null ? `${row.original.nonAcqRoas.toFixed(2)}x` : '—'}
+          </div>
+        ),
+      },
     ],
     []
   )
@@ -274,6 +412,11 @@ export function GoogleAdsContent({
             {row.original.campaignName || row.original.campaignId}
           </div>
         ),
+      },
+      {
+        accessorKey: 'intent',
+        header: 'Intent',
+        cell: ({ row }) => <IntentBadge intent={row.original.intent} />,
       },
       {
         accessorKey: 'spend',
@@ -386,6 +529,28 @@ export function GoogleAdsContent({
   const summary = data?.summary
   const hasError = data?.error && !summary
 
+  const googleFunnelRows = useMemo(() => {
+    if (!data?.funnel) return []
+    if (view === 'daily') {
+      return (data.dailyRows ?? []).map((r) => ({
+        key: `${r.campaignId}-${r.date}`,
+        label: `${r.date} · ${r.campaignName}`,
+        f: r.funnel as GoogleFunnelRow,
+      }))
+    }
+    return (data.byCampaign ?? []).map((r) => ({
+      key: r.campaignId,
+      label: r.campaignName || r.campaignId,
+      f: r.funnel as GoogleFunnelRow,
+    }))
+  }, [data, view])
+
+  const filteredGoogleFunnelRows = useMemo(() => {
+    if (!search.trim()) return googleFunnelRows
+    const q = search.trim().toLowerCase()
+    return googleFunnelRows.filter((x) => x.label.toLowerCase().includes(q) || x.key.toLowerCase().includes(q))
+  }, [googleFunnelRows, search])
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-1">
@@ -395,13 +560,110 @@ export function GoogleAdsContent({
         </p>
       </div>
 
+      <Tabs value={adsView} onValueChange={(v) => setAdsView(v as 'performance' | 'funnel')}>
+        <TabsList>
+          <TabsTrigger value="performance">Performance</TabsTrigger>
+          <TabsTrigger value="funnel">Funnel</TabsTrigger>
+        </TabsList>
+      </Tabs>
+
       {hasError && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/50 px-4 py-3 text-sm text-amber-800 dark:text-amber-200">
           {data.error}
         </div>
       )}
 
-      {summary && (
+      {summary && adsView === 'funnel' && data?.funnel && (
+        <div
+          className={`space-y-3 rounded-xl border p-4 ${
+            data.funnel.coverage === 'google_full'
+              ? 'bg-card'
+              : 'border-amber-200/50 bg-amber-50/30 dark:bg-amber-950/20'
+          }`}
+        >
+          <p
+            className={
+              data.funnel.coverage === 'google_full'
+                ? 'text-muted-foreground text-sm'
+                : 'text-sm text-amber-900 dark:text-amber-200'
+            }
+          >
+            {data.funnel.note}
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 text-sm">
+            {(() => {
+              const s = data.funnel.summary
+              const full = s.coverage === 'google_full'
+              const cells: [string, ReactNode][] = [
+                ['Spend', formatCurrency(s.spend)],
+                ['Impressions', formatNumber(s.impressions)],
+                ['Clicks', formatNumber(s.clicks)],
+                ['CTR', `${s.ctrPct.toFixed(2)}%`],
+                [
+                  'ATC',
+                  full ? formatNumber(s.addToCart ?? 0, 1) : '—',
+                ],
+                [
+                  'ATC %',
+                  full ? (
+                    <FunnelPct pct={s.atcRatePct} band={s.diagnostics.atcRate} />
+                  ) : (
+                    '—'
+                  ),
+                ],
+                [
+                  'Checkout',
+                  full ? formatNumber(s.checkoutInitiated ?? 0, 1) : '—',
+                ],
+                [
+                  'CI % of ATC',
+                  full ? (
+                    <FunnelPct pct={s.checkoutPerAtcPct} band={s.diagnostics.checkoutFromAtc} />
+                  ) : (
+                    '—'
+                  ),
+                ],
+                ['Purchases', formatNumber(s.purchases, 2)],
+                [
+                  'Pur % checkout',
+                  full ? (
+                    <FunnelPct
+                      pct={s.purchasePerCheckoutPct}
+                      band={s.diagnostics.purchaseFromCheckout}
+                    />
+                  ) : (
+                    '—'
+                  ),
+                ],
+                [
+                  'CVR',
+                  <span className={bandClass(s.diagnostics.clickToPurchase)}>
+                    {s.overallCvrPct.toFixed(2)}%
+                  </span>,
+                ],
+                ['ROAS', `${s.roas.toFixed(2)}x`],
+              ]
+              if (full && s.costPerAtc != null) {
+                cells.push(['Cost/ATC', formatCurrency(s.costPerAtc)])
+                if (s.costPerCheckout != null)
+                  cells.push(['Cost/CI', formatCurrency(s.costPerCheckout)])
+                if (s.costPerPurchase != null)
+                  cells.push(['Cost/Purch', formatCurrency(s.costPerPurchase)])
+              }
+              return cells.map(([label, val], i) => (
+                <div key={`${label}-${i}`} className="rounded-lg border bg-muted/20 px-3 py-2">
+                  <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                    {label}
+                  </p>
+                  <div className="mt-0.5 font-semibold tabular-nums">{val}</div>
+                </div>
+              ))
+            })()}
+          </div>
+        </div>
+      )}
+
+      {summary && adsView === 'performance' && (
         <>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div className="rounded-xl border bg-card p-4 shadow-sm">
@@ -435,9 +697,93 @@ export function GoogleAdsContent({
               <p className="text-xs text-muted-foreground mt-0.5">
                 {summary.from} – {summary.to}
               </p>
+              {data?.summary?.goalEvaluations?.google_roas ? (
+                <KpiGoalLine
+                  metricId="google_roas"
+                  evaluation={data.summary.goalEvaluations.google_roas}
+                  currency="INR"
+                />
+              ) : null}
             </div>
           </div>
 
+          {data?.intentSplit && summary.spend > 0 && (
+            <div className="rounded-xl border bg-card p-4 shadow-sm space-y-3">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-semibold">Spend by campaign intent</h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    ROAS uses Google conversion value. Classify in{' '}
+                    <Link
+                      href={`/w/${slug}/settings/ad-campaigns`}
+                      className="underline font-medium text-foreground"
+                    >
+                      Ad campaigns
+                    </Link>
+                    .
+                  </p>
+                </div>
+                <div
+                  className={`text-xs tabular-nums ${data.intentSplit.spendReconciles && data.intentSplit.revenueReconciles ? 'text-emerald-600' : 'text-destructive'}`}
+                >
+                  {data.intentSplit.spendReconciles && data.intentSplit.revenueReconciles
+                    ? '✓ Spend & conv. value reconcile'
+                    : `Δ spend ${data.intentSplit.spendDelta} · Δ value ${data.intentSplit.revenueDelta}`}
+                </div>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {(
+                  ['acquisition', 'non_acquisition', 'brand', 'unclassified'] as CampaignIntent[]
+                ).map((k) => {
+                  const b = data.intentSplit!.byIntent[k]
+                  const pct = summary.spend > 0 ? (b.spend / summary.spend) * 100 : 0
+                  return (
+                    <div
+                      key={k}
+                      className={
+                        k === 'unclassified'
+                          ? 'rounded-lg border-2 border-amber-400/70 bg-amber-50/50 dark:bg-amber-950/30 p-3'
+                          : 'rounded-lg border bg-muted/30 p-3'
+                      }
+                    >
+                      <p className="text-xs font-medium text-muted-foreground">{intentLabel(k)}</p>
+                      <p className="text-lg font-semibold tabular-nums mt-1">
+                        {formatCurrency(b.spend)}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {formatPercent(pct)} of spend · {b.campaignCount} campaign
+                        {b.campaignCount !== 1 ? 's' : ''}
+                      </p>
+                    </div>
+                  )
+                })}
+              </div>
+              <div className="flex flex-wrap gap-4 text-sm border-t pt-3">
+                <span>
+                  <span className="text-muted-foreground">Acq ROAS (pool): </span>
+                  <span className="font-semibold tabular-nums">
+                    {data.intentSplit.acquisitionRoas != null
+                      ? `${data.intentSplit.acquisitionRoas.toFixed(2)}x`
+                      : '—'}
+                  </span>
+                </span>
+                <span>
+                  <span className="text-muted-foreground">Non-acq ROAS (pool): </span>
+                  <span className="font-semibold tabular-nums">
+                    {data.intentSplit.nonAcquisitionPoolRoas != null
+                      ? `${data.intentSplit.nonAcquisitionPoolRoas.toFixed(2)}x`
+                      : '—'}
+                  </span>
+                  <span className="text-xs text-muted-foreground ml-1">(non-acq + brand + uncl.)</span>
+                </span>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {summary && (
+        <>
           <div className="flex flex-wrap items-center gap-3">
             <DateRangeFilter
               from={dateFrom}
@@ -447,6 +793,18 @@ export function GoogleAdsContent({
               fromId="google-ads-from"
               toId="google-ads-to"
             />
+            <Select value={intentFilter} onValueChange={setIntentFilter}>
+              <SelectTrigger className="w-[200px]">
+                <SelectValue placeholder="Intent" />
+              </SelectTrigger>
+              <SelectContent>
+                {INTENT_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             {customerIds.length > 0 && (
               <Select
                 value={activeCustomerId ?? ''}
@@ -488,6 +846,73 @@ export function GoogleAdsContent({
             {isLoading ? (
               <div className="flex items-center justify-center py-16">
                 <IconLoader2 className="size-8 animate-spin text-muted-foreground" />
+              </div>
+            ) : adsView === 'funnel' && data?.funnel ? (
+              <div className="overflow-x-auto p-1">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>{view === 'daily' ? 'Date / Campaign' : 'Campaign'}</TableHead>
+                      <TableHead className="text-right">Spend</TableHead>
+                      <TableHead className="text-right">Impr</TableHead>
+                      <TableHead className="text-right">Clicks</TableHead>
+                      <TableHead className="text-right">CTR</TableHead>
+                      <TableHead className="text-right">ATC</TableHead>
+                      <TableHead className="text-right">ATC%</TableHead>
+                      <TableHead className="text-right">Checkout</TableHead>
+                      <TableHead className="text-right">CI%</TableHead>
+                      <TableHead className="text-right">Purch</TableHead>
+                      <TableHead className="text-right">CVR</TableHead>
+                      <TableHead className="text-right">ROAS</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredGoogleFunnelRows.map(({ key, label, f }) => {
+                      const full = f.coverage === 'google_full'
+                      return (
+                        <TableRow key={key}>
+                          <TableCell className="max-w-[220px] truncate font-medium" title={label}>
+                            {label}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">{formatCurrency(f.spend)}</TableCell>
+                          <TableCell className="text-right tabular-nums">{formatNumber(f.impressions)}</TableCell>
+                          <TableCell className="text-right tabular-nums">{formatNumber(f.clicks)}</TableCell>
+                          <TableCell className="text-right tabular-nums">{f.ctrPct.toFixed(2)}%</TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {full ? formatNumber(f.addToCart ?? 0, 1) : '—'}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {full ? (
+                              <FunnelPct pct={f.atcRatePct} band={f.diagnostics.atcRate} />
+                            ) : (
+                              '—'
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {full ? formatNumber(f.checkoutInitiated ?? 0, 1) : '—'}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {full ? (
+                              <FunnelPct pct={f.checkoutPerAtcPct} band={f.diagnostics.checkoutFromAtc} />
+                            ) : (
+                              '—'
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">{formatNumber(f.purchases, 2)}</TableCell>
+                          <TableCell
+                            className={`text-right tabular-nums font-medium ${bandClass(f.diagnostics.clickToPurchase)}`}
+                          >
+                            {f.overallCvrPct.toFixed(2)}%
+                          </TableCell>
+                          <TableCell className="text-right font-medium tabular-nums">{f.roas.toFixed(2)}x</TableCell>
+                        </TableRow>
+                      )
+                    })}
+                  </TableBody>
+                </Table>
+                {filteredGoogleFunnelRows.length === 0 && (
+                  <p className="text-muted-foreground py-8 text-center text-sm">No rows match filters.</p>
+                )}
               </div>
             ) : (
               <>

@@ -215,6 +215,222 @@ function parseActionsValue(
   return found ? parseFloat(found.value) : 0
 }
 
+/** Sum `value` across Meta insight action arrays (e.g. video_p25_watched_actions). */
+export function sumMetaInsightActionValues(val: unknown): number {
+  if (val == null) return 0
+  if (typeof val === 'number' && !Number.isNaN(val)) return val
+  if (typeof val === 'string') return parseFloat(val) || 0
+  if (!Array.isArray(val)) return 0
+  let s = 0
+  for (const x of val) {
+    if (x && typeof x === 'object' && 'value' in x) {
+      s += parseFloat(String((x as { value: string }).value)) || 0
+    }
+  }
+  return s
+}
+
+function firstMetaInsightMetricValue(val: unknown): number {
+  if (typeof val === 'number' && !Number.isNaN(val)) return val
+  if (typeof val === 'string') return parseFloat(val) || 0
+  if (Array.isArray(val) && val.length > 0) {
+    const x = val[0] as { value?: string }
+    if (x && 'value' in x) return parseFloat(String(x.value)) || 0
+  }
+  return 0
+}
+
+export type MetaAdCreativeInsightRow = {
+  adId: string
+  adName: string
+  campaignId: string
+  campaignName: string
+  adsetId: string | null
+  adsetName: string | null
+  date: string
+  impressions: number
+  clicks: number
+  spend: number
+  /** 3s views from actions (3_second_video_view etc.); null if Meta omitted those action types */
+  video3s: number | null
+  thruplay: number
+  avgWatchSec: number
+  p25: number
+  p50: number
+  p75: number
+  p95: number
+  conversions: number
+  revenue: number
+  rawJson: unknown
+}
+
+const AD_INSIGHT_BASE_FIELDS = [
+  'ad_id',
+  'ad_name',
+  'campaign_id',
+  'campaign_name',
+  'adset_id',
+  'adset_name',
+  'impressions',
+  'clicks',
+  'spend',
+  'actions',
+  'action_values',
+] as const
+
+/** Optional at ad level; stripped automatically on (#100) invalid field errors */
+const AD_INSIGHT_VIDEO_FIELDS = [
+  'video_thruplay_watched_actions',
+  'video_avg_time_watched_actions',
+  'video_p25_watched_actions',
+  'video_p50_watched_actions',
+  'video_p75_watched_actions',
+  'video_p95_watched_actions',
+] as const
+
+/**
+ * Parse field names Meta rejects from 400 error body.
+ * e.g. "(#100) video_x, video_y are not valid for fields param"
+ */
+export function parseInvalidMetaInsightFields(errorBody: string): string[] {
+  const out: string[] = []
+  const multi = errorBody.match(/\(#\d+\)\s*([\s\S]*?)\s+are not valid for fields param/i)
+  if (multi) {
+    const part = multi[1].replace(/\s+/g, ' ').trim()
+    for (const chunk of part.split(',')) {
+      const f = chunk.trim()
+      if (f) out.push(f)
+    }
+    return out
+  }
+  const single = errorBody.match(/\(#\d+\)\s*(\S+)\s+is not valid for fields param/i)
+  if (single?.[1]) return [single[1].trim()]
+  return []
+}
+
+/**
+ * 3-second views: top-level video_3_sec_* invalid at ad level; use actions only.
+ * Returns null if Meta did not return any matching action type (hook rate N/A).
+ */
+export function parseVideo3sViewsFromActions(
+  actions: { action_type: string; value: string }[] | undefined
+): number | null {
+  if (!actions?.length) return null
+  const keys = new Set(['3_second_video_view', 'video_continuous_3_sec_watched'])
+  let sum = 0
+  let matched = false
+  for (const a of actions) {
+    if (keys.has(a.action_type)) {
+      matched = true
+      sum += parseInt(a.value, 10) || 0
+    }
+  }
+  return matched ? sum : null
+}
+
+/**
+ * Ad-level daily insights. level=ad, time_increment=1.
+ * Drops invalid fields from the request and retries so sync still stores partial video metrics.
+ * Hook / 3s: from actions (3_second_video_view) when present; video3s null otherwise.
+ */
+export async function fetchAdAccountAdInsights(
+  accessToken: string,
+  adAccountId: string,
+  since: string,
+  until: string
+): Promise<MetaAdCreativeInsightRow[]> {
+  const proof = appsecretProof(accessToken)
+  let fields = [...AD_INSIGHT_BASE_FIELDS, ...AD_INSIGHT_VIDEO_FIELDS]
+  const parsedRows: MetaAdCreativeInsightRow[] = []
+
+  for (let guard = 0; guard < 20; guard++) {
+    const fieldStr = fields.join(',')
+    parsedRows.length = 0
+    let url: string | null =
+      `https://graph.facebook.com/${META_API_VERSION}/${adAccountId}/insights?` +
+      new URLSearchParams({
+        fields: fieldStr,
+        time_range: JSON.stringify({ since, until }),
+        time_increment: '1',
+        level: 'ad',
+        limit: '500',
+        access_token: accessToken,
+        appsecret_proof: proof,
+      }).toString()
+
+    let pageError: string | null = null
+    let pageStatus = 0
+
+    while (url) {
+      let res: Response = await fetch(url)
+      for (let attempt = 0; res.status === 429 && attempt < META_RATE_LIMIT_RETRIES; attempt++) {
+        await new Promise((r) => setTimeout(r, META_RATE_LIMIT_BACKOFF_MS * (attempt + 1)))
+        res = await fetch(url)
+      }
+      if (!res.ok) {
+        const text = await res.text()
+        pageStatus = res.status
+        pageError = text
+        break
+      }
+      const data = await res.json()
+
+      for (const row of data.data || []) {
+        const actions = row.actions as { action_type: string; value: string }[] | undefined
+        const video3s = parseVideo3sViewsFromActions(actions)
+        const thruplay = sumMetaInsightActionValues(row.video_thruplay_watched_actions)
+        const avgWatchSec = firstMetaInsightMetricValue(row.video_avg_time_watched_actions)
+
+        parsedRows.push({
+          adId: String(row.ad_id ?? ''),
+          adName: String(row.ad_name ?? ''),
+          campaignId: String(row.campaign_id ?? ''),
+          campaignName: String(row.campaign_name ?? ''),
+          adsetId: row.adset_id ? String(row.adset_id) : null,
+          adsetName: row.adset_name ? String(row.adset_name) : null,
+          date: row.date_start || row.date_stop || since,
+          impressions: parseInt(row.impressions || '0', 10),
+          clicks: parseInt(row.clicks || '0', 10),
+          spend: parseFloat(row.spend || '0'),
+          video3s,
+          thruplay: Math.round(thruplay),
+          avgWatchSec,
+          p25: Math.round(sumMetaInsightActionValues(row.video_p25_watched_actions)),
+          p50: Math.round(sumMetaInsightActionValues(row.video_p50_watched_actions)),
+          p75: Math.round(sumMetaInsightActionValues(row.video_p75_watched_actions)),
+          p95: Math.round(sumMetaInsightActionValues(row.video_p95_watched_actions)),
+          conversions: parseActionsCount(actions, 'offsite_conversion.fb_pixel_purchase'),
+          revenue: parseActionsValue(
+            row.action_values as { action_type: string; value: string }[] | undefined,
+            'offsite_conversion.fb_pixel_purchase'
+          ),
+          rawJson: row,
+        })
+      }
+      url = data.paging?.next || null
+    }
+
+    if (!pageError) {
+      return parsedRows
+    }
+
+    if (pageStatus === 400 && pageError) {
+      const invalid = parseInvalidMetaInsightFields(pageError)
+      if (invalid.length > 0) {
+        const next = fields.filter((f) => !invalid.includes(f))
+        if (next.length < fields.length && next.length >= AD_INSIGHT_BASE_FIELDS.length) {
+          fields = next
+          continue
+        }
+      }
+    }
+
+    throw new Error(`Meta ad insights fetch failed (${pageStatus}): ${pageError}`)
+  }
+
+  throw new Error('Meta ad insights: exceeded field fallback retries')
+}
+
 export type MetaInsightRow = {
   campaignId: string
   campaignName: string

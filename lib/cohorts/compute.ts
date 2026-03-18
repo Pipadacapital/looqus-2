@@ -2,11 +2,8 @@ import type { PrismaClient } from '@prisma/client'
 import type { Prisma } from '@prisma/client'
 import { eachDayOfInterval, getDaysInMonth } from 'date-fns'
 import type { CohortMetric, CohortMode, CohortRow, CohortsSummary } from './types'
-import {
-  getOrderInclusionWhere,
-  hasNoOrderFilters,
-  normalizeOrderFilterSettings,
-} from '@/lib/order-filters'
+import { fetchCustomerFirstOrdersInRange } from '@/lib/metrics'
+import { getOrderInclusionWhere, normalizeOrderFilterSettings } from '@/lib/order-filters'
 import { getEffectiveDailyAggregates } from '@/lib/effective-daily'
 import { resolveLineItemCogs, normalizeCogsSettings } from '@/lib/cogs'
 import { getDailyVariableContribution } from '@/lib/workspace-costs'
@@ -45,7 +42,6 @@ export type WorkspaceForCohorts = {
   skipZeroSalesOrders?: boolean | null
 }
 
-type FirstOrderRow = { customer_shopify_id: string; first_at: Date; order_id: string }
 type OrderWithCogs = { order_id: string; customer_shopify_id: string; processed_at: Date; total_price: number; cogs: number }
 type RepeatRow = { order_id: string; customer_shopify_id: string; processed_at: Date; first_at: Date; bucket: number; total_price: number; cogs: number }
 
@@ -111,66 +107,6 @@ async function buildDailyRates(
     map.set(dateStr, { ordersCount, grossSales, shipping, packaging, website, misc })
   }
   return map
-}
-
-/**
- * First order per customer GLOBALLY (all-time), then filter to those whose first_at is in [fromDate, toDate].
- * Cohort row = month of first_order_at; we only include cohorts where first_order_at ∈ [from, to].
- * When orderFilterSettings is provided and has filters, uses only included orders.
- */
-async function getFirstOrders(
-  prisma: PrismaClient,
-  connectionId: string,
-  fromDate: Date,
-  toDate: Date,
-  orderFilterSettings?: { skippedShopifyOrderTags: string[]; skipZeroSalesOrders: boolean }
-): Promise<FirstOrderRow[]> {
-  if (orderFilterSettings && !hasNoOrderFilters(orderFilterSettings)) {
-    const inclusionWhere = getOrderInclusionWhere(orderFilterSettings)
-    const orders = await prisma.shopifyOrder.findMany({
-      where: {
-        connectionId,
-        customerShopifyId: { not: null, notIn: [''] },
-        processedAt: { lte: toDate },
-        ...inclusionWhere,
-      },
-      select: { id: true, customerShopifyId: true, processedAt: true },
-    })
-    const firstByCustomer = new Map<string, { firstAt: Date; orderId: string }>()
-    for (const o of orders) {
-      const cid = o.customerShopifyId
-      if (!cid) continue
-      const existing = firstByCustomer.get(cid)
-      if (!existing || o.processedAt < existing.firstAt) {
-        firstByCustomer.set(cid, { firstAt: o.processedAt, orderId: o.id })
-      }
-    }
-    return [...firstByCustomer.entries()]
-      .filter(([, v]) => v.firstAt >= fromDate && v.firstAt <= toDate)
-      .map(([customer_shopify_id, v]) => ({
-        customer_shopify_id,
-        first_at: v.firstAt,
-        order_id: v.orderId,
-      }))
-  }
-  const rows = await prisma.$queryRaw<FirstOrderRow[]>`
-    WITH first_orders AS (
-      SELECT customer_shopify_id, MIN(processed_at) AS first_at
-      FROM shopify_orders
-      WHERE connection_id = ${connectionId}::uuid
-        AND customer_shopify_id IS NOT NULL
-        AND customer_shopify_id != ''
-      GROUP BY customer_shopify_id
-    )
-    SELECT fo.customer_shopify_id, fo.first_at, o.id AS order_id
-    FROM first_orders fo
-    JOIN shopify_orders o ON o.customer_shopify_id = fo.customer_shopify_id
-      AND o.processed_at = fo.first_at
-      AND o.connection_id = ${connectionId}::uuid
-    WHERE fo.first_at >= ${fromDate}
-      AND fo.first_at <= ${toDate}
-  `
-  return rows
 }
 
 /** Order-level COGS for given order IDs (uses shared COGS resolution). */
@@ -476,7 +412,7 @@ export async function computeCohorts(
   const orderInclusionWhere = getOrderInclusionWhere(orderFilterSettings)
 
   const [firstOrders, dailyRates, adSpendByMonth, totalAdSpend, rtoIds, dailyReturnsAndSales, dailyAdSpend] = await Promise.all([
-    getFirstOrders(prisma, connectionId, fromDate, toDate, orderFilterSettings),
+    fetchCustomerFirstOrdersInRange(prisma, connectionId, fromDate, toDate, orderFilterSettings),
     buildDailyRates(prisma, workspace.id, connectionId, fromDate, toDateExtended, 'INR', orderInclusionWhere),
     getAdSpendByMonth(prisma, workspace, fromDate, toDate),
     getTotalAdSpend(prisma, workspace, fromDate, toDate),

@@ -1,6 +1,26 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
+import { loadCampaignIntentMap, resolveCampaignIntent } from '@/lib/metrics/campaign-classification'
+import {
+  addMetricToIntentBuckets,
+  buildIntentSplitPayload,
+  emptyIntentBuckets,
+  matchesIntentFilter,
+} from '@/lib/metrics/ad-intent-split'
+import {
+  addMetaDailyRowToAccumulator,
+  accumulatorToMetaSnapshot,
+  diagnoseMetaFunnel,
+  emptyMetaFunnelAccumulator,
+  type PaidMediaFunnelSnapshot,
+} from '@/lib/metrics/paid-media-funnel'
+import { fetchGoalRowsMap, buildGoalEvaluations } from '@/lib/metrics/goals'
+import type { GoalMetricId } from '@/lib/metrics/goal-metrics-registry'
+
+function funnelWithDiagnostics(s: PaidMediaFunnelSnapshot) {
+  return { ...s, diagnostics: diagnoseMetaFunnel(s) }
+}
 
 const DEFAULT_DAYS = 30
 const MAX_DAYS = 90
@@ -26,6 +46,7 @@ export async function GET(
   )
   const view = searchParams.get('view') === 'daily' ? 'daily' : 'campaigns'
   const groupBy = searchParams.get('groupBy') === 'adset' ? 'adset' : 'campaign'
+  const intentFilter = searchParams.get('intent') || 'all'
 
   let since: Date
   let toDate: Date
@@ -118,14 +139,19 @@ export async function GET(
     )
   }
 
-  const metrics = await prisma.meta_ads_daily_metrics.findMany({
-    where: {
-      connection_id: connection.id,
-      ad_account_id: adAccountId,
-      date: { gte: since, lte: toDate },
-    },
-    orderBy: { date: 'asc' },
-  })
+  const [metrics, intentMap] = await Promise.all([
+    prisma.meta_ads_daily_metrics.findMany({
+      where: {
+        connection_id: connection.id,
+        ad_account_id: adAccountId,
+        date: { gte: since, lte: toDate },
+      },
+      orderBy: { date: 'asc' },
+    }),
+    loadCampaignIntentMap(prisma, workspace.id),
+  ])
+
+  const intentBuckets = emptyIntentBuckets()
 
   const totals = {
     impressions: 0,
@@ -147,6 +173,7 @@ export async function GET(
   for (const m of metrics) {
     const spend = Number(m.spend)
     const revenue = Number(m.revenue)
+    addMetricToIntentBuckets(intentBuckets, intentMap, 'meta', m.campaign_id, spend, revenue)
 
     totals.impressions += m.impressions
     totals.clicks += m.clicks
@@ -198,24 +225,98 @@ export async function GET(
   }
 
   const roas = totals.spend > 0 ? totals.revenue / totals.spend : 0
+
+  const metaGoalMap = await fetchGoalRowsMap(
+    prisma,
+    workspace.id,
+    ['meta_roas'] as GoalMetricId[],
+    toDate
+  )
+  const goalEvaluations = buildGoalEvaluations({ meta_roas: roas }, metaGoalMap)
+  const intentSplit = buildIntentSplitPayload(intentBuckets, totals.spend, totals.revenue)
+
+  const totalFunnelAcc = emptyMetaFunnelAccumulator()
+  for (const m of metrics) {
+    addMetaDailyRowToAccumulator(totalFunnelAcc, {
+      impressions: m.impressions,
+      clicks: m.clicks,
+      spend: Number(m.spend),
+      conversions: m.conversions,
+      revenue: Number(m.revenue),
+      raw_json: m.raw_json,
+    })
+  }
+  const funnelSummarySnap = accumulatorToMetaSnapshot(totalFunnelAcc)
+
+  const campaignFunnelAcc = new Map<string, ReturnType<typeof emptyMetaFunnelAccumulator>>()
+  const adsetFunnelAcc = new Map<string, ReturnType<typeof emptyMetaFunnelAccumulator>>()
+  for (const m of metrics) {
+    const cAcc =
+      campaignFunnelAcc.get(m.campaign_id) ?? emptyMetaFunnelAccumulator()
+    if (!campaignFunnelAcc.has(m.campaign_id)) campaignFunnelAcc.set(m.campaign_id, cAcc)
+    addMetaDailyRowToAccumulator(cAcc, {
+      impressions: m.impressions,
+      clicks: m.clicks,
+      spend: Number(m.spend),
+      conversions: m.conversions,
+      revenue: Number(m.revenue),
+      raw_json: m.raw_json,
+    })
+    const aKey = m.adset_id ?? `${m.campaign_id}__no_adset`
+    const aAcc = adsetFunnelAcc.get(aKey) ?? emptyMetaFunnelAccumulator()
+    if (!adsetFunnelAcc.has(aKey)) adsetFunnelAcc.set(aKey, aAcc)
+    addMetaDailyRowToAccumulator(aAcc, {
+      impressions: m.impressions,
+      clicks: m.clicks,
+      spend: Number(m.spend),
+      conversions: m.conversions,
+      revenue: Number(m.revenue),
+      raw_json: m.raw_json,
+    })
+  }
+
+  const rowRoas = (spend: number, revenue: number) =>
+    spend > 0 ? Math.round((revenue / spend) * 100) / 100 : 0
+
   const byCampaignList = Array.from(byCampaignMap.values())
-    .map((c) => ({
-      ...c,
-      roas: c.spend > 0 ? Math.round((c.revenue / c.spend) * 100) / 100 : 0,
-      ctr: c.impressions > 0 ? (c.clicks / c.impressions) * 100 : 0,
-      cpc: c.clicks > 0 ? c.spend / c.clicks : 0,
-      cpm: c.impressions > 0 ? (c.spend / c.impressions) * 1000 : 0,
-    }))
+    .map((c) => {
+      const intent = resolveCampaignIntent(intentMap, 'meta', c.campaignId)
+      const roasVal = rowRoas(c.spend, c.revenue)
+      const fAcc = campaignFunnelAcc.get(c.campaignId) ?? emptyMetaFunnelAccumulator()
+      return {
+        ...c,
+        intent,
+        roas: roasVal,
+        acqRoas: intent === 'acquisition' ? roasVal : null,
+        nonAcqRoas: intent !== 'acquisition' ? roasVal : null,
+        ctr: c.impressions > 0 ? (c.clicks / c.impressions) * 100 : 0,
+        cpc: c.clicks > 0 ? c.spend / c.clicks : 0,
+        cpm: c.impressions > 0 ? (c.spend / c.impressions) * 1000 : 0,
+        funnel: funnelWithDiagnostics(accumulatorToMetaSnapshot(fAcc)),
+      }
+    })
+    .filter((c) => matchesIntentFilter(c.intent, intentFilter))
     .sort((a, b) => b.spend - a.spend)
 
   const byAdsetList = Array.from(byAdsetMap.values())
-    .map((a) => ({
-      ...a,
-      roas: a.spend > 0 ? Math.round((a.revenue / a.spend) * 100) / 100 : 0,
-      ctr: a.impressions > 0 ? (a.clicks / a.impressions) * 100 : 0,
-      cpc: a.clicks > 0 ? a.spend / a.clicks : 0,
-      cpm: a.impressions > 0 ? (a.spend / a.impressions) * 1000 : 0,
-    }))
+    .map((a) => {
+      const intent = resolveCampaignIntent(intentMap, 'meta', a.campaignId)
+      const roasVal = rowRoas(a.spend, a.revenue)
+      const aKey = a.adsetId || `${a.campaignId}__no_adset`
+      const fAcc = adsetFunnelAcc.get(aKey) ?? emptyMetaFunnelAccumulator()
+      return {
+        ...a,
+        intent,
+        roas: roasVal,
+        acqRoas: intent === 'acquisition' ? roasVal : null,
+        nonAcqRoas: intent !== 'acquisition' ? roasVal : null,
+        ctr: a.impressions > 0 ? (a.clicks / a.impressions) * 100 : 0,
+        cpc: a.clicks > 0 ? a.spend / a.clicks : 0,
+        cpm: a.impressions > 0 ? (a.spend / a.impressions) * 1000 : 0,
+        funnel: funnelWithDiagnostics(accumulatorToMetaSnapshot(fAcc)),
+      }
+    })
+    .filter((a) => matchesIntentFilter(a.intent, intentFilter))
     .sort((a, b) => b.spend - a.spend)
 
   const dailyRows =
@@ -224,6 +325,16 @@ export async function GET(
           .map((m) => {
             const spend = Number(m.spend)
             const revenue = Number(m.revenue)
+            const intent = resolveCampaignIntent(intentMap, 'meta', m.campaign_id)
+            const dayAcc = emptyMetaFunnelAccumulator()
+            addMetaDailyRowToAccumulator(dayAcc, {
+              impressions: m.impressions,
+              clicks: m.clicks,
+              spend,
+              conversions: m.conversions,
+              revenue,
+              raw_json: m.raw_json,
+            })
             return {
               date: m.date.toISOString().slice(0, 10),
               campaignId: m.campaign_id,
@@ -235,12 +346,15 @@ export async function GET(
               spend,
               conversions: m.conversions,
               revenue,
+              intent,
               roas: spend > 0 ? Math.round((revenue / spend) * 100) / 100 : 0,
               ctr: m.impressions > 0 ? (m.clicks / m.impressions) * 100 : 0,
               cpc: m.clicks > 0 ? spend / m.clicks : 0,
               cpm: m.impressions > 0 ? (spend / m.impressions) * 1000 : 0,
+              funnel: funnelWithDiagnostics(accumulatorToMetaSnapshot(dayAcc)),
             }
           })
+          .filter((r) => matchesIntentFilter(r.intent, intentFilter))
           .sort((a, b) => {
             const d = b.date.localeCompare(a.date)
             if (d !== 0) return d
@@ -254,6 +368,8 @@ export async function GET(
     totalDailyRows: metrics.length,
     view,
     groupBy,
+    intentFilter,
+    intentSplit,
     summary: {
       impressions: totals.impressions,
       clicks: totals.clicks,
@@ -264,9 +380,16 @@ export async function GET(
       from: since.toISOString().slice(0, 10),
       to: toDate.toISOString().slice(0, 10),
       days: Math.round((toDate.getTime() - since.getTime()) / (24 * 60 * 60 * 1000)) + 1,
+      goalEvaluations,
     },
     byCampaign: byCampaignList,
     byAdset: byAdsetList,
     dailyRows,
+    funnel: {
+      coverage: 'meta_full' as const,
+      summary: funnelWithDiagnostics(funnelSummarySnap),
+      note:
+        'ATC/checkout from pixel actions in synced raw_json. Re-sync if counts stay at zero.',
+    },
   })
 }

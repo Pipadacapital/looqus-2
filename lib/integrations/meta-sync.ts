@@ -1,5 +1,5 @@
 import { prisma } from '@/lib/prisma'
-import { fetchAdAccountInsights, type MetaInsightRow } from './meta'
+import { fetchAdAccountInsights, fetchAdAccountAdInsights, type MetaInsightRow } from './meta'
 import { Decimal } from '@prisma/client/runtime/library'
 import {
   buildBackfillWindows,
@@ -135,6 +135,84 @@ export async function syncMetaAdsForConnection(
         }
       } catch (err) {
         errors.push(`${adAccountId} ${sinceStr}..${untilStr}: ${err instanceof Error ? err.message : String(err)}`)
+      }
+
+      try {
+        const adRows = await fetchAdAccountAdInsights(
+          connection.access_token,
+          adAccountId,
+          sinceStr,
+          untilStr
+        )
+        for (const row of adRows) {
+          if (!row.adId) continue
+          const dateOnly = new Date(row.date + 'T00:00:00.000Z')
+          dateOnly.setUTCHours(0, 0, 0, 0)
+          try {
+            await prisma.meta_ads_creative_daily.upsert({
+              where: {
+                connection_id_ad_account_id_ad_id_date: {
+                  connection_id: connection.id,
+                  ad_account_id: adAccountId,
+                  ad_id: row.adId,
+                  date: dateOnly,
+                },
+              },
+              create: {
+                connection_id: connection.id,
+                ad_account_id: adAccountId,
+                ad_id: row.adId,
+                ad_name: row.adName,
+                campaign_id: row.campaignId,
+                campaign_name: row.campaignName,
+                adset_id: row.adsetId,
+                adset_name: row.adsetName,
+                date: dateOnly,
+                impressions: row.impressions,
+                clicks: row.clicks,
+                spend: new Decimal(row.spend),
+                video_3s_views: row.video3s,
+                video_thruplay: row.thruplay,
+                avg_watch_sec: new Decimal(row.avgWatchSec),
+                video_p25: row.p25,
+                video_p50: row.p50,
+                video_p75: row.p75,
+                video_p95: row.p95,
+                conversions: row.conversions,
+                revenue: new Decimal(row.revenue),
+                raw_json: row.rawJson as object,
+              },
+              update: {
+                ad_name: row.adName,
+                campaign_name: row.campaignName,
+                adset_id: row.adsetId,
+                adset_name: row.adsetName,
+                impressions: row.impressions,
+                clicks: row.clicks,
+                spend: new Decimal(row.spend),
+                video_3s_views: row.video3s,
+                video_thruplay: row.thruplay,
+                avg_watch_sec: new Decimal(row.avgWatchSec),
+                video_p25: row.p25,
+                video_p50: row.p50,
+                video_p75: row.p75,
+                video_p95: row.p95,
+                conversions: row.conversions,
+                revenue: new Decimal(row.revenue),
+                raw_json: row.rawJson as object,
+              },
+            })
+            rowsSynced++
+          } catch (rowErr) {
+            errors.push(
+              `Creative row ${row.adId} ${row.date}: ${rowErr instanceof Error ? rowErr.message : String(rowErr)}`
+            )
+          }
+        }
+      } catch (adErr) {
+        errors.push(
+          `Ad creative ${adAccountId} ${sinceStr}..${untilStr}: ${adErr instanceof Error ? adErr.message : String(adErr)}`
+        )
       }
     }
   }

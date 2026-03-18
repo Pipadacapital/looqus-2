@@ -20,6 +20,11 @@ import {
   IconShoppingBag,
   IconRefresh,
   IconSpeakerphone,
+  IconActivity,
+  IconRoute,
+  IconTarget,
+  IconCalendar,
+  IconMail,
 } from "@tabler/icons-react"
 
 export type SidebarNavItem = {
@@ -55,9 +60,13 @@ export const sidebarNavSections: SidebarNavSection[] = [
     items: [
       { title: "P&L", path: "pnl", icon: IconCurrencyDollar },
       { title: "Products", path: "products", icon: IconShoppingBag },
+      { title: "First product cascade", path: "first-product-cascade", icon: IconRoute },
       { title: "Lifetime Value", path: "lifetime-value", icon: IconReport },
       { title: "Cohorts", path: "cohorts", icon: IconChartLine },
+      { title: "Customer lifecycle", path: "customer-lifecycle", icon: IconActivity },
       { title: "Acquisition", path: "acquisition", icon: IconSpeakerphone },
+      { title: "Calendar", path: "calendar", icon: IconCalendar },
+      { title: "Email & SMS", path: "email-sms", icon: IconMail },
       { title: "Distributions", path: "distributions", icon: IconChartBar },
       { title: "Timing", path: "timings", icon: IconClock },
       { title: "Inventory", path: "inventory", icon: IconPackage },
@@ -72,6 +81,8 @@ export const sidebarNavSections: SidebarNavSection[] = [
       { title: "General", path: "settings", icon: IconSettings },
       { title: "Integrations", path: "settings/integrations", icon: IconPlugConnected },
       { title: "Backfill", path: "settings/ads-backfill", icon: IconRefresh },
+      { title: "Ad campaigns", path: "settings/ad-campaigns", icon: IconBrandMeta },
+      { title: "Goals", path: "settings/goals", icon: IconTarget },
     ],
   },
 ]

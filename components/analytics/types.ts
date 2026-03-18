@@ -1,3 +1,6 @@
+import type { GoalEvaluation } from '@/lib/metrics/goals'
+import type { GoalMetricId } from '@/lib/metrics/goal-metrics-registry'
+
 /** Summary returned by GET /api/workspaces/[slug]/shopify-analytics */
 export interface ShopifyAnalyticsSummary {
   totalNetSales: number
@@ -17,6 +20,8 @@ export interface ShopifyAnalyticsSummary {
   miscExpensesTotal?: number
   /** CM3 = CM2 - Miscellaneous Expenses. */
   cm3?: number
+  /** CM3 ÷ net sales × 100 */
+  cm3Pct?: number | null
   currency: string
   from: string
   to: string
@@ -46,6 +51,9 @@ export interface ShopifyAnalyticsSummary {
   rtoUnmapped?: number
   /** Total shipments shipped in the period. */
   totalShipmentsInRange?: number
+  /** Net sales ÷ total ad spend */
+  mer?: number | null
+  goalEvaluations?: Partial<Record<GoalMetricId, GoalEvaluation>>
 }
 
 export function formatCurrency(

@@ -2,6 +2,8 @@
 
 import type { ShopifyAnalyticsSummary } from './types'
 import { formatCurrency } from './types'
+import type { GoalMetricId } from '@/lib/metrics/goal-metrics-registry'
+import { KpiGoalLine } from '@/components/goals/kpi-goal-line'
 
 export interface AnalyticsMetricsCardsProps {
   summary: ShopifyAnalyticsSummary
@@ -15,13 +17,28 @@ const materialMargin = (s: ShopifyAnalyticsSummary) => s.totalNetSales - s.total
 const materialMarginPercent = (s: ShopifyAnalyticsSummary) =>
   s.totalNetSales > 0 ? (materialMargin(s) / s.totalNetSales) * 100 : 0
 
+const cm3Computed = (s: ShopifyAnalyticsSummary) =>
+  s.cm3 ??
+  (s.cm2 ?? s.cm1 - (s.totalAdSpend ?? 0)) - (s.miscExpensesTotal ?? 0)
+
 export function AnalyticsMetricsCards({
   summary,
   className,
 }: AnalyticsMetricsCardsProps) {
-  const cards: { label: string; value: string; highlight?: boolean }[] = [
+  const cm3 = cm3Computed(summary)
+
+  const cards: {
+    label: string
+    value: string
+    highlight?: boolean
+    metricId?: GoalMetricId
+  }[] = [
     { label: 'Gross sales', value: formatCurrency(summary.totalGrossSales, summary.currency) },
-    { label: 'Net sales', value: formatCurrency(summary.totalNetSales, summary.currency) },
+    {
+      label: 'Net sales',
+      value: formatCurrency(summary.totalNetSales, summary.currency),
+      metricId: 'revenue',
+    },
     { label: 'Discounts', value: formatCurrency(summary.totalDiscount, summary.currency) },
     { label: 'Tax', value: formatCurrency(summary.totalTax, summary.currency) },
     {
@@ -51,6 +68,7 @@ export function AnalyticsMetricsCards({
     {
       label: 'AOV',
       value: formatCurrency(summary.avgAov, summary.currency),
+      metricId: 'aov',
     },
     {
       label: 'Prepaid orders %',
@@ -74,7 +92,7 @@ export function AnalyticsMetricsCards({
     {
       label: 'CM2',
       value: formatCurrency(
-        (summary.cm2 ?? summary.cm1 - (summary.totalAdSpend ?? 0)),
+        summary.cm2 ?? summary.cm1 - (summary.totalAdSpend ?? 0),
         summary.currency
       ),
       highlight: true,
@@ -85,16 +103,32 @@ export function AnalyticsMetricsCards({
     },
     {
       label: 'CM3',
-      value: formatCurrency(
-        summary.cm3 ?? (summary.cm2 ?? summary.cm1 - (summary.totalAdSpend ?? 0)) - (summary.miscExpensesTotal ?? 0),
-        summary.currency
-      ),
+      value: formatCurrency(cm3, summary.currency),
       highlight: true,
+      metricId: 'cm3',
+    },
+    {
+      label: 'CM3 %',
+      value:
+        summary.cm3Pct != null
+          ? `${summary.cm3Pct.toFixed(1)}%`
+          : summary.totalNetSales > 0
+            ? `${((cm3 / summary.totalNetSales) * 100).toFixed(1)}%`
+            : '—',
+      highlight: true,
+      metricId: 'cm3_pct',
+    },
+    {
+      label: 'MER',
+      value:
+        summary.mer != null ? `${summary.mer.toFixed(2)}×` : '—',
+      highlight: true,
+      metricId: 'mer',
     },
     {
       label: 'ACOS',
-      value:
-        summary.acos != null ? `${summary.acos.toFixed(1)}%` : '—',
+      value: summary.acos != null ? `${summary.acos.toFixed(1)}%` : '—',
+      metricId: 'acos',
     },
   ]
 
@@ -140,35 +174,48 @@ export function AnalyticsMetricsCards({
         'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4'
       }
     >
-      {cards.map(({ label, value, highlight }) => (
-        <div
-          key={label}
-          className={
-            highlight
-              ? 'rounded-lg border bg-[#96bf48]/10 p-4'
-              : 'rounded-lg border bg-muted/30 p-4'
-          }
-        >
-          <p
+      {cards.map(({ label, value, highlight, metricId }) => {
+        const ev =
+          metricId && summary.goalEvaluations?.[metricId]
+            ? summary.goalEvaluations[metricId]
+            : undefined
+        return (
+          <div
+            key={label}
             className={
               highlight
-                ? 'text-xs font-bold text-[#96bf48] uppercase tracking-wider'
-                : 'text-xs text-muted-foreground uppercase tracking-wider'
+                ? 'rounded-lg border bg-[#96bf48]/10 p-4'
+                : 'rounded-lg border bg-muted/30 p-4'
             }
           >
-            {label}
-          </p>
-          <p
-            className={
-              highlight
-                ? 'text-xl font-bold mt-0.5 text-[#96bf48]'
-                : 'text-xl font-semibold mt-0.5'
-            }
-          >
-            {value}
-          </p>
-        </div>
-      ))}
+            <p
+              className={
+                highlight
+                  ? 'text-xs font-bold text-[#96bf48] uppercase tracking-wider'
+                  : 'text-xs text-muted-foreground uppercase tracking-wider'
+              }
+            >
+              {label}
+            </p>
+            <p
+              className={
+                highlight
+                  ? 'text-xl font-bold mt-0.5 text-[#96bf48]'
+                  : 'text-xl font-semibold mt-0.5'
+              }
+            >
+              {value}
+            </p>
+            {metricId && ev ? (
+              <KpiGoalLine
+                metricId={metricId}
+                evaluation={ev}
+                currency={summary.currency}
+              />
+            ) : null}
+          </div>
+        )
+      })}
     </div>
   )
 }

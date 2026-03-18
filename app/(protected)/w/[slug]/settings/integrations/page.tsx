@@ -69,6 +69,15 @@ export default async function IntegrationsPage({
           createdAt: true,
         },
       },
+      klaviyoConnection: {
+        select: {
+          id: true,
+          status: true,
+          lastSyncAt: true,
+          lastSyncError: true,
+          createdAt: true,
+        },
+      },
     },
   })
 
@@ -145,6 +154,17 @@ export default async function IntegrationsPage({
               lastSyncAt: shiprocketConnection.lastSyncAt?.toISOString() ?? null,
               lastSyncError: shiprocketConnection.lastSyncError,
               createdAt: shiprocketConnection.createdAt.toISOString(),
+            }
+          : null
+      }
+      klaviyoConnection={
+        workspace.klaviyoConnection
+          ? {
+              id: workspace.klaviyoConnection.id,
+              status: workspace.klaviyoConnection.status,
+              lastSyncAt: workspace.klaviyoConnection.lastSyncAt?.toISOString() ?? null,
+              lastSyncError: workspace.klaviyoConnection.lastSyncError,
+              createdAt: workspace.klaviyoConnection.createdAt.toISOString(),
             }
           : null
       }

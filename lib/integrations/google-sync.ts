@@ -5,6 +5,7 @@ import {
   type GoogleAdsMetricRow,
 } from './google'
 import { Decimal } from '@prisma/client/runtime/library'
+import { mapGoogleConversionActionToStage } from '@/lib/metrics/google-funnel-stage'
 import {
   buildBackfillWindows,
   backfillStartDate,
@@ -170,6 +171,15 @@ export async function syncGoogleAdsForConnection(
           })
           rowsSynced++
         }
+
+        await syncGoogleFunnelStagesForWindow(
+          connection.id,
+          customerId,
+          accessToken,
+          sinceStr,
+          untilStr,
+          errors
+        )
       } catch (err) {
         errors.push(`${customerId} ${sinceStr}..${untilStr}: ${err instanceof Error ? err.message : String(err)}`)
       }
@@ -196,8 +206,161 @@ type GoogleGaqlRow = {
     conversionsValue?: string
     ctr?: string
     averageCpc?: string
+    allConversions?: string
   }
   segments?: { date?: string }
+  conversionAction?: { category?: string | number; name?: string }
+}
+
+/** Numeric enum → name for conversion_action.category (subset). */
+const CONV_CAT_NUM: Record<number, string> = {
+  9: 'ADD_TO_CART',
+  10: 'BEGIN_CHECKOUT',
+  12: 'PURCHASE',
+}
+
+function normalizeConversionCategory(cat: unknown): string {
+  if (typeof cat === 'string') return cat.toUpperCase().replace(/ /g, '_')
+  if (typeof cat === 'number') return CONV_CAT_NUM[cat] ?? ''
+  return ''
+}
+
+type FunnelAcc = { atc: number; ci: number; purch: number; purchVal: number }
+
+async function syncGoogleFunnelStagesForWindow(
+  connectionId: string,
+  customerId: string,
+  accessToken: string,
+  sinceStr: string,
+  untilStr: string,
+  errors: string[]
+): Promise<void> {
+  const query = `
+    SELECT
+      campaign.id,
+      segments.date,
+      segments.conversion_action,
+      conversion_action.category,
+      conversion_action.name,
+      metrics.conversions,
+      metrics.all_conversions,
+      metrics.conversions_value
+    FROM campaign
+    WHERE ${buildGaqlDateRange(sinceStr, untilStr)}
+      AND campaign.status != 'REMOVED'
+  `
+  let rows: unknown[]
+  try {
+    rows = await executeGaql(accessToken, customerId, query)
+  } catch (e) {
+    errors.push(
+      `Funnel GAQL ${customerId} ${sinceStr}..${untilStr}: ${e instanceof Error ? e.message : String(e)}`
+    )
+    return
+  }
+
+  const byKey = new Map<string, FunnelAcc>()
+  const getAcc = (key: string): FunnelAcc => {
+    let a = byKey.get(key)
+    if (!a) {
+      a = { atc: 0, ci: 0, purch: 0, purchVal: 0 }
+      byKey.set(key, a)
+    }
+    return a
+  }
+
+  for (const row of rows) {
+    const r = row as GoogleGaqlRow
+    const campId = r.campaign?.id != null ? String(r.campaign.id) : ''
+    const date = r.segments?.date
+    const ca = r.conversionAction
+    const met = r.metrics
+    if (!campId || !date || !ca) continue
+
+    const stage = mapGoogleConversionActionToStage(
+      normalizeConversionCategory(ca.category),
+      ca.name ?? ''
+    )
+    if (!stage) continue
+
+    const conv = parseFloat(String(met?.conversions ?? '0')) || 0
+    const allConv = parseFloat(String(met?.allConversions ?? '0')) || 0
+    const val = parseFloat(String(met?.conversionsValue ?? '0')) || 0
+    const key = `${customerId}|${campId}|${date}`
+    const acc = getAcc(key)
+
+    if (stage === 'add_to_cart') {
+      acc.atc += allConv > 0 ? allConv : conv
+    } else if (stage === 'checkout_initiated') {
+      acc.ci += allConv > 0 ? allConv : conv
+    } else {
+      acc.purch += conv > 0 ? conv : allConv
+      acc.purchVal += val
+    }
+  }
+
+  const sinceD = new Date(sinceStr + 'T00:00:00.000Z')
+  const untilD = new Date(untilStr + 'T00:00:00.000Z')
+  await prisma.google_ads_funnel_daily.deleteMany({
+    where: {
+      connection_id: connectionId,
+      customer_id: customerId,
+      date: { gte: sinceD, lte: untilD },
+    },
+  })
+
+  const records: {
+    connection_id: string
+    customer_id: string
+    campaign_id: string
+    date: Date
+    stage: string
+    conversions: Decimal
+    conversion_value: Decimal
+  }[] = []
+
+  for (const [key, acc] of byKey) {
+    const [, campaignId, dateStr] = key.split('|')
+    const dateOnly = new Date(dateStr + 'T00:00:00.000Z')
+    if (acc.atc > 0) {
+      records.push({
+        connection_id: connectionId,
+        customer_id: customerId,
+        campaign_id: campaignId,
+        date: dateOnly,
+        stage: 'add_to_cart',
+        conversions: new Decimal(acc.atc),
+        conversion_value: new Decimal(0),
+      })
+    }
+    if (acc.ci > 0) {
+      records.push({
+        connection_id: connectionId,
+        customer_id: customerId,
+        campaign_id: campaignId,
+        date: dateOnly,
+        stage: 'checkout_initiated',
+        conversions: new Decimal(acc.ci),
+        conversion_value: new Decimal(0),
+      })
+    }
+    if (acc.purch > 0 || acc.purchVal > 0) {
+      records.push({
+        connection_id: connectionId,
+        customer_id: customerId,
+        campaign_id: campaignId,
+        date: dateOnly,
+        stage: 'purchase',
+        conversions: new Decimal(acc.purch),
+        conversion_value: new Decimal(acc.purchVal),
+      })
+    }
+  }
+
+  const CHUNK = 200
+  for (let i = 0; i < records.length; i += CHUNK) {
+    await prisma.google_ads_funnel_daily.createMany({ data: records.slice(i, i + CHUNK) })
+  }
 }
 
 export type SyncAllGoogleAdsResult = {

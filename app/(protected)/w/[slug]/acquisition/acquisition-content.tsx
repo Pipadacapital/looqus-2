@@ -2,10 +2,14 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import { format, startOfYear, endOfDay } from 'date-fns'
+import Link from 'next/link'
 import { IconSpeakerphone, IconLoader2 } from '@tabler/icons-react'
 import { Button } from '@/components/ui/button'
 import { DateRangeFilter } from '@/components/analytics'
 import { formatCurrency } from '@/components/analytics/types'
+import type { GoalEvaluation } from '@/lib/metrics/goals'
+import type { GoalMetricId } from '@/lib/metrics/goal-metrics-registry'
+import { KpiGoalLine } from '@/components/goals/kpi-goal-line'
 import {
   ChartContainer,
   type ChartConfig,
@@ -67,6 +71,16 @@ function AcquisitionChartTooltip({
   )
 }
 
+type MarketingEfficiency = {
+  totalAdSpend: number
+  storeNetRevenue: number
+  mer: number | null
+  newCustomerRevenue: number
+  acquisitionAdSpend: number
+  aMer: number | null
+  acos: number | null
+}
+
 type AcquisitionSummary = {
   cm2: number
   newCustomers: number
@@ -75,6 +89,8 @@ type AcquisitionSummary = {
   google: number
   totalAdSpend: number
   blendedCac: number
+  marketingEfficiency: MarketingEfficiency
+  goalEvaluations?: Partial<Record<GoalMetricId, GoalEvaluation>>
 }
 
 type AcquisitionDailyRow = {
@@ -130,6 +146,16 @@ const chartConfig = {
   blendedCac: { label: 'Blended CAC', color: 'hsl(221 83% 53%)' },
 } satisfies ChartConfig
 
+const emptyMarketing: MarketingEfficiency = {
+  totalAdSpend: 0,
+  storeNetRevenue: 0,
+  mer: null,
+  newCustomerRevenue: 0,
+  acquisitionAdSpend: 0,
+  aMer: null,
+  acos: null,
+}
+
 interface AcquisitionContentProps {
   workspaceSlug: string
   workspaceName: string
@@ -183,15 +209,23 @@ export function AcquisitionContent({
           setData(null)
         } else {
           setData({
-            summary: json.summary ?? {
-              cm2: 0,
-              newCustomers: 0,
-              cm2PerNc: 0,
-              meta: 0,
-              google: 0,
-              totalAdSpend: 0,
-              blendedCac: 0,
-            },
+            summary: (() => {
+              const s = json.summary ?? {}
+              const me = { ...emptyMarketing, ...(s.marketingEfficiency ?? {}) }
+              return {
+                cm2: Number(s.cm2) || 0,
+                newCustomers: Number(s.newCustomers) || 0,
+                cm2PerNc: Number(s.cm2PerNc) || 0,
+                meta: Number(s.meta) || 0,
+                google: Number(s.google) || 0,
+                totalAdSpend: Number(s.totalAdSpend) || 0,
+                blendedCac: Number(s.blendedCac) || 0,
+                marketingEfficiency: me,
+                goalEvaluations: s.goalEvaluations as
+                  | AcquisitionSummary['goalEvaluations']
+                  | undefined,
+              }
+            })(),
             daily: json.daily ?? [],
             currency: json.currency ?? 'INR',
             trend: json.trend ?? [],
@@ -280,6 +314,13 @@ export function AcquisitionContent({
                 <div className="space-y-0.5">
                   <p className="text-xs text-muted-foreground">New Customers</p>
                   <p className="font-medium tabular-nums">{data.summary.newCustomers.toLocaleString('en-IN')}</p>
+                  {data.summary.goalEvaluations?.new_customers ? (
+                    <KpiGoalLine
+                      metricId="new_customers"
+                      evaluation={data.summary.goalEvaluations.new_customers}
+                      currency={currency}
+                    />
+                  ) : null}
                 </div>
                 <div className="space-y-0.5">
                   <p className="text-xs text-muted-foreground">CM2 per NC</p>
@@ -302,8 +343,64 @@ export function AcquisitionContent({
                 <div className="space-y-0.5">
                   <p className="text-xs text-muted-foreground">Blended CAC</p>
                   <p className="font-medium">{formatCurrency(data.summary.blendedCac, currency)}</p>
+                  {data.summary.goalEvaluations?.cac ? (
+                    <KpiGoalLine
+                      metricId="cac"
+                      evaluation={data.summary.goalEvaluations.cac}
+                      currency={currency}
+                    />
+                  ) : null}
+                </div>
+                <div className="space-y-0.5">
+                  <p className="text-xs text-muted-foreground">MER</p>
+                  <p className="font-medium tabular-nums">
+                    {data.summary.marketingEfficiency.mer != null
+                      ? `${data.summary.marketingEfficiency.mer.toFixed(2)}×`
+                      : '—'}
+                  </p>
+                  {data.summary.goalEvaluations?.mer ? (
+                    <KpiGoalLine
+                      metricId="mer"
+                      evaluation={data.summary.goalEvaluations.mer}
+                      currency={currency}
+                    />
+                  ) : null}
+                </div>
+                <div className="space-y-0.5">
+                  <p className="text-xs text-muted-foreground">aMER</p>
+                  <p className="font-medium tabular-nums">
+                    {data.summary.marketingEfficiency.aMer != null
+                      ? `${data.summary.marketingEfficiency.aMer.toFixed(2)}×`
+                      : '—'}
+                  </p>
+                  {data.summary.goalEvaluations?.amer ? (
+                    <KpiGoalLine
+                      metricId="amer"
+                      evaluation={data.summary.goalEvaluations.amer}
+                      currency={currency}
+                    />
+                  ) : null}
+                </div>
+                <div className="space-y-0.5">
+                  <p className="text-xs text-muted-foreground">ACOS</p>
+                  <p className="font-medium tabular-nums">
+                    {data.summary.marketingEfficiency.acos != null
+                      ? `${data.summary.marketingEfficiency.acos.toFixed(1)}%`
+                      : '—'}
+                  </p>
                 </div>
               </div>
+              <p className="text-xs text-muted-foreground">
+                MER = store net revenue ÷ total ad spend (same as blended ROAS). aMER = new-customer
+                revenue ÷ acquisition-tagged spend only.{' '}
+                <Link
+                  href={`/w/${workspaceSlug}/settings/ad-campaigns`}
+                  className="underline font-medium text-foreground"
+                >
+                  Classify campaigns
+                </Link>{' '}
+                for aMER.
+              </p>
 
               {data.daily.length > 0 && (
                 <AcquisitionChartBlock daily={data.daily} currency={currency} chartConfig={chartConfig} />
