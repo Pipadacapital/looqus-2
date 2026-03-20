@@ -66,6 +66,7 @@ type GoogleConnectionInfo = {
 type ShiprocketConnectionInfo = {
   id: string
   email: string
+  shiprocketApiEmail: string | null
   status: string
   lastSyncAt: string | null
   lastSyncError: string | null
@@ -123,6 +124,9 @@ export function IntegrationsContent({
   const [srPassword, setSrPassword] = useState('')
   const [srConnecting, setSrConnecting] = useState(false)
   const [srError, setSrError] = useState<string | null>(null)
+  const [srApiUserEmail, setSrApiUserEmail] = useState(shiprocketConnection?.shiprocketApiEmail ?? '')
+  const [srApiUserPassword, setSrApiUserPassword] = useState('')
+  const [srApiUserSaving, setSrApiUserSaving] = useState(false)
 
   const [kvDialogOpen, setKvDialogOpen] = useState(false)
   const [kvApiKey, setKvApiKey] = useState('')
@@ -358,6 +362,33 @@ export function IntegrationsContent({
       window.location.reload()
     } finally {
       setSyncing(null)
+    }
+  }
+
+  const handleShiprocketApiUserSave = async () => {
+    if (!shiprocketConnection) return
+    setSrApiUserSaving(true)
+    setSrError(null)
+    try {
+      const res = await fetch('/api/integrations/shiprocket/connect', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId,
+          shiprocketApiEmail: srApiUserEmail.trim(),
+          shiprocketApiPassword: srApiUserPassword,
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setSrError(data.error || 'Failed to save Shiprocket API User credentials')
+        return
+      }
+      toast.success('Shiprocket API User credentials saved')
+      setSrApiUserPassword('')
+      window.location.reload()
+    } finally {
+      setSrApiUserSaving(false)
     }
   }
 
@@ -863,8 +894,9 @@ export function IntegrationsContent({
 
         <div className="px-6 py-4">
           {shiprocketConnection ? (
-            <div className="flex items-center justify-between">
-              <div className="space-y-1">
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
                 <p className="text-sm font-medium">{shiprocketConnection.email}</p>
                 <p className="text-xs text-muted-foreground">
                   Connected{' '}
@@ -876,29 +908,73 @@ export function IntegrationsContent({
                 {shiprocketConnection.lastSyncError && (
                   <p className="text-xs text-destructive">{shiprocketConnection.lastSyncError}</p>
                 )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleShiprocketSync}
+                    disabled={syncing === 'shiprocket'}
+                  >
+                    {syncing === 'shiprocket' ? (
+                      <IconLoader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <IconRefresh className="mr-1.5 h-3.5 w-3.5" />
+                    )}
+                    Sync now
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleShiprocketDisconnect}
+                    disabled={disconnecting === 'shiprocket'}
+                  >
+                    <IconUnlink className="mr-1.5 h-3.5 w-3.5" />
+                    Disconnect
+                  </Button>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
+
+              <div className="rounded-md border p-4 space-y-3">
+                <p className="text-sm font-medium">Shiprocket API User (for full pincode backfill)</p>
+                <div className="grid gap-2">
+                  <Label htmlFor="sr-api-user-email">API User Email</Label>
+                  <Input
+                    id="sr-api-user-email"
+                    type="email"
+                    placeholder="api-user@example.com"
+                    value={srApiUserEmail}
+                    onChange={(e) => setSrApiUserEmail(e.target.value)}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="sr-api-user-password">API User Password</Label>
+                  <Input
+                    id="sr-api-user-password"
+                    type="password"
+                    placeholder="API User password"
+                    value={srApiUserPassword}
+                    onChange={(e) => setSrApiUserPassword(e.target.value)}
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Create an API User in Shiprocket under Settings → API → Configure. Required for full pincode backfill.
+                </p>
+                {srError && <p className="text-sm text-destructive">{srError}</p>}
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={handleShiprocketSync}
-                  disabled={syncing === 'shiprocket'}
+                  onClick={handleShiprocketApiUserSave}
+                  disabled={srApiUserSaving || !srApiUserEmail.trim() || !srApiUserPassword.trim()}
                 >
-                  {syncing === 'shiprocket' ? (
-                    <IconLoader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  {srApiUserSaving ? (
+                    <>
+                      <IconLoader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                      Saving...
+                    </>
                   ) : (
-                    <IconRefresh className="mr-1.5 h-3.5 w-3.5" />
+                    'Save API User credentials'
                   )}
-                  Sync now
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleShiprocketDisconnect}
-                  disabled={disconnecting === 'shiprocket'}
-                >
-                  <IconUnlink className="mr-1.5 h-3.5 w-3.5" />
-                  Disconnect
                 </Button>
               </div>
             </div>

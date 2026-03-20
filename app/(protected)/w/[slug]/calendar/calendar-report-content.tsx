@@ -95,6 +95,16 @@ type Row = {
   aov: CalendarMetricCell
 }
 
+type Festival = {
+  id: string
+  name: string
+  startDate: string
+  endDate: string
+  color: string
+  expectedMultiplier: number
+  isActive: boolean
+}
+
 function fmtMoney(v: number | null, sym: string) {
   if (v == null) return '—'
   return `${sym}${v.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
@@ -148,6 +158,7 @@ export function CalendarReportContent({ workspaceSlug }: { workspaceSlug: string
   const [currency, setCurrency] = useState('INR')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [festivalsInMonth, setFestivalsInMonth] = useState<Festival[]>([])
 
   const sym = currency === 'INR' ? '₹' : '$'
 
@@ -162,9 +173,24 @@ export function CalendarReportContent({ workspaceSlug }: { workspaceSlug: string
       if (!res.ok) throw new Error(json.error || 'Failed to load')
       setRows(json.rows ?? [])
       setCurrency(json.currency ?? 'INR')
+
+      const y = selectedMonth.slice(0, 4)
+      const festRes = await fetch(`/api/workspaces/${workspaceSlug}/festivals?year=${encodeURIComponent(y)}`)
+      const festJson = await festRes.json().catch(() => ({ festivals: [] }))
+      const firstDayOfMonth = parseISO(`${selectedMonth}-01T00:00:00.000Z`)
+      const nextMonth = addMonths(firstDayOfMonth, 1)
+      const lastDayOfMonth = new Date(nextMonth.getTime() - 1)
+      const active = (festJson.festivals ?? []).filter((f: Festival) => {
+        if (!f.isActive) return false
+        const s = new Date(f.startDate)
+        const e = new Date(f.endDate)
+        return s <= lastDayOfMonth && e >= firstDayOfMonth
+      })
+      setFestivalsInMonth(active)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed')
       setRows([])
+      setFestivalsInMonth([])
     } finally {
       setLoading(false)
     }
@@ -280,6 +306,17 @@ export function CalendarReportContent({ workspaceSlug }: { workspaceSlug: string
     }
   }
 
+  const festivalForDate = (dateIso: string): Festival | null => {
+    const d = new Date(dateIso)
+    const overlap = festivalsInMonth.filter((f) => {
+      const s = new Date(f.startDate)
+      const e = new Date(f.endDate)
+      return d >= s && d <= e
+    })
+    if (overlap.length === 0) return null
+    return overlap.sort((a, b) => b.expectedMultiplier - a.expectedMultiplier)[0]
+  }
+
   return (
     <div className="space-y-6 py-4 md:py-6">
       <div>
@@ -371,8 +408,20 @@ export function CalendarReportContent({ workspaceSlug }: { workspaceSlug: string
             </TableHeader>
             <TableBody>
               {rows.map((r) => (
+                (() => {
+                  const rowDate = r.periodKey?.length >= 10 ? `${r.periodKey.slice(0, 10)}T12:00:00.000Z` : ''
+                  const rowFestival = rowDate ? festivalForDate(rowDate) : null
+                  return (
                 <TableRow key={r.periodKey}>
-                  <TableCell className="sticky left-0 z-10 bg-card align-top font-medium text-sm whitespace-nowrap py-3 shadow-[4px_0_12px_-4px_rgba(0,0,0,0.12)]">
+                  <TableCell
+                    title={
+                      rowFestival
+                        ? `${rowFestival.name} • ${rowFestival.expectedMultiplier}x expected lift`
+                        : undefined
+                    }
+                    className="sticky left-0 z-10 bg-card align-top font-medium text-sm whitespace-nowrap py-3 shadow-[4px_0_12px_-4px_rgba(0,0,0,0.12)]"
+                    style={rowFestival ? { borderLeft: `4px solid ${rowFestival.color}` } : undefined}
+                  >
                     {r.label}
                   </TableCell>
                   <TableCell className="sticky left-[120px] z-10 bg-card border-r align-top py-2 shadow-[4px_0_12px_-4px_rgba(0,0,0,0.12)]">
@@ -463,9 +512,24 @@ export function CalendarReportContent({ workspaceSlug }: { workspaceSlug: string
                     </div>
                   </TableCell>
                 </TableRow>
+                  )
+                })()
               ))}
             </TableBody>
           </Table>
+        </div>
+      )}
+
+      {!loading && festivalsInMonth.length > 0 && (
+        <div className="text-xs text-muted-foreground">
+          Festivals this month:{' '}
+          {festivalsInMonth.map((f, i) => (
+            <span key={f.id} className="mr-4 inline-flex items-center gap-1.5">
+              <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: f.color }} />
+              {f.name} ({format(new Date(f.startDate), 'MMM d')}–{format(new Date(f.endDate), 'MMM d')}) {f.expectedMultiplier}x
+              {i < festivalsInMonth.length - 1 ? '' : ''}
+            </span>
+          ))}
         </div>
       )}
 

@@ -63,6 +63,7 @@ export default async function IntegrationsPage({
         select: {
           id: true,
           email: true,
+          shiprocketApiEmail: true,
           status: true,
           lastSyncAt: true,
           lastSyncError: true,
@@ -150,6 +151,7 @@ export default async function IntegrationsPage({
           ? {
               id: shiprocketConnection.id,
               email: shiprocketConnection.email,
+              shiprocketApiEmail: shiprocketConnection.shiprocketApiEmail,
               status: shiprocketConnection.status,
               lastSyncAt: shiprocketConnection.lastSyncAt?.toISOString() ?? null,
               lastSyncError: shiprocketConnection.lastSyncError,

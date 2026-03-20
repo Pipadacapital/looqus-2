@@ -188,9 +188,7 @@ function getChannel(raw: unknown): string | null {
   )
 }
 
-// ── Status badge ───────────────────────────────────────────────────
-
-const RTO_CODES = new Set([9, 10, 14, 20, 40, 41, 46])
+// ── Status badge (status string; RTO codes centralized in lib/workspace-metrics/constants) ──
 
 function StatusText({ status }: { status: string | null }) {
   if (!status) return <span className="text-muted-foreground">—</span>

@@ -5,6 +5,7 @@ import { ShiprocketContent } from './shiprocket-content'
 import {
   parseShiprocketListParams,
   buildShiprocketWhere,
+  buildShiprocketDateRangeWhere,
   getPageSizeOptions,
 } from '@/lib/shiprocket-list'
 
@@ -91,26 +92,9 @@ export default async function ShiprocketPage({
   let baseWhere: ReturnType<typeof buildShiprocketWhere> | null = null
 
   if (conn && isConnected) {
-    const dateFilter = {
-      OR: [
-        {
-          shiprocketCreatedAt: {
-            gte: new Date(`${listParams.from}T00:00:00.000Z`),
-            lte: new Date(`${listParams.to}T23:59:59.999Z`),
-          },
-        },
-        {
-          shiprocketCreatedAt: null,
-          syncedAt: {
-            gte: new Date(`${listParams.from}T00:00:00.000Z`),
-            lte: new Date(`${listParams.to}T23:59:59.999Z`),
-          },
-        },
-      ],
-    }
-
     const fromDate = new Date(`${listParams.from}T00:00:00.000Z`)
     const toDate = new Date(`${listParams.to}T23:59:59.999Z`)
+    const dateFilter = buildShiprocketDateRangeWhere(fromDate, toDate)
 
     const [totalShipmentCountRes, totalOrderCountRes, filteredCountInRangeRes, filteredOrderCountInRangeRes] =
       await Promise.all([

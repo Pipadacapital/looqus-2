@@ -12,6 +12,7 @@ import { calcOrders } from './orders'
 import { calcCohorts } from './cohorts'
 import { calcTimings } from './timings'
 import { calcInventory } from './inventory'
+import { getOrderInclusionWhereFromWorkspace } from '@/lib/order-filters'
 
 export type { FullAiContext } from './types'
 export type {
@@ -72,11 +73,13 @@ export async function buildFullAiContext(
 
   const connectionId = workspace.shopifyConnections[0]?.id ?? ''
 
+  const orderInclusionWhere = getOrderInclusionWhereFromWorkspace(workspace as any)
+
   // Run all calculations in parallel
   const [analytics, pnl, orders, cohorts, timings, inventory] = await Promise.all([
     calcAnalytics(prisma, workspaceId, connectionId, from, to, workspace),
     calcPnl(prisma, workspace as any, from, to),
-    calcOrders(prisma, connectionId, workspaceId, from, to),
+    calcOrders(prisma, connectionId, workspaceId, from, to, orderInclusionWhere),
     connectionId ? calcCohorts(prisma, workspace as any, fromStr, toStr) : Promise.resolve(null),
     connectionId ? calcTimings(prisma, workspace as any, fromStr, toStr) : Promise.resolve(null),
     connectionId ? calcInventory(prisma, connectionId) : Promise.resolve(null),

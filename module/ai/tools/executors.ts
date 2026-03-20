@@ -1,4 +1,6 @@
 import type { PrismaClient } from '@prisma/client'
+import { getOrderInclusionWhereFromWorkspace } from '@/lib/order-filters'
+import { getRtoSummary } from '@/lib/workspace-metrics'
 import { loadWorkspaceMetricsFromDb } from '../context/from-db'
 import type { ToolName } from './definitions'
 
@@ -117,24 +119,26 @@ export async function executeTool(
     case 'get_rto_summary': {
       const from = parseDate(String(args.from_date ?? ''))
       const to = parseDate(String(args.to_date ?? ''))
-      const conn = await prisma.shiprocketConnection.findUnique({ where: { workspaceId }, select: { id: true } })
-      if (!conn) return 'No Shiprocket connection for this workspace.'
       const toEnd = new Date(to)
       toEnd.setUTCHours(23, 59, 59, 999)
-      const shipments = await prisma.shiprocketShipment.findMany({
-        where: {
-          connectionId: conn.id,
-          shiprocketCreatedAt: { gte: from, lte: toEnd },
+      const workspace = await prisma.workspace.findUnique({
+        where: { id: workspaceId },
+        include: {
+          shopifyConnections: { where: { status: 'CONNECTED' }, take: 1, select: { id: true } },
+          shiprocketConnection: { select: { id: true, status: true } },
         },
-        select: { status: true, trackingStatus: true, codAmount: true, rtoInitiatedAt: true },
       })
-      const total = shipments.length
-      const rto = shipments.filter((s) => s.rtoInitiatedAt != null || (s.trackingStatus && String(s.trackingStatus).toLowerCase().includes('rto'))).length
-      const rtoValue = shipments
-        .filter((s) => s.rtoInitiatedAt != null || (s.trackingStatus && String(s.trackingStatus).toLowerCase().includes('rto')))
-        .reduce((sum, s) => sum + toNum(s.codAmount), 0)
-      const pct = total > 0 ? (rto / total) * 100 : 0
-      return `RTO summary (${from.toISOString().slice(0, 10)} to ${to}): Total shipments ${total}, RTO ${rto} (${pct.toFixed(1)}%), RTO value ₹${fmt(rtoValue)}.`
+      const conn = workspace?.shiprocketConnection?.status === 'CONNECTED' ? workspace.shiprocketConnection : null
+      if (!conn) return 'No Shiprocket connection for this workspace.'
+      const connectionId = workspace?.shopifyConnections?.[0]?.id
+      if (!connectionId) return 'No Shopify connection for this workspace.'
+      const orderInclusionWhere = getOrderInclusionWhereFromWorkspace({
+        skippedShopifyOrderTags: workspace?.skipped_shopify_order_tags ?? [],
+        skipZeroSalesOrders: workspace?.skip_zero_sales_orders ?? false,
+      })
+      const rto = await getRtoSummary(prisma, connectionId, conn.id, from, toEnd, orderInclusionWhere)
+      const pct = rto.rtoPercent != null ? rto.rtoPercent.toFixed(1) : '0'
+      return `RTO summary (${from.toISOString().slice(0, 10)} to ${to}): Total shipments ${rto.totalShipments}, RTO ${rto.rtoOrders} (${pct}%), RTO value ₹${fmt(rto.rtoValue)}.`
     }
 
     case 'get_misc_expenses': {

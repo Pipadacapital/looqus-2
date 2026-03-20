@@ -4,6 +4,7 @@ import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
+import { seedFestivalsForWorkspace } from '@/lib/festivals/seed-festivals'
 import {
   normalizeShopDomain,
   generateNonce,
@@ -122,6 +123,8 @@ export async function completeOnboarding(data: {
         role: 'OWNER',
       },
     })
+
+    await seedFestivalsForWorkspace(tx, workspace.id)
 
     // If connecting Shopify, save a pending connection with credentials (upsert so retries are safe)
     if (wantsShopify && shopDomain) {
