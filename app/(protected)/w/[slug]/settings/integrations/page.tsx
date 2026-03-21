@@ -1,10 +1,8 @@
-import { Suspense } from 'react'
-import { redirect } from 'next/navigation'
-import { getCachedWorkspace } from '@/lib/server-cache'
-import { IntegrationsLoader } from './integrations-loader'
-import Loading from './loading'
-import { prisma } from '@/lib/prisma'
 import { createClient } from '@/lib/server'
+import { prisma } from '@/lib/prisma'
+import { redirect } from 'next/navigation'
+import { getCurrentUserRole } from '@/lib/require-superadmin'
+import { IntegrationsContent } from './integrations-content'
 
 export default async function IntegrationsPage({
   params,
@@ -13,7 +11,6 @@ export default async function IntegrationsPage({
 }) {
   const { slug } = await params
 
-  // const workspace = await getCachedWorkspace(slug)
   const supabase = await createClient()
   const {
     data: { user },
@@ -66,6 +63,7 @@ export default async function IntegrationsPage({
         select: {
           id: true,
           email: true,
+          shiprocketApiEmail: true,
           status: true,
           lastSyncAt: true,
           lastSyncError: true,
@@ -86,9 +84,92 @@ export default async function IntegrationsPage({
 
   if (!workspace) redirect('/')
 
+  const role = await getCurrentUserRole()
+  const isSuperadmin = role === 'SUPERADMIN'
+
+  const connection = workspace.shopifyConnections[0] ?? null
+  const metaConnectionRaw = workspace.meta_ads_connections
+  const metaConnection =
+    metaConnectionRaw?.status === 'CONNECTED' ? metaConnectionRaw : null
+  const googleConnectionRaw = workspace.google_ads_connections
+  const googleConnection =
+    googleConnectionRaw?.status === 'CONNECTED' ? googleConnectionRaw : null
+
+  const shiprocketRaw = workspace.shiprocketConnection
+  const shiprocketConnection =
+    shiprocketRaw?.status === 'CONNECTED' ? shiprocketRaw : null
+
   return (
-    <Suspense fallback={<Loading />}>
-      <IntegrationsLoader slug={slug} />
-    </Suspense>
+    <IntegrationsContent
+      workspaceSlug={slug}
+      workspaceId={workspace.id}
+      workspaceName={workspace.name}
+      isSuperadmin={isSuperadmin}
+      shopifyConnection={
+        connection
+          ? {
+              id: connection.id,
+              shopDomain: connection.shopDomain,
+              status: connection.status,
+              installedAt: connection.installedAt.toISOString(),
+              lastSyncAt: connection.lastSyncAt?.toISOString() ?? null,
+            }
+          : null
+      }
+      metaConnection={
+        metaConnection
+          ? {
+              id: metaConnection.id,
+              adAccountIds: metaConnection.ad_account_ids,
+              selectedAdAccountId: metaConnection.selected_ad_account_id,
+              selectedAdAccountIds: metaConnection.selected_ad_account_ids,
+              metaUserId: metaConnection.meta_user_id,
+              status: metaConnection.status,
+              lastSyncAt: metaConnection.last_sync_at?.toISOString() ?? null,
+              lastSyncError: metaConnection.last_sync_error,
+              createdAt: metaConnection.created_at.toISOString(),
+            }
+          : null
+      }
+      googleConnection={
+        googleConnection
+          ? {
+              id: googleConnection.id,
+              customerIds: googleConnection.customer_ids,
+              selectedCustomerId: googleConnection.selected_customer_id,
+              selectedCustomerIds: googleConnection.selected_customer_ids,
+              googleEmail: googleConnection.google_email,
+              status: googleConnection.status,
+              lastSyncAt: googleConnection.last_sync_at?.toISOString() ?? null,
+              lastSyncError: googleConnection.last_sync_error,
+              createdAt: googleConnection.created_at.toISOString(),
+            }
+          : null
+      }
+      shiprocketConnection={
+        shiprocketConnection
+          ? {
+              id: shiprocketConnection.id,
+              email: shiprocketConnection.email,
+              shiprocketApiEmail: shiprocketConnection.shiprocketApiEmail,
+              status: shiprocketConnection.status,
+              lastSyncAt: shiprocketConnection.lastSyncAt?.toISOString() ?? null,
+              lastSyncError: shiprocketConnection.lastSyncError,
+              createdAt: shiprocketConnection.createdAt.toISOString(),
+            }
+          : null
+      }
+      klaviyoConnection={
+        workspace.klaviyoConnection
+          ? {
+              id: workspace.klaviyoConnection.id,
+              status: workspace.klaviyoConnection.status,
+              lastSyncAt: workspace.klaviyoConnection.lastSyncAt?.toISOString() ?? null,
+              lastSyncError: workspace.klaviyoConnection.lastSyncError,
+              createdAt: workspace.klaviyoConnection.createdAt.toISOString(),
+            }
+          : null
+      }
+    />
   )
 }

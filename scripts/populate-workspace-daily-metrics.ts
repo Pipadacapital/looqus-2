@@ -85,6 +85,8 @@ async function main() {
           cogsMarkupPercent: true,
         },
       },
+      skipped_shopify_order_tags: true,
+      skip_zero_sales_orders: true,
     },
   })
 
@@ -107,6 +109,8 @@ async function main() {
       meta_ads_connections: ws.meta_ads_connections,
       google_ads_connections: ws.google_ads_connections,
       shiprocketConnection: ws.shiprocketConnection,
+      skippedShopifyOrderTags: ws.skipped_shopify_order_tags ?? undefined,
+      skipZeroSalesOrders: ws.skip_zero_sales_orders ?? undefined,
     }
 
     for (const date of dates) {

@@ -1,8 +1,9 @@
 import type { PrismaClient } from '@prisma/client'
 import { getDaysInMonth } from 'date-fns'
-import { RTO_STATUS_CODES } from './constants'
 import { resolveLineItemCogs, normalizeCogsSettings } from '@/lib/cogs'
+import { getOrderInclusionWhere, normalizeOrderFilterSettings } from '@/lib/order-filters'
 import { getDailyVariableContribution } from '@/lib/workspace-costs'
+import { getRtoSummary } from './rto-summary'
 
 export type WorkspaceForMetrics = {
   id: string
@@ -23,6 +24,9 @@ export type WorkspaceForMetrics = {
     selected_customer_id: string | null
   } | null
   shiprocketConnection: { id: string; status: string } | null
+  /** When set, RTO/value metrics respect workspace order filters. */
+  skippedShopifyOrderTags?: string[] | null
+  skipZeroSalesOrders?: boolean | null
 }
 
 export type WorkspaceDailyMetricsRow = {
@@ -252,46 +256,26 @@ export async function computeWorkspaceDayMetrics(
 
   const srConn = workspace.shiprocketConnection
   if (srConn?.status === 'CONNECTED') {
-    const allShipments = await prisma.shiprocketShipment.findMany({
-      where: {
-        connectionId: srConn.id,
-        shippedAt: { gte: dayStart, lte: dayEnd },
-      },
-      select: {
-        trackingStatusCode: true,
-        statusCode: true,
-        channelOrderId: true,
-      },
-    })
-    totalShipments = allShipments.length
-    const rtoShipments = allShipments.filter((s) => {
-      const code = s.trackingStatusCode ?? s.statusCode
-      return code != null && RTO_STATUS_CODES.includes(code)
-    })
-    rtoOrders = rtoShipments.length
-    rtoPercent = totalShipments > 0 ? Math.round((rtoOrders / totalShipments) * 10000) / 100 : null
-
-    const channelIds = rtoShipments
-      .map((s) => s.channelOrderId)
-      .filter((id): id is string => id != null && id !== '')
-    if (channelIds.length > 0) {
-      const cleanIds = channelIds.map((id) => id.replace(/^#/, ''))
-      const matchedOrders = await prisma.shopifyOrder.findMany({
-        where: {
-          connectionId,
-          OR: [
-            { orderNumber: { in: cleanIds } },
-            { name: { in: channelIds } },
-          ],
-        },
-        select: { totalPrice: true },
+    const orderInclusionWhere = getOrderInclusionWhere(
+      normalizeOrderFilterSettings({
+        skippedShopifyOrderTags: workspace.skippedShopifyOrderTags ?? [],
+        skipZeroSalesOrders: workspace.skipZeroSalesOrders ?? false,
       })
-      rtoValue = matchedOrders.reduce((sum, o) => sum + Number(o.totalPrice), 0)
-      rtoMapped = matchedOrders.length
-      rtoUnmapped = rtoOrders - rtoMapped
-    } else {
-      rtoUnmapped = rtoOrders
-    }
+    )
+    const rto = await getRtoSummary(
+      prisma,
+      connectionId,
+      srConn.id,
+      dayStart,
+      dayEnd,
+      orderInclusionWhere
+    )
+    totalShipments = rto.totalShipments
+    rtoOrders = rto.rtoOrders
+    rtoPercent = rto.rtoPercent
+    rtoValue = rto.rtoValue
+    rtoMapped = rto.rtoMapped
+    rtoUnmapped = rto.rtoUnmapped
   }
 
   let prepaidOrdersCount: number | null = null

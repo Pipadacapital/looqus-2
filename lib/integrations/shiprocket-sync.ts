@@ -2,14 +2,19 @@ import { prisma } from '@/lib/prisma'
 import { Decimal } from '@prisma/client/runtime/library'
 import {
   getValidToken,
+  getShiprocketApiUserToken,
   fetchShiprocketOrders,
   fetchShiprocketShipments,
   fetchShipmentTracking,
   fetchShiprocketChannels,
+  fetchOrderById,
+  SHIPROCKET_BASE,
+  SHIPROCKET_ORDER_SHOW_PATH,
   TERMINAL_STATUS_CODES,
   type ShiprocketOrderRow,
   type ShiprocketShipmentRow,
 } from './shiprocket'
+import { getPincodeFromRaw, getCityFromRaw, getStateFromRaw } from '@/lib/shiprocket-normalize'
 
 /**
  * Safely coerce a Shiprocket API value into a Prisma Decimal.
@@ -89,6 +94,46 @@ function getStringFromRawPath(raw: unknown, path: string): string | null {
   if (typeof cur === 'string' && cur.trim() !== '') return cur.trim()
   if (typeof cur === 'number' && !Number.isNaN(cur)) return String(cur)
   return null
+}
+
+/**
+ * Resolve courier name from a shipment row (API payload).
+ * Shiprocket /shipments response may use courier_name, courier_company_name, carrier_name, etc.
+ * Persisting the first non-empty value ensures "By Courier" has data regardless of API key.
+ */
+function resolveCourierFromShipmentRow(s: ShiprocketShipmentRow): string | null {
+  const v =
+    (typeof s.courier_name === 'string' && s.courier_name.trim() !== ''
+      ? s.courier_name.trim()
+      : null) ??
+    getStringFromRaw(s, 'courier_company_name') ??
+    getStringFromRaw(s, 'carrier_name') ??
+    getStringFromRaw(s, 'courier') ??
+    getStringFromRaw(s, 'carrier') ??
+    getStringFromRaw(s, 'pickup_partner_name') ??
+    getStringFromRaw(s, 'logistic_partner') ??
+    getStringFromRawPath(s, 'courier.name') ??
+    getStringFromRawPath(s, 'courier.company_name')
+  return v ?? null
+}
+
+/**
+ * Resolve courier name from stored rawJson (same key order as resolveCourierFromShipmentRow).
+ * Used by backfill to populate courierName from existing payloads without API calls.
+ */
+export function resolveCourierFromRawJson(raw: unknown): string | null {
+  if (raw == null || typeof raw !== 'object') return null
+  const v =
+    getStringFromRaw(raw, 'courier_name') ??
+    getStringFromRaw(raw, 'courier_company_name') ??
+    getStringFromRaw(raw, 'carrier_name') ??
+    getStringFromRaw(raw, 'courier') ??
+    getStringFromRaw(raw, 'carrier') ??
+    getStringFromRaw(raw, 'pickup_partner_name') ??
+    getStringFromRaw(raw, 'logistic_partner') ??
+    getStringFromRawPath(raw, 'courier.name') ??
+    getStringFromRawPath(raw, 'courier.company_name')
+  return v ?? null
 }
 
 /** Get shipment created date from raw row (same logic as upsertShipment). */
@@ -395,12 +440,13 @@ async function upsertShipment(connectionId: string, s: ShiprocketShipmentRow) {
   const shiprocketCreatedAt = parseShiprocketDate(createdAtRaw)
   const paymentMethod = getStringFromRaw(s, 'payment_method')
 
+  const courierName = resolveCourierFromShipmentRow(s)
   const shared = {
     orderId: s.order_id ? String(s.order_id) : null,
     channelOrderId,
     status: s.status ?? null,
     statusCode: typeof s.status_code === 'number' ? s.status_code : null,
-    courierName: s.courier_name ?? null,
+    courierName,
     awbCode: s.awb_code ?? null,
     isCod: !!s.is_cod,
     codAmount,
@@ -458,6 +504,9 @@ async function syncTrackingForConnection(
       }
       if (result.channelOrderId != null) {
         data.channelOrderId = result.channelOrderId
+      }
+      if (result.courierName != null) {
+        data.courierName = result.courierName
       }
 
       await prisma.shiprocketShipment.update({
@@ -542,4 +591,475 @@ async function mapShiprocketToShopify(connectionId: string) {
       })
     }
   }
+}
+
+export type BackfillCourierResult = {
+  /** Number of shipments with courierName null at start of this run (candidates for repair). */
+  totalCandidates: number
+  updatedFromRaw: number
+  updatedFromTracking: number
+  stillNull: number
+  /** True when no rows remain with courierName null (full repair complete). */
+  completedFully: boolean
+}
+
+const BACKFILL_RAW_BATCH = 500
+const BACKFILL_TRACKING_BATCH_PER_REQUEST = 150
+const BACKFILL_TRACKING_DELAY_MS = 350
+
+/**
+ * Backfill ShiprocketShipment.courierName for rows where it is null.
+ * One run: (1) Process ALL candidates from stored rawJson in batches (no API); (2) Then up to
+ * trackingBatchPerRequest rows via tracking API (rate-limited). Caller can re-invoke until
+ * completedFully is true for a full one-click experience.
+ */
+export async function backfillShiprocketCourierNames(
+  connectionId: string,
+  options?: { trackingBatchPerRequest?: number }
+): Promise<BackfillCourierResult> {
+  const trackingCap = Math.min(
+    Math.max(options?.trackingBatchPerRequest ?? BACKFILL_TRACKING_BATCH_PER_REQUEST, 0),
+    200
+  )
+  const totalCandidates = await prisma.shiprocketShipment.count({
+    where: { connectionId, courierName: null },
+  })
+  let updatedFromRaw = 0
+  let updatedFromTracking = 0
+
+  // Phase 1: resolve from stored rawJson only (all candidates, no API calls)
+  let cursor: string | undefined
+  do {
+    const batch = await prisma.shiprocketShipment.findMany({
+      where: { connectionId, courierName: null, rawJson: { not: null } },
+      select: { id: true, rawJson: true },
+      take: BACKFILL_RAW_BATCH,
+      orderBy: { id: 'asc' },
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    })
+    if (batch.length === 0) break
+    for (const row of batch) {
+      const courier = resolveCourierFromRawJson(row.rawJson)
+      if (courier) {
+        await prisma.shiprocketShipment.update({
+          where: { id: row.id },
+          data: { courierName: courier },
+        })
+        updatedFromRaw++
+      }
+    }
+    cursor = batch[batch.length - 1]?.id
+  } while (cursor)
+
+  // Phase 2: for remaining null, fetch tracking (capped per request to avoid timeout/rate limits)
+  if (trackingCap > 0) {
+    let token: string | undefined
+    try {
+      token = await getValidToken(connectionId)
+    } catch {
+      // Token failure: skip tracking phase
+    }
+    if (token) {
+      const toFetch = await prisma.shiprocketShipment.findMany({
+        where: { connectionId, courierName: null },
+        select: { id: true, shipmentId: true },
+        take: trackingCap,
+        orderBy: { id: 'asc' },
+      })
+      for (let i = 0; i < toFetch.length; i++) {
+        if (i > 0) await new Promise((r) => setTimeout(r, BACKFILL_TRACKING_DELAY_MS))
+        try {
+          const result = await fetchShipmentTracking(token, toFetch[i].shipmentId)
+          if (result.courierName) {
+            await prisma.shiprocketShipment.update({
+              where: { id: toFetch[i].id },
+              data: { courierName: result.courierName },
+            })
+            updatedFromTracking++
+          }
+        } catch {
+          // Skip failed tracking
+        }
+      }
+    }
+  }
+
+  const stillNull = await prisma.shiprocketShipment.count({
+    where: { connectionId, courierName: null },
+  })
+
+  return {
+    totalCandidates,
+    updatedFromRaw,
+    updatedFromTracking,
+    stillNull,
+    completedFully: stillNull === 0,
+  }
+}
+
+export type BackfillPincodeResult = {
+  /** Rows with null deliveryPincode at start (candidates). */
+  candidates: number
+  /** Phase 1: rows updated from shipment.rawJson. */
+  shipmentRawHits: number
+  /** Phase 2: rows updated from linked ShiprocketOrder.rawJson. */
+  linkedOrderHits: number
+  /** Phase 3: rows updated from fetchOrderById API. */
+  orderApiHits: number
+  /** Phase 3: non-fatal API errors (e.g. per-shipment failures). */
+  orderApiErrors: string[]
+  /** Rows still missing delivery pincode after this run. */
+  stillMissing: number
+}
+
+const BACKFILL_PINCODE_BATCH = 500
+const BACKFILL_PINCODE_API_BATCH = 100
+const BACKFILL_PINCODE_API_DELAY_MS = 400
+
+function setDeliveryFromRaw(
+  raw: unknown
+): { deliveryPincode?: string; deliveryCity?: string; deliveryState?: string } {
+  const pin = getPincodeFromRaw(raw)?.trim() || null
+  const city = getCityFromRaw(raw)?.trim() || null
+  const state = getStateFromRaw(raw)?.trim() || null
+  const data: { deliveryPincode?: string; deliveryCity?: string; deliveryState?: string } = {}
+  if (pin) data.deliveryPincode = pin
+  if (city) data.deliveryCity = city
+  if (state) data.deliveryState = state
+  return data
+}
+
+/**
+ * Backfill ShiprocketShipment delivery pincode/city/state for historical rows.
+ * 1) From stored shipment rawJson; 2) From linked ShiprocketOrder.rawJson (orders API payload);
+ * 3) From Shiprocket order API (GET order by id) when still missing. Persists to deliveryPincode/City/State.
+ * Idempotent; does not overwrite existing values. Safe to rerun.
+ */
+/** Normalize order id for join: Shiprocket APIs may return number or string. */
+function normalizeOrderIdForJoin(v: string | null | undefined): string | null {
+  if (v == null || String(v).trim() === '') return null
+  return String(v).trim()
+}
+
+export async function backfillShiprocketPincodes(connectionId: string): Promise<BackfillPincodeResult> {
+  const candidates = await prisma.shiprocketShipment.count({
+    where: { connectionId, deliveryPincode: null },
+  })
+  const orderApiErrors: string[] = []
+  let shipmentRawHits = 0
+  let linkedOrderHits = 0
+  let orderApiHits = 0
+
+  // Phase 1: from shipment rawJson
+  let cursor: string | undefined
+  do {
+    const batch = await prisma.shiprocketShipment.findMany({
+      where: { connectionId, deliveryPincode: null, rawJson: { not: null } },
+      select: { id: true, rawJson: true },
+      take: BACKFILL_PINCODE_BATCH,
+      orderBy: { id: 'asc' },
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    })
+    if (batch.length === 0) break
+    for (const row of batch) {
+      const data = setDeliveryFromRaw(row.rawJson)
+      if (Object.keys(data).length > 0) {
+        await prisma.shiprocketShipment.update({ where: { id: row.id }, data })
+        shipmentRawHits++
+      }
+    }
+    cursor = batch[batch.length - 1]?.id
+  } while (cursor)
+
+  // Phase 2: from linked ShiprocketOrder.rawJson.
+  // Join: shipment.orderId (from shipments API order_id) === order.shiprocketId (from orders API id). Both normalized to string for reliable match.
+  const withOrderId = await prisma.shiprocketShipment.findMany({
+    where: { connectionId, deliveryPincode: null, orderId: { not: null } },
+    select: { id: true, orderId: true },
+    orderBy: { id: 'asc' },
+  })
+  if (withOrderId.length > 0) {
+    const orderIds = [...new Set(withOrderId.map((s) => normalizeOrderIdForJoin(s.orderId)).filter(Boolean))] as string[]
+    const orders = await prisma.shiprocketOrder.findMany({
+      where: { connectionId, shiprocketId: { in: orderIds }, rawJson: { not: null } },
+      select: { shiprocketId: true, rawJson: true },
+    })
+    // Map by normalized shiprocketId so we match shipment.orderId (string) to order.shiprocketId (string)
+    const orderByShiprocketId = new Map<string, unknown>()
+    for (const o of orders) {
+      const k = normalizeOrderIdForJoin(o.shiprocketId)
+      if (k) orderByShiprocketId.set(k, o.rawJson as unknown)
+    }
+    for (const s of withOrderId) {
+      const key = normalizeOrderIdForJoin(s.orderId)
+      const orderRaw = key ? orderByShiprocketId.get(key) : null
+      if (!orderRaw) continue
+      const data = setDeliveryFromRaw(orderRaw)
+      if (Object.keys(data).length > 0) {
+        await prisma.shiprocketShipment.update({ where: { id: s.id }, data })
+        linkedOrderHits++
+      }
+    }
+  }
+
+  // Phase 3: fetch order by id from API for remaining (rate-limited)
+  let apiUserToken: string | undefined
+  const phase3Candidates = await prisma.shiprocketShipment.count({
+    where: { connectionId, deliveryPincode: null, orderId: { not: null } },
+  })
+  if (phase3Candidates > 0) {
+    const conn = await prisma.shiprocketConnection.findUnique({
+      where: { id: connectionId },
+      select: { shiprocketApiEmail: true, shiprocketApiPassword: true },
+    })
+    const apiEmail = conn?.shiprocketApiEmail?.trim() ?? ''
+    const apiPassword = conn?.shiprocketApiPassword ?? ''
+    if (!apiEmail || !apiPassword) {
+      orderApiErrors.push(
+        'Phase 3 skipped — Shiprocket API User credentials not set. Add them in Settings → Integrations → Shiprocket.'
+      )
+    } else {
+      try {
+        apiUserToken = await getShiprocketApiUserToken(apiEmail, apiPassword)
+      } catch (err) {
+        orderApiErrors.push(`API User token: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+    if (apiUserToken) {
+      let iterationResolved = 0
+      let remainingAfterIteration = 0
+      do {
+        iterationResolved = 0
+        const batch = await prisma.shiprocketShipment.findMany({
+          where: { connectionId, deliveryPincode: null, orderId: { not: null } },
+          select: { id: true, orderId: true },
+          take: BACKFILL_PINCODE_API_BATCH,
+          orderBy: { id: 'asc' },
+        })
+        if (batch.length === 0) break
+
+        for (const s of batch) {
+          try {
+            const orderId = s.orderId!.trim()
+            const order = await fetchOrderById(apiUserToken, orderId)
+            if (order) {
+              const data = setDeliveryFromRaw(order)
+              if (Object.keys(data).length > 0) {
+                await prisma.shiprocketShipment.update({ where: { id: s.id }, data })
+                iterationResolved++
+                orderApiHits++
+              }
+            }
+            await new Promise((r) => setTimeout(r, BACKFILL_PINCODE_API_DELAY_MS))
+          } catch (err) {
+            orderApiErrors.push(`Shipment ${s.id} (order ${s.orderId}): ${err instanceof Error ? err.message : String(err)}`)
+          }
+        }
+
+        remainingAfterIteration = await prisma.shiprocketShipment.count({
+          where: { connectionId, deliveryPincode: null, orderId: { not: null } },
+        })
+      } while (remainingAfterIteration > 0 && iterationResolved > 0)
+    }
+  }
+
+  const stillMissing = await prisma.shiprocketShipment.count({
+    where: { connectionId, deliveryPincode: null },
+  })
+
+  return {
+    candidates,
+    shipmentRawHits,
+    linkedOrderHits,
+    orderApiHits,
+    orderApiErrors,
+    stillMissing,
+  }
+}
+
+/** Keys we try when extracting pincode/city/state (for debug output). */
+const ADDRESS_PATHS = [
+  'customer_pincode',
+  'delivery_code',
+  'customer_city',
+  'customer_state',
+  'order_to_pincode',
+  'to_pincode',
+  'delivery_pincode',
+  'pin_code',
+  'pincode',
+  'to_address',
+  'address',
+  'order_to_city',
+  'to_city',
+  'order_to_state',
+  'to_state',
+] as const
+
+function rawJsonKeys(raw: unknown): string[] {
+  if (raw == null || typeof raw !== 'object') return []
+  return Object.keys(raw as Record<string, unknown>)
+}
+
+function sampleAddressFromRaw(raw: unknown): Record<string, unknown> {
+  if (raw == null || typeof raw !== 'object') return {}
+  const o = raw as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  for (const key of ADDRESS_PATHS) {
+    const v = o[key]
+    if (v !== undefined && v !== null) {
+      if (typeof v === 'object' && v !== null && !Array.isArray(v)) {
+        out[key] = Object.keys(v as Record<string, unknown>).slice(0, 10)
+      } else {
+        out[key] = typeof v === 'string' ? v.slice(0, 50) : v
+      }
+    }
+  }
+  return out
+}
+
+export type PincodeBackfillDebugSample = {
+  shipmentDbId: string
+  shipmentId: string
+  orderId: string | null
+  /** Top-level keys in shipment.rawJson */
+  shipmentRawKeys: string[]
+  /** Whether getPincodeFromRaw(shipment.rawJson) returns non-null */
+  shipmentHasPincode: boolean
+  /** Sample of address-like keys in shipment.rawJson */
+  shipmentAddressSample: Record<string, unknown>
+  /** Whether a ShiprocketOrder row exists with shiprocketId === shipment.orderId */
+  orderFound: boolean
+  orderShiprocketId?: string
+  orderRawKeys?: string[]
+  orderHasPincode?: boolean
+  orderAddressSample?: Record<string, unknown>
+  /** If we called fetchOrderById (GET /v1/external/orders/show/{id}) */
+  apiCalled: boolean
+  /** Endpoint called for Phase 3 (e.g. GET /v1/external/orders/show/{id}) */
+  endpointCalled?: string
+  /** Shiprocket order id passed to the API (must be order id, not shipment id or channel order id) */
+  idUsed?: string | null
+  /** Whether the order-detail response has data.customer_pincode or data.delivery_code */
+  responseHasCustomerPincode?: boolean
+  /** Whether we would persist deliveryPincode/deliveryCity/deliveryState from this response */
+  wouldPersistDeliveryPincode?: boolean
+  apiError?: string
+  apiResponseKeys?: string[]
+  apiHasPincode?: boolean
+  apiAddressSample?: Record<string, unknown>
+}
+
+export type PincodeBackfillDebugResult = {
+  connectionId: string
+  sampleSize: number
+  samples: PincodeBackfillDebugSample[]
+}
+
+/**
+ * Trace 3–5 unresolved ShiprocketShipment rows to see which phase can supply pincode.
+ * Use for debugging: which phase is failing and what the actual payload shapes are.
+ */
+export async function debugPincodeBackfillTrace(
+  connectionId: string,
+  options?: { sampleSize?: number }
+): Promise<PincodeBackfillDebugResult> {
+  const sampleSize = Math.min(Math.max(options?.sampleSize ?? 5, 1), 10)
+  const shipments = await prisma.shiprocketShipment.findMany({
+    where: { connectionId, deliveryPincode: null },
+    select: { id: true, shipmentId: true, orderId: true, rawJson: true },
+    take: sampleSize,
+    orderBy: { id: 'asc' },
+  })
+  const samples: PincodeBackfillDebugSample[] = []
+  let token: string | undefined
+  try {
+    token = await getValidToken(connectionId)
+  } catch {
+    // api calls will be skipped
+  }
+  const orderIds = [...new Set(shipments.map((s) => s.orderId).filter(Boolean))] as string[]
+  const orders = await prisma.shiprocketOrder.findMany({
+    where: { connectionId, shiprocketId: { in: orderIds } },
+    select: { shiprocketId: true, rawJson: true },
+  })
+  const orderByShiprocketId = new Map(orders.map((o) => [o.shiprocketId, o]))
+
+  for (const s of shipments) {
+    const shipmentRawKeys = rawJsonKeys(s.rawJson)
+    const shipmentHasPincode = !!(getPincodeFromRaw(s.rawJson)?.trim())
+    const shipmentAddressSample = sampleAddressFromRaw(s.rawJson)
+
+    const order = s.orderId ? orderByShiprocketId.get(s.orderId) : null
+    const orderFound = !!order
+    let orderShiprocketId: string | undefined
+    let orderRawKeys: string[] | undefined
+    let orderHasPincode: boolean | undefined
+    let orderAddressSample: Record<string, unknown> | undefined
+    if (order) {
+      orderShiprocketId = order.shiprocketId
+      orderRawKeys = order.rawJson ? rawJsonKeys(order.rawJson) : []
+      orderHasPincode = !!(getPincodeFromRaw(order.rawJson)?.trim())
+      orderAddressSample = order.rawJson ? sampleAddressFromRaw(order.rawJson) : undefined
+    }
+
+    const orderIdForApi = s.orderId?.trim() ?? null
+    const endpointCalled = orderIdForApi
+      ? `GET ${SHIPROCKET_BASE}${SHIPROCKET_ORDER_SHOW_PATH}${orderIdForApi}`
+      : undefined
+    let apiCalled = false
+    let apiError: string | undefined
+    let apiResponseKeys: string[] | undefined
+    let apiHasPincode: boolean | undefined
+    let apiAddressSample: Record<string, unknown> | undefined
+    let responseHasCustomerPincode: boolean | undefined
+    let wouldPersistDeliveryPincode: boolean | undefined
+    if (token && orderIdForApi) {
+      apiCalled = true
+      try {
+        const apiOrder = await fetchOrderById(token, orderIdForApi)
+        if (apiOrder) {
+          apiResponseKeys = rawJsonKeys(apiOrder)
+          const pin = getPincodeFromRaw(apiOrder)?.trim()
+          apiHasPincode = !!pin
+          wouldPersistDeliveryPincode = !!pin
+          const raw = apiOrder as Record<string, unknown>
+          responseHasCustomerPincode = !!(
+            (typeof raw.customer_pincode === 'string' && raw.customer_pincode.trim() !== '') ||
+            (typeof raw.delivery_code === 'string' && raw.delivery_code.trim() !== '')
+          )
+          apiAddressSample = sampleAddressFromRaw(apiOrder)
+        } else {
+          apiError = 'fetchOrderById returned null'
+        }
+      } catch (err) {
+        apiError = err instanceof Error ? err.message : String(err)
+      }
+    }
+
+    samples.push({
+      shipmentDbId: s.id,
+      shipmentId: s.shipmentId,
+      orderId: s.orderId,
+      shipmentRawKeys,
+      shipmentHasPincode,
+      shipmentAddressSample,
+      orderFound,
+      orderShiprocketId,
+      orderRawKeys,
+      orderHasPincode,
+      orderAddressSample,
+      apiCalled,
+      endpointCalled,
+      idUsed: orderIdForApi,
+      responseHasCustomerPincode,
+      wouldPersistDeliveryPincode,
+      apiError,
+      apiResponseKeys,
+      apiHasPincode,
+      apiAddressSample,
+    })
+  }
+
+  return { connectionId, sampleSize: samples.length, samples }
 }

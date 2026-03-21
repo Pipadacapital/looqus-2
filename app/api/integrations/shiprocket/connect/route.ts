@@ -55,3 +55,37 @@ export async function POST(request: NextRequest) {
     )
   }
 }
+
+export async function PATCH(request: NextRequest) {
+  let body: {
+    workspaceId: string
+    shiprocketApiEmail?: string
+    shiprocketApiPassword?: string
+  }
+  try {
+    body = await request.json()
+  } catch {
+    return NextResponse.json({ error: 'Invalid body' }, { status: 400 })
+  }
+
+  const { workspaceId, shiprocketApiEmail, shiprocketApiPassword } = body
+  if (!workspaceId || !shiprocketApiEmail || !shiprocketApiPassword) {
+    return NextResponse.json(
+      { error: 'workspaceId, shiprocketApiEmail, and shiprocketApiPassword are required' },
+      { status: 400 }
+    )
+  }
+
+  const auth = await requireWorkspaceAdmin(workspaceId)
+  if ('error' in auth) return auth.error
+
+  await prisma.shiprocketConnection.update({
+    where: { workspaceId },
+    data: {
+      shiprocketApiEmail: shiprocketApiEmail.trim(),
+      shiprocketApiPassword,
+    },
+  })
+
+  return NextResponse.json({ success: true })
+}

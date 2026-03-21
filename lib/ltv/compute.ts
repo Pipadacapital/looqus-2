@@ -5,6 +5,8 @@ import { getDailyVariableContribution } from '@/lib/workspace-costs'
 import type { LtvDimension, LtvMetric, LtvMode, LtvRow, LtvSummary } from './types'
 import { fetchCustomerFirstOrdersInRange } from '@/lib/metrics'
 import { getOrderInclusionWhere, normalizeOrderFilterSettings } from '@/lib/order-filters'
+import { buildShiprocketDateRangeWhere } from '@/lib/shiprocket-list'
+import { RTO_STATUS_CODES } from '@/lib/workspace-metrics/constants'
 import { getEffectiveDailyAggregates } from '@/lib/effective-daily'
 import { resolveLineItemCogs, normalizeCogsSettings } from '@/lib/cogs'
 
@@ -198,36 +200,53 @@ async function getOrderCogs(
   return cogsByOrder
 }
 
-const RTO_CODES = [9, 10, 14, 20, 40, 41, 46]
-
 async function getRtoOrderIds(
   prisma: PrismaClient,
   workspaceId: string,
   connectionId: string,
   fromDate: Date,
-  toDate: Date
+  toDate: Date,
+  orderInclusionWhere: Prisma.ShopifyOrderWhereInput
 ): Promise<Set<string>> {
   const sr = await prisma.shiprocketConnection.findUnique({
     where: { workspaceId },
     select: { id: true, status: true },
   })
   if (!sr || sr.status !== 'CONNECTED') return new Set()
+  const dateWhere = buildShiprocketDateRangeWhere(fromDate, toDate)
   const shipments = await prisma.shiprocketShipment.findMany({
     where: {
       connectionId: sr.id,
-      shippedAt: { gte: fromDate, lte: toDate },
+      ...dateWhere,
       OR: [
-        { trackingStatusCode: { in: RTO_CODES } },
-        { statusCode: { in: RTO_CODES } },
+        { trackingStatusCode: { in: [...RTO_STATUS_CODES] } },
+        { statusCode: { in: [...RTO_STATUS_CODES] } },
       ],
     },
     select: { channelOrderId: true },
   })
+  const channelIds = shipments
+    .map((s) => s.channelOrderId)
+    .filter((id): id is string => id != null && id !== '')
+  if (channelIds.length === 0) return new Set()
+  const cleanIds = channelIds.map((id) => id.replace(/^#/, ''))
+  const matched = await prisma.shopifyOrder.findMany({
+    where: {
+      connectionId,
+      OR: [
+        { orderNumber: { in: cleanIds } },
+        { name: { in: channelIds } },
+      ],
+      ...orderInclusionWhere,
+    },
+    select: { orderNumber: true, name: true },
+  })
   const ids = new Set<string>()
-  for (const s of shipments) {
-    if (s.channelOrderId && s.channelOrderId !== '') {
-      ids.add(s.channelOrderId)
-      ids.add(s.channelOrderId.replace(/^#/, ''))
+  for (const o of matched) {
+    if (o.orderNumber) ids.add(o.orderNumber)
+    if (o.name) {
+      ids.add(o.name)
+      ids.add(o.name.replace(/^#/, ''))
     }
   }
   return ids
@@ -354,7 +373,7 @@ export async function computeLtv(
     getDailyRates(prisma, workspace.id, connectionId, fromDate, toDateExtended, storeCurrency, orderInclusionWhere),
     getDailyAdSpend(prisma, workspace, fromDate, toDateExtended),
     getDailyReturnsAndSales(prisma, connectionId, fromDate, toDateExtended, orderInclusionWhere),
-    getRtoOrderIds(prisma, workspace.id, connectionId, fromDate, toDateExtended),
+    getRtoOrderIds(prisma, workspace.id, connectionId, fromDate, toDateExtended, orderInclusionWhere),
   ])
 
   if (firstOrders.length === 0) {
