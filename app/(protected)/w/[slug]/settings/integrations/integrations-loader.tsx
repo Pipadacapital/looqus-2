@@ -51,6 +51,7 @@ export async function IntegrationsLoader({ slug }: { slug: string }) {
           select: {
             id: true,
             email: true,
+            shiprocketApiEmail: true,
             status: true,
             lastSyncAt: true,
             lastSyncError: true,
@@ -140,6 +141,7 @@ export async function IntegrationsLoader({ slug }: { slug: string }) {
           ? {
               id: shiprocketConnection.id,
               email: shiprocketConnection.email,
+              shiprocketApiEmail: shiprocketConnection.shiprocketApiEmail ?? null,
               status: shiprocketConnection.status,
               lastSyncAt: shiprocketConnection.lastSyncAt?.toISOString() ?? null,
               lastSyncError: shiprocketConnection.lastSyncError,

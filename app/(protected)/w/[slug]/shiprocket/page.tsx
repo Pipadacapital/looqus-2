@@ -7,6 +7,9 @@ import {
   buildShiprocketDateRangeWhere,
   getPageSizeOptions,
 } from '@/lib/shiprocket-list'
+import { getCachedWorkspace } from '@/lib/server-cache'
+import { prisma } from '@/lib/prisma'
+import { createClient } from '@/lib/server'
 
 export type ShipmentData = {
   id: string
@@ -41,14 +44,20 @@ export default async function ShiprocketPage({
   const workspace = await getCachedWorkspace(slug)
   if (!workspace) redirect('/')
 
-  const membership = await prisma.workspaceMember.findFirst({
-    where: { workspaceId: workspace.id, userId: user.id },
-    select: { role: true },
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
+  if (!user) redirect('/')
+
+  const membership = await prisma.workspaceMember.findUnique({
+    where: { userId_workspaceId: { userId: user.id, workspaceId: workspace.id } },
   })
 
-  if (!membership) redirect('/')
-
-  const conn = workspace.shiprocketConnection
+  const conn = await prisma.shiprocketConnection.findUnique({
+    where: { workspaceId: workspace.id },
+  })
   const isConnected = conn?.status === 'CONNECTED'
 
   const listParams = parseShiprocketListParams(sp)
