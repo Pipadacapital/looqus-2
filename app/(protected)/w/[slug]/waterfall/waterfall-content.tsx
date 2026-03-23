@@ -232,7 +232,10 @@ export function WaterfallContent({
                     <XAxis
                       type="number"
                       tickFormatter={(v) =>
-                        formatCurrency(v, currency, { compact: true })
+                        formatCurrency(v, currency, {
+                          notation: 'compact',
+                          compactDisplay: 'short',
+                        })
                       }
                       tick={{ fontSize: 11 }}
                     />

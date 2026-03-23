@@ -91,13 +91,13 @@ export async function GET(
   }
 
   const shopifyConnectionId = workspace.shopifyConnections[0]?.id ?? null
-  const orderInclusionWhere = getOrderInclusionWhereFromWorkspace(workspace)
+  const orderInclusionWhere = getOrderInclusionWhereFromWorkspace(workspace as any)
 
   const result = await getRtoAnalytics(prisma, srConn.id, fromDate, toDate, {
     workspace: {
       id: workspace.id,
-      skippedShopifyOrderTags: workspace.skippedShopifyOrderTags,
-      skipZeroSalesOrders: workspace.skipZeroSalesOrders,
+      skippedShopifyOrderTags: workspace.skipped_shopify_order_tags,
+      skipZeroSalesOrders: workspace.skip_zero_sales_orders,
     },
     shopifyConnectionId,
     orderInclusionWhere,
