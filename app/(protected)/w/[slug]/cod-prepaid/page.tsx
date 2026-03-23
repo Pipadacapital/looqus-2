@@ -43,6 +43,7 @@ export default async function CodPrepaidPage({
     typeof sp.from === 'string' && sp.from.trim() !== '' ? sp.from : defaultFromStr
   const to = typeof sp.to === 'string' && sp.to.trim() !== '' ? sp.to : defaultTo
   const initialCodFee = typeof sp.codFeePerOrder === 'string' ? sp.codFeePerOrder : '30'
+  const initialGatewayFee = typeof sp.gatewayFeePercent === 'string' ? sp.gatewayFeePercent : '2'
   const initialReturnShipping = typeof sp.returnShippingPerRto === 'string' ? sp.returnShippingPerRto : '80'
 
   return (
@@ -52,6 +53,7 @@ export default async function CodPrepaidPage({
       initialFrom={from}
       initialTo={to}
       initialCodFee={initialCodFee}
+      initialGatewayFee={initialGatewayFee}
       initialReturnShipping={initialReturnShipping}
     />
   )

@@ -11,6 +11,7 @@ import {
   IconLayoutColumns,
 } from '@tabler/icons-react'
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import { DateRangeFilter } from '@/components/analytics'
 import { formatCurrency } from '@/components/analytics/types'
 import {
@@ -34,6 +35,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { usePageInsights } from '@/hooks/use-page-insights'
+import { InsightSheet } from '@/components/ai-engine/insight-sheet'
 import type { PnLRow } from '@/app/api/workspaces/[slug]/pnl/route'
 
 type Granularity = 'day' | 'week' | 'month' | 'quarter'
@@ -151,6 +154,9 @@ export function PnlContent({
   )
   const [error, setError] = useState<string | null>(null)
 
+  // AI Insight — global job store
+  const insightProps = usePageInsights(workspaceSlug, 'pnl', from, to)
+
   const handleFromChange = (value: string) => {
     setFrom(value)
     setLoading(true)
@@ -259,12 +265,34 @@ export function PnlContent({
 
   return (
     <div className="flex flex-col gap-6 py-4 md:py-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
-          <IconCurrencyDollar className="h-6 w-6 text-[#96bf48]" />
-          P&L
-        </h1>
-        <p className="text-sm text-muted-foreground mt-0.5">{workspaceName}</p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
+            <IconCurrencyDollar className="h-6 w-6 text-[#96bf48]" />
+            P&L
+          </h1>
+          <p className="text-sm text-muted-foreground mt-0.5">{workspaceName}</p>
+        </div>
+
+        {shopifyConnection && (
+          <InsightSheet
+            page="pnl"
+            from={from}
+            to={to}
+            sheetOpen={insightProps.sheetOpen}
+            onSheetOpenChange={insightProps.setSheetOpen}
+            insights={insightProps.insights}
+            loading={insightProps.loading}
+            error={insightProps.error}
+            cached={insightProps.cached}
+            model={insightProps.model}
+            dataThrough={insightProps.dataThrough}
+            insufficientData={insightProps.insufficientData}
+            isDone={insightProps.isDone}
+            onGenerate={insightProps.generate}
+            pageLoading={loading}
+          />
+        )}
       </div>
 
       <div className="rounded-xl border bg-card shadow-sm">

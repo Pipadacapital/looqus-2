@@ -3,6 +3,7 @@
 import { Separator } from "@/components/ui/separator"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { NotificationPanel } from "@/components/notification-panel"
+import { InsightJobIndicator } from "@/components/ai-engine/insight-job-indicator"
 
 export function SiteHeader() {
   return (
@@ -14,6 +15,7 @@ export function SiteHeader() {
           className="mx-2 data-[orientation=vertical]:h-4"
         />
         <div className="ml-auto flex items-center gap-2">
+          <InsightJobIndicator />
           <NotificationPanel />
         </div>
       </div>

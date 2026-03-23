@@ -3,13 +3,18 @@
 import { useState, useEffect, useMemo } from 'react'
 import { format, startOfYear, endOfDay } from 'date-fns'
 import Link from 'next/link'
-import { IconSpeakerphone, IconLoader2 } from '@tabler/icons-react'
+import {
+  IconSpeakerphone,
+  IconLoader2,
+} from '@tabler/icons-react'
 import { Button } from '@/components/ui/button'
 import { DateRangeFilter } from '@/components/analytics'
 import { formatCurrency } from '@/components/analytics/types'
 import type { GoalEvaluation } from '@/lib/metrics/goals'
 import type { GoalMetricId } from '@/lib/metrics/goal-metrics-registry'
 import { KpiGoalLine } from '@/components/goals/kpi-goal-line'
+import { usePageInsights } from '@/hooks/use-page-insights'
+import { InsightSheet } from '@/components/ai-engine/insight-sheet'
 import {
   ChartContainer,
   type ChartConfig,
@@ -183,6 +188,9 @@ export function AcquisitionContent({
   const [loading, setLoading] = useState(!!workspaceSlug && !!from && !!to)
   const [error, setError] = useState<string | null>(null)
 
+  // AI Insight — global job store
+  const insightProps = usePageInsights(workspaceSlug, 'acquisition', from, to)
+
   const handleFromChange = (value: string) => {
     setFrom(value)
     setLoading(true)
@@ -261,14 +269,36 @@ export function AcquisitionContent({
 
   return (
     <div className="flex flex-col gap-6 py-4 md:py-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
-          <IconSpeakerphone className="h-6 w-6 text-[#96bf48]" />
-          Acquisition
-        </h1>
-        <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
-          Everything on this page is calculated by allocating refunds and variable costs to the order date, not the refunded date. This is to prevent your metrics from looking good on all days except for the days you process refunds.
-        </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
+            <IconSpeakerphone className="h-6 w-6 text-[#96bf48]" />
+            Acquisition
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
+            Everything on this page is calculated by allocating refunds and variable costs to the order date, not the refunded date. This is to prevent your metrics from looking good on all days except for the days you process refunds.
+          </p>
+        </div>
+
+        {hasShopifyConnection && (
+          <InsightSheet
+            page="acquisition"
+            from={from}
+            to={to}
+            sheetOpen={insightProps.sheetOpen}
+            onSheetOpenChange={insightProps.setSheetOpen}
+            insights={insightProps.insights}
+            loading={insightProps.loading}
+            error={insightProps.error}
+            cached={insightProps.cached}
+            model={insightProps.model}
+            dataThrough={insightProps.dataThrough}
+            insufficientData={insightProps.insufficientData}
+            isDone={insightProps.isDone}
+            onGenerate={insightProps.generate}
+            pageLoading={loading}
+          />
+        )}
       </div>
 
       <div className="rounded-xl border bg-card shadow-sm">

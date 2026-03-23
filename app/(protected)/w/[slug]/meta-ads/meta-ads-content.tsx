@@ -41,6 +41,8 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { DateRangeFilter } from '@/components/analytics'
 import type { GoalEvaluation } from '@/lib/metrics/goals'
 import { KpiGoalLine } from '@/components/goals/kpi-goal-line'
+import { usePageInsights } from '@/hooks/use-page-insights'
+import { InsightSheet } from '@/components/ai-engine/insight-sheet'
 
 export type CampaignIntent = 'acquisition' | 'non_acquisition' | 'brand' | 'unclassified'
 
@@ -395,6 +397,8 @@ export function MetaAdsContent({
   const [sorting, setSorting] = useState<SortingState>([{ id: 'spend', desc: true }])
   const [intentFilter, setIntentFilter] = useState<string>('all')
   const [adsView, setAdsView] = useState<'performance' | 'funnel' | 'creative'>('performance')
+
+  const insightProps = usePageInsights(slug, 'meta-ads', dateFrom, dateTo)
 
   const viewParam = view === 'daily' ? 'daily' : 'campaigns'
   const groupByParam = view === 'adsets' ? 'adset' : 'campaign'
@@ -842,12 +846,31 @@ export function MetaAdsContent({
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Meta Ads</h1>
-        <p className="text-sm text-muted-foreground">
-          Campaign and ad set performance for the selected Meta Ads account.
-          Data is aggregated from daily records. Sync from Dashboard or Admin.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-2xl font-semibold tracking-tight">Meta Ads</h1>
+          <p className="text-sm text-muted-foreground">
+            Campaign and ad set performance for the selected Meta Ads account.
+            Data is aggregated from daily records. Sync from Dashboard or Admin.
+          </p>
+        </div>
+        <InsightSheet
+          page="meta-ads"
+          from={dateFrom}
+          to={dateTo}
+          sheetOpen={insightProps.sheetOpen}
+          onSheetOpenChange={insightProps.setSheetOpen}
+          insights={insightProps.insights}
+          loading={insightProps.loading}
+          error={insightProps.error}
+          cached={insightProps.cached}
+          model={insightProps.model}
+          dataThrough={insightProps.dataThrough}
+          insufficientData={insightProps.insufficientData}
+          isDone={insightProps.isDone}
+          onGenerate={insightProps.generate}
+          pageLoading={isLoading}
+        />
       </div>
 
       <Tabs

@@ -81,6 +81,7 @@ model Workspace {
   festivals                  WorkspaceFestival[]
   metricGoals                WorkspaceMetricGoal[]
   marketingActions           MarketingAction[]
+  aiInsights                 AiInsight[]
   createdBy                  User                       @relation("WorkspaceCreator", fields: [createdById], references: [id])
 
   @@map("workspaces")
@@ -151,6 +152,31 @@ model WorkspaceAdCampaignClassification {
   @@unique([workspaceId, platform, campaignId])
   @@index([workspaceId])
   @@map("workspace_ad_campaign_classifications")
+}
+
+model AiInsight {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId String    @map("workspace_id") @db.Uuid
+  page        String    @db.VarChar(64)
+  dateFrom    DateTime  @map("date_from")
+  dateTo      DateTime  @map("date_to")
+  filtersHash String    @map("filters_hash") @db.VarChar(64)
+  status      String    @default("done") @db.VarChar(16) // pending | processing | done | failed
+  content     String    @default("") @db.Text
+  provider    String    @default("") @db.VarChar(32)
+  model       String    @default("") @db.VarChar(120)
+  tokensUsed  Int       @default(0) @map("tokens_used")
+  latencyMs   Int       @default(0) @map("latency_ms")
+  metadata    Json?
+  createdAt   DateTime  @default(now()) @map("created_at")
+  expiresAt   DateTime  @map("expires_at")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, page, dateFrom, dateTo])
+  @@index([workspaceId, filtersHash])
+  @@index([workspaceId, status])
+  @@index([expiresAt])
+  @@map("ai_insights")
 }
 
 model WorkspaceAiInsightsCache {

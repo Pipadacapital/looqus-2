@@ -41,6 +41,8 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { DateRangeFilter } from '@/components/analytics'
 import type { GoalEvaluation } from '@/lib/metrics/goals'
 import { KpiGoalLine } from '@/components/goals/kpi-goal-line'
+import { usePageInsights } from '@/hooks/use-page-insights'
+import { InsightSheet } from '@/components/ai-engine/insight-sheet'
 
 export type CampaignIntent = 'acquisition' | 'non_acquisition' | 'brand' | 'unclassified'
 
@@ -225,6 +227,8 @@ export function GoogleAdsContent({
   ])
   const [intentFilter, setIntentFilter] = useState('all')
   const [adsView, setAdsView] = useState<'performance' | 'funnel'>('performance')
+
+  const insightProps = usePageInsights(slug, 'google-ads', dateFrom, dateTo)
 
   const { data, isLoading, isError, error, refetch } = useQuery<MetricsResponse>({
     queryKey: ['google-ads', 'metrics', slug, dateFrom, dateTo, view, intentFilter],
@@ -553,11 +557,30 @@ export function GoogleAdsContent({
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Google Ads</h1>
-        <p className="text-sm text-muted-foreground">
-          Campaign performance for the selected Google Ads account. Data is aggregated from daily records (one row per campaign per day in DB). Sync from Dashboard or Admin.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-2xl font-semibold tracking-tight">Google Ads</h1>
+          <p className="text-sm text-muted-foreground">
+            Campaign performance for the selected Google Ads account. Data is aggregated from daily records (one row per campaign per day in DB). Sync from Dashboard or Admin.
+          </p>
+        </div>
+        <InsightSheet
+          page="google-ads"
+          from={dateFrom}
+          to={dateTo}
+          sheetOpen={insightProps.sheetOpen}
+          onSheetOpenChange={insightProps.setSheetOpen}
+          insights={insightProps.insights}
+          loading={insightProps.loading}
+          error={insightProps.error}
+          cached={insightProps.cached}
+          model={insightProps.model}
+          dataThrough={insightProps.dataThrough}
+          insufficientData={insightProps.insufficientData}
+          isDone={insightProps.isDone}
+          onGenerate={insightProps.generate}
+          pageLoading={isLoading}
+        />
       </div>
 
       <Tabs value={adsView} onValueChange={(v) => setAdsView(v as 'performance' | 'funnel')}>

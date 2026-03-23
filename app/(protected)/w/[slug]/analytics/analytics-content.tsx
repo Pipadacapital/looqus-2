@@ -3,7 +3,11 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { format } from 'date-fns'
-import { IconChartLine, IconLoader2, IconPlugConnected } from '@tabler/icons-react'
+import {
+  IconChartLine,
+  IconLoader2,
+  IconPlugConnected,
+} from '@tabler/icons-react'
 import { Button } from '@/components/ui/button'
 import {
   ChartContainer,
@@ -12,6 +16,8 @@ import {
   type ChartConfig,
 } from '@/components/ui/chart'
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid } from 'recharts'
+import { usePageInsights } from '@/hooks/use-page-insights'
+import { InsightSheet } from '@/components/ai-engine/insight-sheet'
 import {
   DateRangeFilter,
   AnalyticsMetricsCards,
@@ -70,6 +76,9 @@ export function AnalyticsContent({
     error: null,
   }))
 
+  // AI Insight — global job store
+  const insightProps = usePageInsights(workspaceSlug, 'analytics', analyticsFrom, analyticsTo)
+
   const handleFromChange = (value: string) => {
     setAnalyticsFrom(value)
     setShopifyAnalytics((prev) => ({ ...prev, loading: true, error: null }))
@@ -115,21 +124,43 @@ export function AnalyticsContent({
 
   return (
     <div className="flex flex-col gap-6 py-4 md:py-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
-          <IconChartLine className="h-6 w-6 text-[#96bf48]" />
-          Analytics
-        </h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
-          {workspaceName}
-          {shopifyConnection?.lastSyncAt && (
-            <>
-              {' · '}
-              Last refreshed:{' '}
-              {format(new Date(shopifyConnection.lastSyncAt), 'MMM d, h:mm a')}
-            </>
-          )}
-        </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
+            <IconChartLine className="h-6 w-6 text-[#96bf48]" />
+            Analytics
+          </h1>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            {workspaceName}
+            {shopifyConnection?.lastSyncAt && (
+              <>
+                {' · '}
+                Last refreshed:{' '}
+                {format(new Date(shopifyConnection.lastSyncAt), 'MMM d, h:mm a')}
+              </>
+            )}
+          </p>
+        </div>
+
+        {shopifyConnection && (
+          <InsightSheet
+            page="analytics"
+            from={analyticsFrom}
+            to={analyticsTo}
+            sheetOpen={insightProps.sheetOpen}
+            onSheetOpenChange={insightProps.setSheetOpen}
+            insights={insightProps.insights}
+            loading={insightProps.loading}
+            error={insightProps.error}
+            cached={insightProps.cached}
+            model={insightProps.model}
+            dataThrough={insightProps.dataThrough}
+            insufficientData={insightProps.insufficientData}
+            isDone={insightProps.isDone}
+            onGenerate={insightProps.generate}
+            pageLoading={shopifyAnalytics.loading}
+          />
+        )}
       </div>
 
       {!shopifyConnection ? (

@@ -5,6 +5,8 @@ import { useRouter, usePathname } from 'next/navigation'
 import { IconTruck, IconLoader2, IconPackage } from '@tabler/icons-react'
 import { DateRangeFilter } from '@/components/analytics'
 import { Button } from '@/components/ui/button'
+import { usePageInsights } from '@/hooks/use-page-insights'
+import { InsightSheet } from '@/components/ai-engine/insight-sheet'
 import {
   Table,
   TableBody,
@@ -69,6 +71,8 @@ export function LogisticsContent({
   const pathname = usePathname()
   const [from, setFrom] = useState(initialFrom)
   const [to, setTo] = useState(initialTo)
+
+  const insightProps = usePageInsights(slug, 'logistics', from, to)
   const [loading, setLoading] = useState(true)
   const [data, setData] = useState<LogisticsResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -112,14 +116,33 @@ export function LogisticsContent({
 
   return (
     <div className="flex flex-col gap-6 py-4 md:py-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
-          <IconTruck className="h-7 w-7" />
-          Logistics
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Shiprocket operational reporting: logistics cost and fulfillment. Same shipment set and RTO definition as the Shiprocket page for this date range.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
+            <IconTruck className="h-7 w-7" />
+            Logistics
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Shiprocket operational reporting: logistics cost and fulfillment. Same shipment set and RTO definition as the Shiprocket page for this date range.
+          </p>
+        </div>
+        <InsightSheet
+          page="logistics"
+          from={from}
+          to={to}
+          sheetOpen={insightProps.sheetOpen}
+          onSheetOpenChange={insightProps.setSheetOpen}
+          insights={insightProps.insights}
+          loading={insightProps.loading}
+          error={insightProps.error}
+          cached={insightProps.cached}
+          model={insightProps.model}
+          dataThrough={insightProps.dataThrough}
+          insufficientData={insightProps.insufficientData}
+          isDone={insightProps.isDone}
+          onGenerate={insightProps.generate}
+          pageLoading={loading}
+        />
       </div>
 
       <div className="flex flex-wrap items-center gap-3">

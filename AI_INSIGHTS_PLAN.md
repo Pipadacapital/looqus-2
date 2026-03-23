@@ -1,512 +1,327 @@
-# AI Insights Engine — Complete Plan & Data Map
+# CLAUDE.md — Shopify Analytics Project Guidelines
 
-## Architecture Decisions (Final)
-
-| Decision | Choice | Reason |
-|----------|--------|--------|
-| Primary AI provider | Claude API (`@anthropic-ai/sdk`) | Most capable, extended thinking, tool use |
-| Secondary providers | OpenAI, Ollama | Fallback + free local option |
-| Orchestration framework | None — direct SDKs only | No LangChain, no LlamaIndex |
-| Vector DB | Skip for now → pgvector later | Already on Postgres, no new infra |
-| RAG | Later — after insights accumulate | RAG needs data first |
-| Calculation code location | Stays in `lib/` forever | Never duplicated into ai-engine |
-| New AI code location | `module/ai-engine/` only | Never touch `module/ai/` (dead) |
-| Token budget per insight | ~2,000 tokens max | Never send raw DB rows |
-| Insight generation | Smart on-demand + cache | Not daily cron, not every page load |
-| Cache key | hash(workspaceId + page + from + to + filters) | Per user context |
-| Cache TTL | 6 hours, invalidate on sync | Balance freshness vs cost |
-| Streaming | Always | UX non-negotiable |
-| Save insights to DB | Yes, from day 1 | Prepares for RAG later |
+## What This Project Is
+Multi-workspace ecommerce analytics SaaS for Shopify brands. Each workspace connects to Shopify, Meta Ads, Google Ads, Shiprocket, and Klaviyo. The platform calculates P&L, cohorts, LTV, acquisition, logistics, and ad performance metrics.
 
 ---
 
-## module/ai-engine/ — Full Structure
+## Tech Stack
 
+| Layer | Tech |
+|-------|------|
+| Framework | Next.js 16 (App Router) |
+| Language | TypeScript (strict) |
+| React | React 19 |
+| Database | PostgreSQL via Prisma 5 |
+| Auth | Supabase SSR (`@supabase/ssr`) |
+| Styling | Tailwind CSS v4 |
+| UI Components | shadcn/ui, Radix UI, Base UI |
+| Icons | Tabler Icons (`@tabler/icons-react`), Lucide React |
+| Charts | Recharts |
+| Tables | TanStack Table v8 |
+| Data Fetching | TanStack Query v5 (client), Next.js fetch (server) |
+| Forms | react-hook-form + zod v4 |
+| Toasts | Sonner |
+| Carousel | Embla Carousel |
+| Markdown | react-markdown + remark-gfm |
+
+---
+
+## Project Structure
+
+```
+app/
+├── (protected)/w/[slug]/     ← All analytics pages (one folder per page)
+│   ├── dashboard/
+│   ├── analytics/
+│   ├── pnl/
+│   ├── waterfall/
+│   ├── acquisition/
+│   ├── cohorts/
+│   ├── lifetime-value/
+│   ├── timings/
+│   ├── distributions/
+│   ├── customer-lifecycle/
+│   ├── first-product-cascade/
+│   ├── meta-ads/
+│   ├── google-ads/
+│   ├── products/
+│   ├── inventory/
+│   ├── logistics/
+│   ├── rto-analytics/
+│   ├── pincode-intelligence/
+│   ├── cod-prepaid/
+│   ├── calendar/
+│   ├── email-sms/
+│   └── store/
+├── api/
+│   ├── workspaces/[slug]/    ← All workspace API routes
+│   ├── integrations/         ← OAuth + sync routes (Meta, Google, Shiprocket, Klaviyo)
+│   ├── shopify/              ← Shopify webhook + connect routes
+│   ├── cron/                 ← Scheduled sync jobs
+│   └── admin/                ← Admin-only sync triggers
+lib/
+├── metrics/                  ← Core analytics calculation functions
+├── cogs/                     ← Cost of goods sold resolution
+├── pnl/                      ← P&L bucketing utilities
+├── acquisition/              ← New customer acquisition calculations
+├── cohorts/                  ← Cohort analysis engine
+├── ltv/                      ← Lifetime value calculations
+├── timings/                  ← Repurchase timing analysis
+├── distributions/            ← Distribution/histogram analysis
+├── products/                 ← Product profitability
+├── workspace-metrics/        ← Shiprocket: logistics, RTO, COD/prepaid, pincode
+├── email-performance/        ← Klaviyo email/SMS metrics
+├── festivals/                ← Indian festival calendar
+├── integrations/             ← Meta, Google, Klaviyo, Shiprocket sync logic
+├── shopify/                  ← Shopify API client + bulk operations + sync
+├── ai-calc/                  ← OLD AI data prep — DO NOT USE OR MODIFY
+├── insights/                 ← OLD insight logic — DO NOT USE OR MODIFY
+├── effective-daily.ts        ← Daily aggregates with analytics/order fallback
+├── order-filters.ts          ← Order tag filtering + Prisma WHERE builders
+├── workspace-costs.ts        ← Variable cost daily allocation
+├── prisma.ts                 ← Prisma client singleton
+├── client.ts                 ← Supabase browser client
+└── server.ts                 ← Supabase server client
+module/
+├── ai/                       ← OLD AI module — DO NOT USE OR MODIFY
+└── ai-engine/                ← NEW AI insight engine (build here)
+prisma/
+└── schema.prisma             ← Single source of truth for DB schema
+```
+
+---
+
+## Running the Project
+
+```bash
+npm run dev           # Start dev server at localhost:3000
+npm run build         # Production build
+npm run db:push       # Push schema changes to DB (no migration file)
+npm run db:migrate    # Create + apply a named migration
+npm run db:generate   # Regenerate Prisma client after schema changes
+npm run db:studio     # Open Prisma Studio in browser
+```
+
+---
+
+## Database Rules
+
+- **Prisma is the only DB access method** — never use raw SQL unless absolutely required
+- **Never query `workspace_daily_metrics`** — this table is empty and unused
+- All date ranges use **UTC boundaries** (`T00:00:00.000Z` to `T23:59:59.999Z`)
+- Workspace membership must be validated on every API route before returning data
+- `lib/prisma.ts` exports the singleton Prisma client — always import from there
+
+### Key Prisma Models
+
+| Model | Purpose |
+|-------|---------|
+| `Workspace` | Core workspace (slug, plan, settings, timezone) |
+| `WorkspaceMember` | User ↔ Workspace membership + roles |
+| `ShopifyConnection` | Shopify integration status + last sync |
+| `ShopifyOrder` | Order headers |
+| `ShopifyLineItem` | Order line items (product, variant, qty, price) |
+| `ShopifyCustomer` | Customer records |
+| `ShopifyProduct` / `ShopifyProductVariant` | Product catalog |
+| `ShopifyDailyAggregate` | Cached daily order/revenue aggregates |
+| `ShopifyInventoryLevel` | Current stock levels |
+| `metaAdDaily` | Meta daily spend/impressions/conversions |
+| `googleAdDaily` | Google daily spend/impressions/conversions |
+| `shiprocketShipment` | Shipment records (status, courier, charges) |
+| `WorkspaceCost` | Fixed costs (shipping, packaging, website) |
+| `WorkspaceCogsSettings` | COGS configuration |
+| `WorkspaceMiscExpense` | Misc expense line items |
+| `WorkspaceAiInsightsCache` | Existing AI cache model (for reference only) |
+| `EmailPerformance` | Klaviyo email/SMS metrics |
+
+---
+
+## API Route Conventions
+
+- Every route validates Supabase auth + workspace membership before doing anything
+- Routes live at `app/api/workspaces/[slug]/[feature]/route.ts`
+- Use `NextResponse.json()` for responses
+- All errors return `{ error: string }` with appropriate HTTP status
+
+---
+
+## Key Shared Lib Functions (Reuse These — Never Rewrite)
+
+| Function | File | What It Does |
+|----------|------|-------------|
+| `getEffectiveDailyAggregates()` | `lib/effective-daily.ts` | Daily aggregates (analytics cache → order fallback) |
+| `getOrderInclusionWhere()` | `lib/order-filters.ts` | Prisma WHERE from workspace order filter settings |
+| `getFilteredDailyAggregates()` | `lib/order-filters.ts` | Applies workspace filters to daily aggregates |
+| `getDailyVariableContribution()` | `lib/workspace-costs.ts` | Daily variable cost allocation (shipping, packaging, etc.) |
+| `normalizeCogsSettings()` | `lib/cogs/index.ts` | Parse workspace COGS settings |
+| `resolveLineItemCogs()` | `lib/cogs/resolve.ts` | COGS per line item |
+| `computeLineItemsCogs()` | `lib/cogs/resolve.ts` | COGS for a set of line items |
+| `totalChargesFromRaw()` | `lib/shiprocket-charges.ts` | Shiprocket charge breakdown |
+| `getLogisticsSummary()` | `lib/workspace-metrics/logistics-summary.ts` | Shiprocket operational summary |
+| `fetchCustomerFirstOrdersInRange()` | `lib/metrics/customer-first-order.ts` | Identify first-time buyers |
+| `fetchAdSpendMapsWithClassification()` | `lib/metrics/ads-spend.ts` | Ad spend by campaign intent |
+| `getBuckets()` | `lib/pnl/buckets.ts` | Time buckets (day/week/month/quarter) |
+
+---
+
+## UI Conventions
+
+- Use **shadcn/ui** components as the base — install via `npx shadcn add [component]`
+- Icons: prefer **Tabler Icons** (`@tabler/icons-react`) over Lucide for new code
+- Toasts: always use **Sonner** (`import { toast } from "sonner"`)
+- Forms: always use **react-hook-form** + **zod** for validation
+- Data tables: use **TanStack Table** for sortable/filterable tables
+- Charts: use **Recharts**
+- Loading states: use skeleton components, never spinners alone
+- All monetary values display in workspace currency (default INR)
+
+---
+
+## AI Insight Engine — The Most Important Section
+
+### Golden Rules
+1. **All new AI code goes in `module/ai-engine/`** — never anywhere else
+2. **Never touch `module/ai/`** — old, legacy, abandoned
+3. **Never touch `lib/ai-calc/`** — old AI data prep, abandoned
+4. **Never touch `lib/insights/`** — old insight logic, abandoned
+5. **Build from scratch** — do not copy or adapt anything from old modules
+
+### Primary AI Provider
+- **Claude API** via `@anthropic-ai/sdk`
+- Secondary: OpenAI (`openai` SDK), Ollama (local)
+- No LangChain, no LlamaIndex, no external orchestration frameworks
+- Direct SDK calls only
+
+### module/ai-engine/ Structure
 ```
 module/ai-engine/
 ├── providers/
-│   ├── types.ts                # Unified AIProvider interface + ProviderCapabilities
-│   ├── claude.ts               # @anthropic-ai/sdk — streaming, tool use, extended thinking
-│   ├── openai.ts               # openai SDK — streaming, tool use
-│   ├── ollama.ts               # Ollama local — streaming
-│   └── router.ts               # Picks provider based on workspace config + fallback chain
-│
+│   ├── types.ts              # Unified provider interface + capability flags
+│   ├── claude.ts             # @anthropic-ai/sdk wrapper
+│   ├── openai.ts             # openai SDK wrapper
+│   ├── ollama.ts             # Ollama local wrapper
+│   └── router.ts             # Provider selection + fallback chain
 ├── config/
-│   └── workspace-ai-config.ts  # Read/write AI provider settings per workspace
-│                               # (provider, model, API key, insight depth)
-│
-├── context-adapters/           # THIN wrappers — call existing lib/ functions only
-│   ├── types.ts                # PageContext, InsightContext, MetricBriefing types
-│   ├── pnl.ts                  # → lib/pnl/ + lib/cogs/ + lib/workspace-costs.ts
-│   ├── waterfall.ts            # → same as pnl (flat, no bucketing)
-│   ├── acquisition.ts          # → lib/acquisition/compute.ts + lib/metrics/ads-spend.ts
-│   ├── cohorts.ts              # → lib/cohorts/compute.ts
-│   ├── lifetime-value.ts       # → lib/ltv/compute.ts
-│   ├── timings.ts              # → lib/timings/compute.ts
-│   ├── distributions.ts        # → lib/distributions/compute.ts
-│   ├── customer-lifecycle.ts   # → lib/metrics/customer-lifecycle-report.ts
-│   ├── first-product-cascade.ts# → lib/metrics/first-product-cascade.ts
-│   ├── meta-ads.ts             # → lib/metrics/paid-media-funnel.ts + ads-spend.ts
-│   ├── google-ads.ts           # → lib/metrics/google-funnel-aggregate.ts
-│   ├── products.ts             # → lib/products/compute.ts
-│   ├── inventory.ts            # → lib/workspace-metrics/ (inventory)
-│   ├── logistics.ts            # → lib/workspace-metrics/logistics-summary.ts
-│   ├── rto-analytics.ts        # → lib/workspace-metrics/rto-analytics.ts
-│   ├── cod-prepaid.ts          # → lib/workspace-metrics/cod-prepaid-analytics.ts
-│   ├── calendar.ts             # → lib/metrics/calendar-report.ts
-│   ├── email-sms.ts            # → lib/email-performance/compute.ts
-│   └── global.ts               # Combines multiple adapters for cross-page insight
-│
-├── analysis/                   # Pure math — no AI, no DB, no lib/ calls
-│   ├── comparator.ts           # Period-over-period % change for any metric object
-│   ├── anomaly.ts              # Z-score + IQR outlier detection
-│   └── trend.ts                # Trend direction (up/down/flat) + velocity
-│
+│   └── workspace-ai-config.ts  # Read/write workspace AI provider settings
+├── context-adapters/         # One file per page — thin wrappers over lib/ functions
+│   ├── types.ts              # PageContext, InsightContext types
+│   ├── pnl.ts
+│   ├── acquisition.ts
+│   ├── cohorts.ts
+│   ├── ... (one per analytics page)
+│   └── global.ts             # Combines adapters for cross-page insight
+├── analysis/                 # Pure math — no AI, no DB
+│   ├── comparator.ts         # Period-over-period % change
+│   ├── anomaly.ts            # Z-score / IQR anomaly detection
+│   └── trend.ts              # Trend direction + velocity
 ├── prompts/
-│   ├── system.ts               # Base system prompt (role, output format, rules)
-│   └── page/                   # Per-page prompt templates (know their specific metrics)
+│   ├── system.ts             # Base system prompt
+│   └── page/                 # Per-page prompt templates
 │       ├── pnl.ts
-│       ├── waterfall.ts
 │       ├── acquisition.ts
-│       ├── cohorts.ts
-│       ├── lifetime-value.ts
-│       ├── timings.ts
-│       ├── distributions.ts
-│       ├── customer-lifecycle.ts
-│       ├── first-product-cascade.ts
-│       ├── meta-ads.ts
-│       ├── google-ads.ts
-│       ├── products.ts
-│       ├── inventory.ts
-│       ├── logistics.ts
-│       ├── rto-analytics.ts
-│       ├── cod-prepaid.ts
-│       ├── calendar.ts
-│       ├── email-sms.ts
-│       └── global.ts
-│
+│       └── ... (one per page)
 ├── pipeline/
-│   ├── page-insight.ts         # Orchestrator: adapter → analysis → prompt → AI → cache
-│   ├── global-insight.ts       # Orchestrator: all adapters → AI → cross-page insight
-│   └── chat.ts                 # Streaming chat with page/global context
-│
+│   ├── page-insight.ts       # adapter → analysis → prompt → AI → insight
+│   ├── global-insight.ts     # all adapters → AI → cross-page insight
+│   └── chat.ts               # Streaming chat with context
 ├── cache/
-│   └── insight-cache.ts        # Read/write ai_insights DB table
-│
-├── types.ts                    # All shared types (Insight, Provider, Context, etc.)
-└── index.ts                    # Public API: generatePageInsight(), generateGlobalInsight(), chat()
+│   └── insight-cache.ts      # DB-backed cache (ai_insights table)
+├── types.ts                  # All shared types
+└── index.ts                  # Public API surface
 ```
+
+### Data Strategy
+- **Never send raw DB rows to AI** — only pre-computed metric summaries
+- **Hard limit: ~2,000 tokens of context per insight** — be ruthless about compression
+- **Context adapters call existing `lib/` functions** — zero calculation duplication
+- **Always auto-compare current vs prior period** before building the prompt
+- **Always save generated insights to the `ai_insights` DB table** (future RAG prep)
+
+### Insight Generation Strategy
+- **Smart on-demand with caching** — NOT a daily cron, NOT on every page load
+- Cache key: `hash(workspaceId + page + dateFrom + dateTo + filters)`
+- Cache TTL: 6 hours default
+- On page load: serve cached insight immediately (even if stale), regenerate in background
+- Invalidate cache on: data sync, date range change, manual refresh, provider change
+- Always stream responses — never make the user wait for a full response
+
+### Build Order
+1. `module/ai-engine/providers/` — Claude + router (foundation)
+2. `module/ai-engine/config/` — AI switcher + workspace settings
+3. DB table: `ai_insights` — save everything from day 1
+4. `module/ai-engine/analysis/` — pure math layer
+5. `module/ai-engine/context-adapters/` — starting with analytics page
+6. `module/ai-engine/prompts/` — per-page prompt templates
+7. `module/ai-engine/pipeline/` + API routes — orchestration + streaming
+8. UI — insight panel component (one, reused across all pages)
+9. Pages: analytics → pnl → cohorts → ... → global dashboard
+
+### RAG — Later
+- Skip RAG for now — no pgvector, no embeddings yet
+- When ready: add `embedding vector(1536)` to `ai_insights` table + backfill
+- Embedding model: OpenAI `text-embedding-3-small` (if key exists) or Ollama `nomic-embed-text` (free)
+- Never Pinecone — pgvector on existing Postgres is sufficient
+
+### What Makes Insights Powerful
+- Always compare to prior period (auto)
+- Detect anomalies statistically before prompting AI
+- AI reasons about PRE-ANALYZED data, not raw numbers
+- Per-page prompts that understand the specific metrics of that page
+- Specific, actionable recommendations — never just describing numbers
 
 ---
 
-## How the Pipeline Works (No Code)
+## What Never To Do
 
-```
-USER OPENS PAGE (e.g. P&L, date: last 30 days)
-        │
-        ▼
-[1] CHECK CACHE
-    Key: hash(workspaceId + "pnl" + from + to + filters)
-    HIT (fresh <6h)  → return cached insight immediately. Done.
-    HIT (stale >6h)  → return stale insight + trigger background regeneration
-    MISS             → proceed to step 2
-        │
-        ▼
-[2] CONTEXT ADAPTER (context-adapters/pnl.ts)
-    Calls existing lib/pnl functions for CURRENT period
-    Calls same functions for PRIOR period (auto)
-    Returns: { current: PnlMetrics, prior: PnlMetrics }
-        │
-        ▼
-[3] ANALYSIS LAYER (analysis/)
-    comparator.ts  → % change for every metric (revenue +12%, CM1 -3pp...)
-    anomaly.ts     → flag anything statistically unusual (z-score > 2)
-    trend.ts       → overall trend direction
-    Returns: { deltas, anomalies, trend } — enriched briefing
-        │
-        ▼
-[4] BUILD PROMPT (prompts/page/pnl.ts)
-    System prompt: "You are an expert ecommerce P&L analyst..."
-    User prompt:   Structured metric briefing (~2,000 tokens max)
-                   Includes: current metrics + % changes + anomalies
-                   NEVER includes raw rows
-        │
-        ▼
-[5] AI PROVIDER (providers/router.ts)
-    Route to: Claude (primary) → OpenAI → Ollama (fallback)
-    Stream response back to client
-        │
-        ▼
-[6] CACHE + SAVE
-    Save to ai_insights table (workspace, page, date range, insight text, model used)
-    Update cache
-        │
-        ▼
-[7] CLIENT receives streamed insight
-    Words appear progressively — no blank loading screen
-```
+- Never use `workspace_daily_metrics` — empty, unused
+- Never modify `module/ai/` — dead code
+- Never modify `lib/ai-calc/` — dead code
+- Never modify `lib/insights/` — dead code
+- Never use LangChain or any orchestration framework
+- Never use Pinecone — use pgvector when needed
+- Never send raw Prisma rows to AI
+- Never duplicate calculation logic — always call existing `lib/` functions
+- Never skip workspace membership validation in API routes
+- Never use `console.log` in production code — use proper error handling
+- Never hardcode workspace IDs or slugs
+- Never bypass Supabase auth
 
 ---
 
-## Insight Generation Strategy
+## Full Page ↔ API Route Map
 
-```
-TRIGGER                              ACTION
-─────────────────────────────────────────────────────────
-Page open, no cache                 Generate immediately (streaming)
-Page open, fresh cache (<6h)        Serve cache, no API call
-Page open, stale cache (>6h)        Serve stale + regenerate background
-Data sync completes                 Invalidate cache for that workspace
-User changes date range             New cache key → generate if not cached
-User clicks "Refresh Insight"       Force regenerate, update cache
-User changes AI provider/model      Force regenerate
-```
-
-### Pre-generation after sync (smart UX)
-When Shopify/Meta/Google sync finishes → queue background job to pre-generate
-insights for the workspace's last active pages. When user opens the page, insight
-is already waiting. Zero wait time.
+| Page | API Route |
+|------|-----------|
+| `/pnl` | `/api/workspaces/[slug]/pnl` |
+| `/waterfall` | `/api/workspaces/[slug]/waterfall` |
+| `/acquisition` | `/api/workspaces/[slug]/acquisition` |
+| `/cohorts` | `/api/workspaces/[slug]/cohorts` |
+| `/lifetime-value` | `/api/workspaces/[slug]/lifetime-value` |
+| `/timings` | `/api/workspaces/[slug]/timings` |
+| `/distributions` | `/api/workspaces/[slug]/distributions` |
+| `/customer-lifecycle` | `/api/workspaces/[slug]/customer-lifecycle` |
+| `/first-product-cascade` | `/api/workspaces/[slug]/first-product-cascade` |
+| `/meta-ads` | `/api/workspaces/[slug]/meta-ads/metrics` + `/creative` |
+| `/google-ads` | `/api/workspaces/[slug]/google-ads/metrics` |
+| `/products` | `/api/workspaces/[slug]/products` |
+| `/inventory` | `/api/workspaces/[slug]/inventory` |
+| `/logistics` | `/api/workspaces/[slug]/logistics` |
+| `/rto-analytics` | `/api/workspaces/[slug]/rto-analytics` |
+| `/pincode-intelligence` | `/api/workspaces/[slug]/pincode-intelligence` |
+| `/cod-prepaid` | `/api/workspaces/[slug]/cod-prepaid-analytics` |
+| `/calendar` | `/api/workspaces/[slug]/calendar-report` |
+| `/email-sms` | `/api/workspaces/[slug]/email-sms-report` |
+| `/store` | `/api/workspaces/[slug]/store/orders\|products\|customers` |
 
 ---
 
-## New API Routes to Create
+## New AI Engine API Routes (to be created)
 
 ```
 app/api/workspaces/[slug]/ai-engine/
-├── insights/route.ts     GET  ?page=pnl&from=2024-01-01&to=2024-01-31   (streaming)
-├── global/route.ts       GET  ?from=2024-01-01&to=2024-01-31             (streaming)
-├── chat/route.ts         POST { messages, page?, from?, to? }            (streaming)
-└── config/route.ts       GET + PATCH  { provider, model, apiKey, depth }
+├── insights/route.ts     # GET ?page=pnl&from=...&to=...  (streaming)
+├── global/route.ts       # GET ?from=...&to=...           (streaming)
+├── chat/route.ts         # POST with messages array        (streaming)
+└── config/route.ts       # GET + PATCH provider settings
 ```
-
----
-
-## New DB Table to Create
-
-```sql
--- ai_insights
-id              uuid PK
-workspace_id    uuid FK → workspaces
-page            varchar(64)   -- "pnl", "cohorts", "global", etc.
-date_from       date
-date_to         date
-filters_hash    varchar(64)   -- hash of any extra filters
-context_json    jsonb         -- the metric briefing sent to AI (for debugging)
-insight_text    text          -- AI's streamed response
-model_used      varchar(64)   -- "claude-sonnet-4-5", "gpt-4o", etc.
-provider        varchar(32)   -- "claude", "openai", "ollama"
-tokens_used     int
-created_at      timestamptz
--- Future RAG: add embedding vector(1536) column + backfill
-```
-
----
-
-## AI Switcher — Workspace Settings
-
-```
-Provider options:
-  🟣 Claude (Anthropic)  → claude-haiku-3-5 / claude-sonnet-4-5 / claude-opus-4
-  🟢 OpenAI              → gpt-4o-mini / gpt-4o
-  ⚫ Ollama (Local/Free) → llama3.2 / mistral / qwen2.5
-
-API Key strategy:
-  BYOK (Bring Your Own Key) — user enters their own API key
-  Stored encrypted per workspace
-  Ollama = no key needed (free, local)
-
-Insight depth:
-  Quick  → fast/cheap model (haiku, gpt-4o-mini)
-  Deep   → powerful model (sonnet, gpt-4o) + extended thinking for Claude
-
-Per-task routing (internal):
-  Page summary       → Quick model
-  Anomaly reasoning  → Deep model
-  Global insight     → Deep model + extended thinking
-  Chat               → Deep model
-```
-
----
-
-## What Makes Insights Powerful (Not Just Describing Numbers)
-
-| Weak (old) | Powerful (new) |
-|------------|----------------|
-| "Revenue is ₹12.4L" | "Revenue grew 18% vs prior period, driven by repeat customers who account for 61% of orders — highest repeat share in 3 months" |
-| "ROAS is 3.2" | "Meta ROAS dropped from 4.1 → 3.2 in 7 days. Branded campaigns held at 4.8 but Generic collapsed to 1.9 — investigate creative fatigue" |
-| "RTO rate is 18%" | "RTO is 18% but COD orders drive 94% of all RTOs. Pincodes 400001–400099 have 31% RTO rate — consider blocking or prepaid-only for this zone" |
-| "CM1 is 38%" | "CM1 compressed 4pp this week. COGS flat, but variable shipping cost jumped ₹38/order — likely zone shift after adding new SKUs in Category X" |
-
-This quality comes from:
-1. Always auto-comparing current vs prior period
-2. Statistical anomaly detection before prompting AI
-3. Per-page prompts that know the metrics and what matters
-4. AI reasons over pre-analyzed data — not raw numbers
-
----
-
-## Build Order
-
-```
-PHASE 1 — Foundation
-─────────────────────────────────────────────────
-1. module/ai-engine/providers/  (Claude + OpenAI + Ollama + router)
-2. module/ai-engine/config/     (workspace AI settings)
-3. DB: ai_insights table         (prisma schema + migration)
-
-PHASE 2 — Data Layer
-─────────────────────────────────────────────────
-4. module/ai-engine/analysis/   (comparator, anomaly, trend — pure math)
-5. module/ai-engine/context-adapters/  (start with analytics/pnl)
-
-PHASE 3 — AI Layer
-─────────────────────────────────────────────────
-6. module/ai-engine/prompts/    (system prompt + analytics page prompt)
-7. module/ai-engine/pipeline/page-insight.ts
-8. module/ai-engine/cache/
-9. API route: /ai-engine/insights
-
-PHASE 4 — UI
-─────────────────────────────────────────────────
-10. InsightPanel component (reused across all pages)
-11. Wire up to analytics page first
-12. AI switcher in workspace settings
-
-PHASE 5 — All Other Pages (one by one)
-─────────────────────────────────────────────────
-13. pnl → waterfall → acquisition → cohorts → ltv →
-    timings → distributions → lifecycle → first-product-cascade →
-    meta-ads → google-ads → products → inventory →
-    logistics → rto → cod-prepaid → calendar → email-sms
-
-PHASE 6 — Global Insight
-─────────────────────────────────────────────────
-14. module/ai-engine/context-adapters/global.ts
-15. module/ai-engine/pipeline/global-insight.ts
-16. API route: /ai-engine/global
-17. Global insight panel on dashboard
-
-PHASE 7 — Chat
-─────────────────────────────────────────────────
-18. module/ai-engine/pipeline/chat.ts
-19. API route: /ai-engine/chat (streaming)
-20. Chat UI component (sidebar or panel)
-
-PHASE 8 — RAG (Later, after insights accumulate)
-─────────────────────────────────────────────────
-21. Add pgvector extension to Postgres
-22. Add embedding vector(1536) to ai_insights table
-23. module/ai-engine/embeddings/ (OpenAI or Ollama embed)
-24. module/ai-engine/rag/ (store + retrieve)
-25. Inject historical context into prompts
-```
-
----
-
-## Every Page: Data Sources & Calculations
-
-### 1. P&L (`/pnl`)
-**API:** `/api/workspaces/[slug]/pnl`
-**Prisma Tables:** ShopifyDailyAggregate, workspaceCost, metaAdDaily, googleAdDaily, shiprocketShipment
-**Key lib/ functions:**
-- `getBuckets()`, `getBucketUtcDateStrings()`, `allocateMonthlyToBucket()` — time bucketing
-- `getFilteredDailyAggregates()` — daily aggregates with order filters
-- `computeLineItemsCogs()`, `normalizeCogsSettings()` — COGS
-- `getDailyVariableContribution()` — variable costs
-- `totalChargesFromRaw()` — Shiprocket charges
-**AI context:** Revenue trend, margin compression/expansion, cost driver changes, period comparison
-
----
-
-### 2. Waterfall (`/waterfall`)
-**API:** `/api/workspaces/[slug]/waterfall`
-**Prisma Tables:** Same as P&L + ShopifyOrder (new/existing customer split)
-**Key lib/ functions:** Same as P&L (flat, no time bucketing)
-**AI context:** Which waterfall step is the biggest drag, NRC split trend
-
----
-
-### 3. Acquisition (`/acquisition`)
-**API:** `/api/workspaces/[slug]/acquisition`
-**Prisma Tables:** ShopifyCustomer, ShopifyOrder, ShopifyLineItem, metaAdDaily, googleAdDaily, shiprocketShipment, workspaceCost
-**Key lib/ functions:**
-- `computeAcquisition()`, `computeAcquisitionTrend()`, `computeAcquisitionComposition()`
-- `fetchCustomerFirstOrdersInRange()` — first-time buyers
-- `fetchAdSpendMapsWithClassification()` — ad spend by intent
-- `resolveLineItemCogs()`, `getDailyVariableContribution()`
-**AI context:** CAC trend, ROAS by platform, new customer CM2, acquisition efficiency
-
----
-
-### 4. Cohorts (`/cohorts`)
-**API:** `/api/workspaces/[slug]/cohorts`
-**Prisma Tables:** ShopifyCustomer, ShopifyOrder, ShopifyLineItem, shiprocketShipment, workspaceCost, workspaceMiscExpense
-**Key lib/ functions:**
-- `computeCohorts()` — cohort engine
-- `fetchCustomerFirstOrdersInRange()`, `buildDailyRates()`, `resolveLineItemCogs()`
-**AI context:** Which cohorts are strongest, repeat rate trend, LTV/CAC health
-
----
-
-### 5. Lifetime Value (`/lifetime-value`)
-**API:** `/api/workspaces/[slug]/lifetime-value`
-**Prisma Tables:** ShopifyCustomer, ShopifyOrder, ShopifyLineItem, shiprocketShipment, workspaceCost
-**Key lib/ functions:** `computeLtv()`, `fetchCustomerFirstOrdersInRange()`, `resolveLineItemCogs()`
-**AI context:** Best LTV products/segments, repeat rate by dimension, growth levers
-
----
-
-### 6. Timings (`/timings`)
-**API:** `/api/workspaces/[slug]/timings`
-**Prisma Tables:** ShopifyCustomer, ShopifyOrder, ShopifyLineItem
-**Key lib/ functions:** `computeTimings()`, `fetchCustomerFirstOrdersInRange()`, `median()`, `mean()`
-**AI context:** Reactivation window, fastest repeat products, drop-off between orders
-
----
-
-### 7. Distributions (`/distributions`)
-**API:** `/api/workspaces/[slug]/distributions`
-**Prisma Tables:** ShopifyOrder, ShopifyLineItem
-**Key lib/ functions:** `computeDistributions()`, `computeMode()`, `computeMean()`, `resolveLineItemCogs()`
-**AI context:** Products with high mode/mean divergence, CM1 spread anomalies
-
----
-
-### 8. Customer Lifecycle (`/customer-lifecycle`)
-**API:** `/api/workspaces/[slug]/customer-lifecycle`
-**Prisma Tables:** ShopifyCustomer, ShopifyOrder
-**Key lib/ functions:** `computeCustomerLifecycleReport()`, `classifyCustomerLifecycle()`, `computeChurnThresholds()`
-**AI context:** Churn risk, dormant customer opportunity, active customer trend
-
----
-
-### 9. First Product Cascade (`/first-product-cascade`)
-**API:** `/api/workspaces/[slug]/first-product-cascade`
-**Prisma Tables:** ShopifyCustomer, ShopifyOrder, ShopifyLineItem
-**Key lib/ functions:** `computeFirstProductCascade()`, `pickPrimaryFirstProductLine()`
-**AI context:** Best gateway products, strongest cascade sequences, cross-sell opportunities
-
----
-
-### 10. Meta Ads (`/meta-ads`)
-**API:** `/api/workspaces/[slug]/meta-ads/metrics` + `/creative`
-**Prisma Tables:** metaAdDaily, metaVideoCreative
-**Key lib/ functions:** `addMetaDailyRowToAccumulator()`, `resolveCampaignIntent()`, `diagnoseMetaFunnel()`, `buildGoalEvaluations()`
-**AI context:** ROAS trend by intent, funnel drop-off, creative fatigue signals
-
----
-
-### 11. Google Ads (`/google-ads`)
-**API:** `/api/workspaces/[slug]/google-ads/metrics`
-**Prisma Tables:** googleAdDaily
-**Key lib/ functions:** `diagnoseGoogleFunnel()`, `googleMergedFunnelSnapshot()`, `mapGoogleConversionActionToStage()`
-**AI context:** Conversion rate trend, spend efficiency, funnel health
-
----
-
-### 12. Products (`/products`)
-**API:** `/api/workspaces/[slug]/products`
-**Prisma Tables:** ShopifyProduct, ShopifyProductVariant, ShopifyOrder, ShopifyLineItem, ShopifyReturn
-**Key lib/ functions:** `computeProducts()`, `resolveLineItemCogs()`, `getEffectiveDailyAggregates()`
-**AI context:** Margin leaders/laggards, return rate anomalies, Pareto analysis
-
----
-
-### 13. Inventory (`/inventory`)
-**API:** `/api/workspaces/[slug]/inventory`
-**Prisma Tables:** ShopifyProduct, ShopifyProductVariant, ShopifyInventoryLevel, ShopifyOrder, ShopifyLineItem
-**Key lib/ functions:** `classifyInventoryStatus()`, `computeDaysLeft()`, `computeSellThrough()`
-**AI context:** Stockout risk, overstock waste, sell-through outliers
-
----
-
-### 14. Logistics (`/logistics`)
-**API:** `/api/workspaces/[slug]/logistics`
-**Prisma Tables:** shiprocketShipment, shiprocketOrder
-**Key lib/ functions:** `getLogisticsSummary()`, `totalChargesFromRaw()`
-**AI context:** Delivery rate trend, cost per shipment, RTO vs delivered ratio
-
----
-
-### 15. RTO Analytics (`/rto-analytics`)
-**API:** `/api/workspaces/[slug]/rto-analytics`
-**Prisma Tables:** ShopifyOrder, ShopifyLineItem, shiprocketShipment, shiprocketOrder
-**Key lib/ functions:** `getRtoAnalytics()`
-**AI context:** RTO rate by courier/product/payment method, revenue at risk, actionable reductions
-
----
-
-### 16. Pincode Intelligence (`/pincode-intelligence`)
-**API:** `/api/workspaces/[slug]/pincode-intelligence`
-**Prisma Tables:** shiprocketShipment (rawJson), ShopifyOrder, ShopifyLineItem
-**Key lib/ functions:** `getPincodeIntelligence()`
-**AI context:** High-RTO zones, high-COD zones, geographic risk concentration
-
----
-
-### 17. COD vs Prepaid (`/cod-prepaid`)
-**API:** `/api/workspaces/[slug]/cod-prepaid-analytics`
-**Prisma Tables:** shiprocketShipment, shiprocketOrder
-**Key lib/ functions:** `getCodPrepaidAnalytics()`
-**AI context:** COD vs prepaid financial impact, break-even shift recommendations
-
----
-
-### 18. Calendar (`/calendar`)
-**API:** `/api/workspaces/[slug]/calendar-report`
-**Prisma Tables:** ShopifyOrder, ShopifyLineItem, ShopifyDailyAggregate, workspaceFestival, workspaceMarketingAction
-**Key lib/ functions:** `computeCalendarReport()`
-**AI context:** Festival performance vs expectation, campaign impact, seasonality patterns
-
----
-
-### 19. Email & SMS (`/email-sms`)
-**API:** `/api/workspaces/[slug]/email-sms-report`
-**Prisma Tables:** EmailPerformance
-**Key lib/ functions:** `aggregateEmailPerformance()`
-**AI context:** Open/click rate benchmarks, revenue per recipient trend, best performing flows
-
----
-
-## Shared lib/ Functions (Never Duplicate These)
-
-| Function | File | Used By |
-|----------|------|---------|
-| `getEffectiveDailyAggregates()` | `lib/effective-daily.ts` | P&L, Acquisition, Products, Distributions |
-| `getOrderInclusionWhere()` | `lib/order-filters.ts` | P&L, Waterfall, RTO, Timings, Calendar, Lifecycle |
-| `getFilteredDailyAggregates()` | `lib/order-filters.ts` | P&L, Waterfall |
-| `getDailyVariableContribution()` | `lib/workspace-costs.ts` | P&L, Waterfall, Acquisition, Cohorts, LTV, Products |
-| `normalizeCogsSettings()` | `lib/cogs/index.ts` | All pages with COGS |
-| `resolveLineItemCogs()` | `lib/cogs/resolve.ts` | P&L, Acquisition, Cohorts, LTV, Products, Distributions |
-| `computeLineItemsCogs()` | `lib/cogs/resolve.ts` | P&L, Waterfall |
-| `totalChargesFromRaw()` | `lib/shiprocket-charges.ts` | P&L, Waterfall, Logistics |
-| `getLogisticsSummary()` | `lib/workspace-metrics/logistics-summary.ts` | Logistics, P&L, Waterfall |
-| `fetchCustomerFirstOrdersInRange()` | `lib/metrics/customer-first-order.ts` | Acquisition, Cohorts, LTV, Timings, First Product |
-| `fetchAdSpendMapsWithClassification()` | `lib/metrics/ads-spend.ts` | Acquisition, Meta Ads, Google Ads |
-| `buildGoalEvaluations()` | `lib/metrics/goals.ts` | Acquisition, Meta Ads, Google Ads |
-| `getBuckets()` | `lib/pnl/buckets.ts` | P&L |
-| `computeChurnThresholds()` | `lib/metrics/churn-thresholds.ts` | Customer Lifecycle |
-
----
-
-## Prisma Models — Complete Usage Map
-
-| Model | Pages |
-|-------|-------|
-| ShopifyOrder | P&L, Waterfall, Acquisition, Cohorts, LTV, Timings, Distributions, Products, RTO, Pincode, Calendar, Lifecycle, First Product, Store |
-| ShopifyLineItem | P&L, Waterfall, Acquisition, Cohorts, LTV, Timings, Distributions, Products, RTO, Pincode, Calendar, First Product |
-| ShopifyCustomer | Acquisition, Cohorts, LTV, Timings, Lifecycle, First Product, Store |
-| ShopifyProduct / Variant | Products, Inventory, Store |
-| ShopifyInventoryLevel | Inventory |
-| ShopifyDailyAggregate | P&L, Waterfall, Acquisition, Calendar |
-| ShopifyReturn | Products |
-| metaAdDaily | P&L, Waterfall, Acquisition, Meta Ads |
-| googleAdDaily | P&L, Waterfall, Acquisition, Google Ads |
-| shiprocketShipment | P&L, Waterfall, Acquisition, Cohorts, LTV, Logistics, RTO, Pincode, COD-Prepaid |
-| shiprocketOrder | Logistics, RTO, COD-Prepaid |
-| workspaceCost | P&L, Waterfall, Acquisition, Cohorts, LTV |
-| workspaceMiscExpense | Cohorts |
-| workspaceFestival | Calendar |
-| MarketingAction | Calendar |
-| EmailPerformance | Email-SMS |
-| WorkspaceAiInsightsCache | Legacy — do not use, replaced by ai_insights table |
