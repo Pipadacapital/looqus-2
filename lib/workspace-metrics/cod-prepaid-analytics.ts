@@ -58,6 +58,18 @@ function isDeliveredByStatus(status: string | null): boolean {
   return (status ?? '').toUpperCase().includes('DELIVER')
 }
 
+/** Same as Pincode Intelligence: read numeric fields from Shiprocket order/shipment raw JSON. */
+function getNumberFromRaw(raw: unknown, key: string): number | null {
+  if (raw == null || typeof raw !== 'object') return null
+  const v = (raw as Record<string, unknown>)[key]
+  if (typeof v === 'number' && Number.isFinite(v)) return v
+  if (typeof v === 'string') {
+    const n = Number(v.trim())
+    if (Number.isFinite(n)) return n
+  }
+  return null
+}
+
 /**
  * COD vs Prepaid analytics for a date range. Shiprocket-first; fees passed in for effective revenue.
  */
@@ -86,16 +98,32 @@ export async function getCodPrepaidAnalytics(
     },
   })
 
-  const orderIds = [...new Set(shipments.map((s) => s.orderId).filter(Boolean))] as string[]
+  const shiprocketOrderIdSet = new Set<string>()
+  for (const s of shipments) {
+    if (s.orderId) shiprocketOrderIdSet.add(s.orderId)
+    const rawOid = getNumberFromRaw(s.rawJson, 'order_id')
+    if (rawOid != null) shiprocketOrderIdSet.add(String(rawOid))
+  }
+  const allShiprocketOrderIds = [...shiprocketOrderIdSet]
+
   const orderTotals = new Map<string, number>()
-  if (orderIds.length > 0) {
+  /** shiprocket_orders.shiprocket_id → total from order rawJson (Pincode Intelligence path). */
+  const orderTotalByRawOrderId = new Map<string, number>()
+  if (allShiprocketOrderIds.length > 0) {
     const orders = await prisma.shiprocketOrder.findMany({
-      where: { connectionId: shiprocketConnectionId, shiprocketId: { in: orderIds } },
-      select: { shiprocketId: true, total: true },
+      where: {
+        connectionId: shiprocketConnectionId,
+        shiprocketId: { in: allShiprocketOrderIds },
+      },
+      select: { shiprocketId: true, total: true, rawJson: true },
     })
     for (const o of orders) {
       const t = o.total != null ? Number(o.total) : null
       if (t != null && t > 0) orderTotals.set(o.shiprocketId, t)
+      const fromRaw = getNumberFromRaw(o.rawJson, 'total')
+      if (fromRaw != null && fromRaw > 0) {
+        orderTotalByRawOrderId.set(o.shiprocketId, fromRaw)
+      }
     }
   }
 
@@ -116,11 +144,13 @@ export async function getCodPrepaidAnalytics(
     const isDelivered = isDeliveredByStatus(s.status)
     const codAmount = s.codAmount != null ? Number(s.codAmount) : null
     const orderTotal = s.orderId ? orderTotals.get(s.orderId) ?? null : null
-    const orderValue = shiprocketRtoRevenueLost(
-      { codAmount, isCod },
-      s.rawJson,
-      orderTotal
-    )
+    const rawOrderId = getNumberFromRaw(s.rawJson, 'order_id')
+    const fromRawOrderRow =
+      rawOrderId != null ? orderTotalByRawOrderId.get(String(rawOrderId)) ?? null : null
+    const orderValue =
+      fromRawOrderRow != null && fromRawOrderRow > 0
+        ? fromRawOrderRow
+        : shiprocketRtoRevenueLost({ codAmount, isCod }, s.rawJson, orderTotal)
 
     if (isCod) {
       codOrders++

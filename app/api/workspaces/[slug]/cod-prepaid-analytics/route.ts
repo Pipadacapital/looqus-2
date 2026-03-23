@@ -12,7 +12,7 @@ function parseNum(val: string | null, defaultVal: number): number {
 /**
  * GET /api/workspaces/[slug]/cod-prepaid-analytics
  * COD vs Prepaid analytics: realization rate, RTO rates, effective revenue, break-even.
- * Query: from, to, codFeePerOrder (₹/order), gatewayFeePercent (% of prepaid gross), returnShippingPerRto (₹). Defaults: 0, 2, 0.
+ * Query: from, to, codFeePerOrder (₹/order), returnShippingPerRto (₹). Gateway % comes from WorkspaceCost WEBSITE amount. Defaults: 0, 0.
  */
 export async function GET(
   request: NextRequest,
@@ -32,7 +32,6 @@ export async function GET(
   const fromParam = searchParams.get('from')
   const toParam = searchParams.get('to')
   const codFeeParam = searchParams.get('codFeePerOrder')
-  const gatewayFeeParam = searchParams.get('gatewayFeePercent')
   const returnShippingParam = searchParams.get('returnShippingPerRto')
 
   const workspace = await prisma.workspace.findUnique({
@@ -59,6 +58,19 @@ export async function GET(
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
+  const websiteCost = await prisma.workspaceCost.findFirst({
+    where: {
+      workspaceId: workspace.id,
+      costType: 'WEBSITE',
+    },
+    orderBy: { effectiveFrom: 'desc' },
+  })
+  const gatewayFeePercentUncapped = websiteCost ? Number(websiteCost.amount) : 2
+  const gatewayFeePercent = Math.min(
+    100,
+    Math.max(0, Number.isFinite(gatewayFeePercentUncapped) ? gatewayFeePercentUncapped : 2)
+  )
+
   const srConn = workspace.shiprocketConnection?.status === 'CONNECTED'
     ? workspace.shiprocketConnection
     : null
@@ -74,7 +86,6 @@ export async function GET(
   const toDate = new Date(toStr + 'T23:59:59.999Z')
 
   const codFeePerOrder = Math.max(0, parseNum(codFeeParam, 0))
-  const gatewayFeePercent = Math.min(100, Math.max(0, parseNum(gatewayFeeParam, 2)))
   const returnShippingPerRto = Math.max(0, parseNum(returnShippingParam, 0))
 
   if (!srConn) {

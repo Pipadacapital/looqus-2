@@ -595,24 +595,24 @@ async function mapShiprocketToShopify(connectionId: string) {
 }
 
 export type BackfillCourierResult = {
-  /** Number of shipments with courierName null at start of this run (candidates for repair). */
-  totalCandidates: number
-  updatedFromRaw: number
-  updatedFromTracking: number
-  stillNull: number
-  /** True when no rows remain with courierName null (full repair complete). */
-  completedFully: boolean
+  selfFulfilled: number
+  resolvedFromOrders: number
+  resolvedFromTracking: number
+  stillUnresolved: number
 }
 
-const BACKFILL_RAW_BATCH = 500
+/** Legacy default for options.trackingBatchPerRequest: any positive value enables the tracking phase. */
 const BACKFILL_TRACKING_BATCH_PER_REQUEST = 150
+/** Rows fetched per tracking iteration (same scale as pincode API phase). */
+const BACKFILL_COURIER_TRACKING_BATCH = 100
 const BACKFILL_TRACKING_DELAY_MS = 350
 
 /**
  * Backfill ShiprocketShipment.courierName for rows where it is null.
- * One run: (1) Process ALL candidates from stored rawJson in batches (no API); (2) Then up to
- * trackingBatchPerRequest rows via tracking API (rate-limited). Caller can re-invoke until
- * completedFully is true for a full one-click experience.
+ * Phase 1: self-fulfilled rows (bulk updateMany, no API).
+ * Phase 2: courier from linked shiprocket_orders.rawJson shipments[0].courier (bulk UPDATE…FROM, no API).
+ * Phase 3: tracking API in batches until no progress or none left (only rows with a non-empty AWB).
+ * trackingBatchPerRequest: use 0 to skip tracking; any positive value enables phase 3.
  */
 export async function backfillShiprocketCourierNames(
   connectionId: string,
@@ -622,37 +622,42 @@ export async function backfillShiprocketCourierNames(
     Math.max(options?.trackingBatchPerRequest ?? BACKFILL_TRACKING_BATCH_PER_REQUEST, 0),
     200
   )
-  const totalCandidates = await prisma.shiprocketShipment.count({
-    where: { connectionId, courierName: null },
-  })
-  let updatedFromRaw = 0
-  let updatedFromTracking = 0
 
-  // Phase 1: resolve from stored rawJson only (all candidates, no API calls)
-  let cursor: string | undefined
-  do {
-    const batch = await prisma.shiprocketShipment.findMany({
-      where: { connectionId, courierName: null, rawJson: { not: Prisma.JsonNull } },
-      select: { id: true, rawJson: true },
-      take: BACKFILL_RAW_BATCH,
-      orderBy: { id: 'asc' },
-      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-    })
-    if (batch.length === 0) break
-    for (const row of batch) {
-      const courier = resolveCourierFromRawJson(row.rawJson)
-      if (courier) {
-        await prisma.shiprocketShipment.update({
-          where: { id: row.id },
-          data: { courierName: courier },
-        })
-        updatedFromRaw++
-      }
-    }
-    cursor = batch[batch.length - 1]?.id
-  } while (cursor)
+  // Phase 1 — self fulfilled (no API)
+  const selfFulfilled = await prisma.$executeRaw(
+    Prisma.sql`
+      UPDATE shiprocket_shipments
+      SET courier_name = 'Self Fulfilled'
+      WHERE connection_id = ${connectionId}::uuid
+        AND courier_name IS NULL
+        AND (
+          (raw_json->>'awb') = ''
+          OR (raw_json->>'status') ILIKE ${'%SELF%FULFIL%'}
+        )
+    `
+  )
 
-  // Phase 2: for remaining null, fetch tracking (capped per request to avoid timeout/rate limits)
+  // Phase 2 — order rawJson shipments[0].courier (no API)
+  const resolvedFromOrders = await prisma.$executeRaw(
+    Prisma.sql`
+      UPDATE shiprocket_shipments s
+      SET courier_name = TRIM(BOTH FROM so.raw_json->'shipments'->0->>'courier')
+      FROM shiprocket_orders so
+      WHERE s.connection_id = ${connectionId}::uuid
+        AND so.connection_id = ${connectionId}::uuid
+        AND s.courier_name IS NULL
+        AND s.raw_json IS NOT NULL
+        AND NULLIF(TRIM(BOTH FROM COALESCE(s.raw_json->>'awb', '')), '') IS NOT NULL
+        AND s.raw_json->>'order_id' IS NOT NULL
+        AND TRIM(BOTH FROM s.raw_json->>'order_id') = TRIM(BOTH FROM so.shiprocket_id)
+        AND so.raw_json IS NOT NULL
+        AND NULLIF(TRIM(BOTH FROM COALESCE(so.raw_json->'shipments'->0->>'courier', '')), '') IS NOT NULL
+    `
+  )
+
+  let resolvedFromTracking = 0
+
+  // Phase 3 — tracking API (only unresolved rows with a non-empty AWB on raw_json or awb_code)
   if (trackingCap > 0) {
     let token: string | undefined
     try {
@@ -661,40 +666,59 @@ export async function backfillShiprocketCourierNames(
       // Token failure: skip tracking phase
     }
     if (token) {
-      const toFetch = await prisma.shiprocketShipment.findMany({
-        where: { connectionId, courierName: null },
-        select: { id: true, shipmentId: true },
-        take: trackingCap,
-        orderBy: { id: 'asc' },
-      })
-      for (let i = 0; i < toFetch.length; i++) {
-        if (i > 0) await new Promise((r) => setTimeout(r, BACKFILL_TRACKING_DELAY_MS))
-        try {
-          const result = await fetchShipmentTracking(token, toFetch[i].shipmentId)
-          if (result.courierName) {
-            await prisma.shiprocketShipment.update({
-              where: { id: toFetch[i].id },
-              data: { courierName: result.courierName },
-            })
-            updatedFromTracking++
+      let iterationResolved = 0
+      let remainingAfterIteration = 0
+      do {
+        iterationResolved = 0
+        const toFetch = await prisma.$queryRaw<{ id: string; shipment_id: string }[]>(
+          Prisma.sql`
+            SELECT id, shipment_id
+            FROM shiprocket_shipments
+            WHERE connection_id = ${connectionId}::uuid
+              AND courier_name IS NULL
+              AND (
+                NULLIF(TRIM(BOTH FROM COALESCE(raw_json->>'awb', '')), '') IS NOT NULL
+                OR NULLIF(TRIM(BOTH FROM COALESCE(awb_code, '')), '') IS NOT NULL
+              )
+            ORDER BY id ASC
+            LIMIT ${BACKFILL_COURIER_TRACKING_BATCH}
+          `
+        )
+        if (toFetch.length === 0) break
+
+        for (let i = 0; i < toFetch.length; i++) {
+          if (i > 0) await new Promise((r) => setTimeout(r, BACKFILL_TRACKING_DELAY_MS))
+          try {
+            const result = await fetchShipmentTracking(token, toFetch[i].shipment_id)
+            if (result.courierName) {
+              await prisma.shiprocketShipment.update({
+                where: { id: toFetch[i].id },
+                data: { courierName: result.courierName },
+              })
+              resolvedFromTracking++
+              iterationResolved++
+            }
+          } catch {
+            // Skip failed tracking
           }
-        } catch {
-          // Skip failed tracking
         }
-      }
+
+        remainingAfterIteration = await prisma.shiprocketShipment.count({
+          where: { connectionId, courierName: null },
+        })
+      } while (remainingAfterIteration > 0 && iterationResolved > 0)
     }
   }
 
-  const stillNull = await prisma.shiprocketShipment.count({
+  const stillUnresolved = await prisma.shiprocketShipment.count({
     where: { connectionId, courierName: null },
   })
 
   return {
-    totalCandidates,
-    updatedFromRaw,
-    updatedFromTracking,
-    stillNull,
-    completedFully: stillNull === 0,
+    selfFulfilled,
+    resolvedFromOrders,
+    resolvedFromTracking,
+    stillUnresolved,
   }
 }
 
