@@ -3,6 +3,8 @@ import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
 import { backfillShiprocketCourierNames } from '@/lib/integrations/shiprocket-sync'
 
+export const maxDuration = 300
+
 /**
  * POST /api/workspaces/[slug]/shiprocket/backfill-courier
  *
