@@ -4,7 +4,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { requireSuperadmin } from '@/lib/require-superadmin'
 import { syncAllGoogleAds } from '@/lib/integrations/google-sync'
-
+// 
 /**
  * Sync Google Ads data for all workspaces (all connected connections).
  * Superadmin only.
