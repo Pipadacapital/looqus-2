@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/prisma'
+import { Prisma } from '@prisma/client'
 import { Decimal } from '@prisma/client/runtime/library'
 import {
   getValidToken,
@@ -631,7 +632,7 @@ export async function backfillShiprocketCourierNames(
   let cursor: string | undefined
   do {
     const batch = await prisma.shiprocketShipment.findMany({
-      where: { connectionId, courierName: null, rawJson: { not: null } },
+      where: { connectionId, courierName: null, rawJson: { not: Prisma.AnyNull } },
       select: { id: true, rawJson: true },
       take: BACKFILL_RAW_BATCH,
       orderBy: { id: 'asc' },
@@ -754,7 +755,7 @@ export async function backfillShiprocketPincodes(connectionId: string): Promise<
   let cursor: string | undefined
   do {
     const batch = await prisma.shiprocketShipment.findMany({
-      where: { connectionId, deliveryPincode: null, rawJson: { not: null } },
+      where: { connectionId, deliveryPincode: null, rawJson: { not: Prisma.AnyNull } },
       select: { id: true, rawJson: true },
       take: BACKFILL_PINCODE_BATCH,
       orderBy: { id: 'asc' },
@@ -781,7 +782,7 @@ export async function backfillShiprocketPincodes(connectionId: string): Promise<
   if (withOrderId.length > 0) {
     const orderIds = [...new Set(withOrderId.map((s) => normalizeOrderIdForJoin(s.orderId)).filter(Boolean))] as string[]
     const orders = await prisma.shiprocketOrder.findMany({
-      where: { connectionId, shiprocketId: { in: orderIds }, rawJson: { not: null } },
+      where: { connectionId, shiprocketId: { in: orderIds }, rawJson: { not: Prisma.AnyNull } },
       select: { shiprocketId: true, rawJson: true },
     })
     // Map by normalized shiprocketId so we match shipment.orderId (string) to order.shiprocketId (string)
