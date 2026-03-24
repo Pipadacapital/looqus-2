@@ -27,9 +27,12 @@ import { InsightCardList } from '@/components/ai-engine/insight-cards'
 import { cn } from '@/lib/utils'
 import Link from 'next/link'
 
+const AI_DISPLAY_NAME = process.env.NEXT_PUBLIC_AI_NAME ?? 'AI'
+
 const PAGE_LABELS: Record<string, string> = {
   analytics: 'Analytics',
   pnl: 'P&L',
+  waterfall: 'Waterfall',
   acquisition: 'Acquisition',
   cohorts: 'Cohorts',
   'lifetime-value': 'LTV',
@@ -39,6 +42,7 @@ const PAGE_LABELS: Record<string, string> = {
   logistics: 'Logistics',
   'rto-analytics': 'RTO',
   'cod-prepaid': 'COD/Prepaid',
+  'pincode-intelligence': 'Pincode Intelligence',
   timings: 'Timings',
   distributions: 'Distributions',
   'email-sms': 'Email/SMS',
@@ -156,7 +160,7 @@ export function InsightJobIndicator() {
             <span className="text-xs font-medium">
               {activeCount > 0
                 ? `Generating${activeCount > 1 ? ` (${activeCount})` : ''}...`
-                : 'Insights Ready'}
+                : `${AI_DISPLAY_NAME} Ready`}
             </span>
             {activeCount > 0 && (
               <span className="absolute -top-0.5 -right-0.5 flex h-2 w-2">
@@ -168,7 +172,7 @@ export function InsightJobIndicator() {
         </PopoverTrigger>
         <PopoverContent align="end" className="w-72 p-3">
           <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
-            AI Insight Jobs
+            {AI_DISPLAY_NAME} Insight Jobs
           </p>
           <div className="divide-y">
             {workspaceJobs.map(([key, job]) => (
@@ -185,13 +189,13 @@ export function InsightJobIndicator() {
 
       {/* Global insight sheet — renders insights without navigating away */}
       <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-        <SheetContent className="w-full sm:max-w-lg flex flex-col p-0">
+        <SheetContent className="w-full sm:max-w-lg flex min-h-0 flex-col p-0">
           <SheetHeader className="px-5 pt-5 pb-4 border-b shrink-0">
-            <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-4">
               <div>
                 <SheetTitle className="flex items-center gap-2 text-base">
                   <IconSparkles className="h-4 w-4 text-[#96bf48]" />
-                  {liveJob ? PAGE_LABELS[liveJob.page] ?? liveJob.page : ''} Insights
+                  {liveJob ? PAGE_LABELS[liveJob.page] ?? liveJob.page : ''} {AI_DISPLAY_NAME} Insights
                 </SheetTitle>
                 {liveJob && (
                   <p className="text-xs text-muted-foreground mt-0.5 tabular-nums">
@@ -211,7 +215,7 @@ export function InsightJobIndicator() {
             </div>
           </SheetHeader>
 
-          <ScrollArea className="flex-1">
+          <ScrollArea className="min-h-0 flex-1">
             <div className="px-5 py-4">
               {liveJob && (
                 <InsightCardList

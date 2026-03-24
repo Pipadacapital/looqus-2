@@ -2,7 +2,7 @@ import type { PrismaClient } from '@prisma/client'
 import { getProvider, getDefaultModel } from '../providers/router'
 import { getSystemPrompt } from '../prompts/system'
 import { buildAnalyticsPrompt } from '../prompts/page/analytics'
-import { comparePeriods, ANALYTICS_METRIC_KEYS, PNL_METRIC_KEYS, ACQUISITION_METRIC_KEYS, COHORTS_METRIC_KEYS, META_ADS_METRIC_KEYS, GOOGLE_ADS_METRIC_KEYS, LOGISTICS_METRIC_KEYS, COD_PREPAID_METRIC_KEYS } from '../analysis/comparator'
+import { comparePeriods, ANALYTICS_METRIC_KEYS, PNL_METRIC_KEYS, ACQUISITION_METRIC_KEYS, COHORTS_METRIC_KEYS, META_ADS_METRIC_KEYS, GOOGLE_ADS_METRIC_KEYS, LOGISTICS_METRIC_KEYS, COD_PREPAID_METRIC_KEYS, RTO_ANALYTICS_METRIC_KEYS, PRODUCTS_METRIC_KEYS, PINCODE_INTELLIGENCE_METRIC_KEYS, LTV_METRIC_KEYS, WATERFALL_METRIC_KEYS } from '../analysis/comparator'
 import { detectAnomalies } from '../analysis/anomaly'
 import { analyzeTrends } from '../analysis/trend'
 import { buildAnalyticsContext } from '../context-adapters/analytics'
@@ -13,6 +13,11 @@ import { buildMetaAdsContext } from '../context-adapters/meta-ads'
 import { buildGoogleAdsContext } from '../context-adapters/google-ads'
 import { buildLogisticsContext } from '../context-adapters/logistics'
 import { buildCodPrepaidContext } from '../context-adapters/cod-prepaid'
+import { buildRtoAnalyticsContext } from '../context-adapters/rto-analytics'
+import { buildProductsContext } from '../context-adapters/products'
+import { buildPincodeIntelligenceContext } from '../context-adapters/pincode-intelligence'
+import { buildLtvContext } from '../context-adapters/lifetime-value'
+import { buildWaterfallContext } from '../context-adapters/waterfall'
 import { buildPnlPrompt } from '../prompts/page/pnl'
 import { buildAcquisitionPrompt } from '../prompts/page/acquisition'
 import { buildCohortsPrompt } from '../prompts/page/cohorts'
@@ -20,6 +25,11 @@ import { buildMetaAdsPrompt } from '../prompts/page/meta-ads'
 import { buildGoogleAdsPrompt } from '../prompts/page/google-ads'
 import { buildLogisticsPrompt } from '../prompts/page/logistics'
 import { buildCodPrepaidPrompt } from '../prompts/page/cod-prepaid'
+import { buildRtoAnalyticsPrompt } from '../prompts/page/rto-analytics'
+import { buildProductsPrompt } from '../prompts/page/products'
+import { buildPincodeIntelligencePrompt } from '../prompts/page/pincode-intelligence'
+import { buildLtvPrompt } from '../prompts/page/lifetime-value'
+import { buildWaterfallPrompt } from '../prompts/page/waterfall'
 import { computeCacheKey, getCachedInsight, saveInsight } from '../cache/insight-cache'
 
 export type InsightItem = {
@@ -227,6 +237,16 @@ function getMetricKeysForPage(page: string): string[] {
       return [...LOGISTICS_METRIC_KEYS]
     case 'cod-prepaid':
       return [...COD_PREPAID_METRIC_KEYS]
+    case 'rto-analytics':
+      return [...RTO_ANALYTICS_METRIC_KEYS]
+    case 'products':
+      return [...PRODUCTS_METRIC_KEYS]
+    case 'pincode-intelligence':
+      return [...PINCODE_INTELLIGENCE_METRIC_KEYS]
+    case 'lifetime-value':
+      return [...LTV_METRIC_KEYS]
+    case 'waterfall':
+      return [...WATERFALL_METRIC_KEYS]
     default:
       return [...ANALYTICS_METRIC_KEYS]
   }
@@ -251,6 +271,16 @@ function getDailyMetricsForPage(page: string): string[] {
       return ['shipments', 'rto', 'rtoRate', 'totalCharges', 'forwardCharges']
     case 'cod-prepaid':
       return ['codRtoRate', 'codOrders', 'prepaidOrders']
+    case 'rto-analytics':
+      return ['rtoCount', 'rtoRate', 'rtoCost', 'revenueLost']
+    case 'products':
+      return ['revenue', 'orders']
+    case 'pincode-intelligence':
+      return ['shipments', 'rtoCount', 'rtoRate']
+    case 'lifetime-value':
+      return ['m1', 'm3', 'm6', 'm12', 'retentionRatio']
+    case 'waterfall':
+      return ['value', 'pctOfGross']
     default:
       return ['netSales', 'ordersCount', 'aov', 'cogs', 'adSpend', 'cm1', 'cm2']
   }
@@ -283,6 +313,16 @@ async function getContextForPage(
       return buildLogisticsContext(prisma, workspaceId, dateFrom, dateTo)
     case 'cod-prepaid':
       return buildCodPrepaidContext(prisma, workspaceId, dateFrom, dateTo)
+    case 'rto-analytics':
+      return buildRtoAnalyticsContext(prisma, workspaceId, dateFrom, dateTo)
+    case 'products':
+      return buildProductsContext(prisma, workspaceId, dateFrom, dateTo)
+    case 'pincode-intelligence':
+      return buildPincodeIntelligenceContext(prisma, workspaceId, dateFrom, dateTo)
+    case 'lifetime-value':
+      return buildLtvContext(prisma, workspaceId, dateFrom, dateTo)
+    case 'waterfall':
+      return buildWaterfallContext(prisma, workspaceId, dateFrom, dateTo)
     default:
       throw new Error(`Unsupported page for insights: ${page}`)
   }
@@ -315,6 +355,16 @@ function getPromptForPage(
       return buildLogisticsPrompt(context, comparison, anomalies, trends)
     case 'cod-prepaid':
       return buildCodPrepaidPrompt(context, comparison, anomalies, trends)
+    case 'rto-analytics':
+      return buildRtoAnalyticsPrompt(context, comparison, anomalies, trends)
+    case 'products':
+      return buildProductsPrompt(context, comparison, anomalies, trends)
+    case 'pincode-intelligence':
+      return buildPincodeIntelligencePrompt(context, comparison, anomalies, trends)
+    case 'lifetime-value':
+      return buildLtvPrompt(context, comparison, anomalies, trends)
+    case 'waterfall':
+      return buildWaterfallPrompt(context, comparison, anomalies, trends)
     default:
       throw new Error(`Unsupported page for prompts: ${page}`)
   }

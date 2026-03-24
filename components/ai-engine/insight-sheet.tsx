@@ -25,6 +25,7 @@ import { InsightCardList, type InsightItem } from '@/components/ai-engine/insigh
 const PAGE_TITLES: Record<string, string> = {
   analytics: 'Analytics Insights',
   pnl: 'P&L Insights',
+  waterfall: 'Waterfall Insights',
   acquisition: 'Acquisition Insights',
   cohorts: 'Cohort Insights',
   'lifetime-value': 'LTV Insights',
@@ -42,6 +43,7 @@ const PAGE_TITLES: Record<string, string> = {
 const PAGE_DESCRIPTIONS: Record<string, string> = {
   analytics: 'Run AI analysis on your analytics data to evaluate performance, margins, and efficiency.',
   pnl: 'Run AI analysis on your P&L data to identify margin changes, cost drivers, and profitability trends.',
+  waterfall: 'Run AI analysis on the full Gross Sales → Net Profit waterfall to identify the biggest cost drags, discount leakage, and new vs returning customer economics.',
   acquisition: 'Run AI analysis on your acquisition data to evaluate CAC efficiency, channel performance, and new customer unit economics.',
   cohorts: 'Run AI analysis on your cohort data to evaluate retention trends, payback speed, and LTV trajectory across monthly cohorts.',
   'lifetime-value': 'Run AI analysis on your LTV data to evaluate customer lifetime value trends and profitability.',
@@ -94,6 +96,11 @@ export function InsightSheet({
 }: InsightSheetProps) {
   const title = PAGE_TITLES[page] ?? `${page} Insights`
   const description = PAGE_DESCRIPTIONS[page] ?? 'Run AI analysis on your data.'
+  const dataThroughDate = dataThrough ? new Date(`${dataThrough}T00:00:00`) : null
+  const dataThroughLabel =
+    dataThroughDate && !Number.isNaN(dataThroughDate.getTime())
+      ? format(dataThroughDate, 'MMM d, yyyy')
+      : null
   const hasContent = insights.length > 0
   const showGenerate = !hasContent && !loading && !error && !insufficientData
   const showRegenerate = hasContent || error || insufficientData
@@ -140,10 +147,9 @@ export function InsightSheet({
                       {from} → {to}
                     </span>
                   </p>
-                  {dataThrough && !insufficientData && (
+                  {dataThroughLabel && !insufficientData && (
                     <p className="text-[11px] text-muted-foreground/70">
-                      Based on data through{' '}
-                      {format(new Date(dataThrough + 'T00:00:00'), 'MMM d, yyyy')}
+                      Based on data through {dataThroughLabel}
                     </p>
                   )}
                 </div>
@@ -217,10 +223,9 @@ export function InsightSheet({
                     <p className="mt-1 text-sm text-amber-700 dark:text-amber-400">
                       Try selecting a longer date range, or wait for more data to sync.
                     </p>
-                    {dataThrough && (
+                    {dataThroughLabel && (
                       <p className="mt-2 text-xs text-amber-600 dark:text-amber-500">
-                        Last available data:{' '}
-                        {format(new Date(dataThrough + 'T00:00:00'), 'MMM d, yyyy')}
+                        Last available data: {dataThroughLabel}
                       </p>
                     )}
                   </div>

@@ -40,6 +40,8 @@ import {
 } from '@/components/ui/select'
 import type { ProductsRow } from '@/lib/products/types'
 import type { ProductsGroupBy, ProductsSortColumn } from '@/lib/products/types'
+import { usePageInsights } from '@/hooks/use-page-insights'
+import { InsightSheet } from '@/components/ai-engine/insight-sheet'
 
 const GROUP_BY_OPTIONS: { value: ProductsGroupBy; label: string; searchPlaceholder: string }[] = [
   { value: 'product', label: 'Product', searchPlaceholder: 'Search products' },
@@ -99,6 +101,7 @@ interface ProductsContentProps {
 export function ProductsContent({ workspaceSlug, workspaceName }: ProductsContentProps) {
   const [from, setFrom] = useState(() => format(subDays(new Date(), 364), 'yyyy-MM-dd'))
   const [to, setTo] = useState(() => format(new Date(), 'yyyy-MM-dd'))
+  const insightProps = usePageInsights(workspaceSlug, 'products', from, to)
   const [groupBy, setGroupBy] = useState<ProductsGroupBy>('product')
   const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>(DEFAULT_VISIBILITY)
   const [search, setSearch] = useState('')
@@ -182,12 +185,31 @@ export function ProductsContent({ workspaceSlug, workspaceName }: ProductsConten
 
   return (
     <div className="flex flex-col gap-6 py-4 md:py-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
-          <IconShoppingBag className="h-6 w-6 text-[#96bf48]" />
-          Products
-        </h1>
-        <p className="text-sm text-muted-foreground mt-0.5">{workspaceName}</p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
+            <IconShoppingBag className="h-6 w-6 text-[#96bf48]" />
+            Products
+          </h1>
+          <p className="text-sm text-muted-foreground mt-0.5">{workspaceName}</p>
+        </div>
+        <InsightSheet
+          page="products"
+          from={from}
+          to={to}
+          sheetOpen={insightProps.sheetOpen}
+          onSheetOpenChange={insightProps.setSheetOpen}
+          insights={insightProps.insights}
+          loading={insightProps.loading}
+          error={insightProps.error}
+          cached={insightProps.cached}
+          model={insightProps.model}
+          dataThrough={insightProps.dataThrough}
+          insufficientData={insightProps.insufficientData}
+          isDone={insightProps.isDone}
+          onGenerate={insightProps.generate}
+          pageLoading={loading}
+        />
       </div>
 
       <div className="rounded-xl border bg-card shadow-sm">

@@ -163,6 +163,102 @@ export const LOGISTICS_METRIC_KEYS = [
   'avgCostPerShipment',
 ] as const
 
+/** Pincode Intelligence metric keys for period comparison */
+export const PINCODE_INTELLIGENCE_METRIC_KEYS = [
+  'totalRevenue',
+  'totalOrders',
+  'totalShipments',
+  'totalPincodes',
+  'avgRtoPercent',
+  'avgCodPercent',
+  'avgDeliveredPercent',
+  'avgScore',
+  'highRtoPincodes',
+  'highCodPincodes',
+  'tier1Revenue',
+  'tier2Revenue',
+  'tier3Revenue',
+] as const
+
+/** Products metric keys for period comparison */
+export const PRODUCTS_METRIC_KEYS = [
+  'totalRevenue',
+  'totalCm1',
+  'totalSales',
+  'totalRefunds',
+  'avgCm1Pct',
+  'avgReturnRate',
+  'totalProducts',
+  'gradeACount',
+  'gradeFCount',
+  'negativeCm1Products',
+  'positiveCm1Products',
+] as const
+
+/** RTO Analytics metric keys for period comparison */
+export const RTO_ANALYTICS_METRIC_KEYS = [
+  'totalShipments',
+  'rtoCount',
+  'rtoRatePercent',
+  'totalRtoCost',
+  'revenueLostToRto',
+  'codRtoCount',
+  'prepaidRtoCount',
+  'codRtoRatePercent',
+  'prepaidRtoRatePercent',
+  'codRtoCost',
+  'prepaidRtoCost',
+  'codRevenueLost',
+  'prepaidRevenueLost',
+  'avgRtoCostPerShipment',
+  'totalLossPerRto',
+] as const
+
+/** Waterfall metric keys for period comparison */
+export const WATERFALL_METRIC_KEYS = [
+  'grossSales',
+  'discounts',
+  'refunds',
+  'tax',
+  'shipping',
+  'revenueAfterTaxShipping',
+  'cogs',
+  'variableCosts',
+  'rtoCost',
+  'cm1',
+  'adSpend',
+  'cm2',
+  'fixedCost',
+  'cm3',
+  'founderSalary',
+  'netProfit',
+  'discountPct',
+  'refundPct',
+  'cogsPct',
+  'variableCostsPct',
+  'rtoCostPct',
+  'adSpendPct',
+  'cm1Pct',
+  'cm2Pct',
+  'cm3Pct',
+  'netProfitPct',
+  'ordersCount',
+] as const
+
+/** LTV metric keys for period comparison */
+export const LTV_METRIC_KEYS = [
+  'newCustomers',
+  'firstOrderR',
+  'firstOrder',
+  'month1',
+  'month3',
+  'month6',
+  'month12',
+  'm1ToM3Lift',
+  'm3ToM6Lift',
+  'm6ToM12Lift',
+] as const
+
 /** Google Ads metric keys for period comparison */
 export const GOOGLE_ADS_METRIC_KEYS = [
   'totalSpend',

@@ -5,6 +5,8 @@ import { useRouter, usePathname } from 'next/navigation'
 import { IconPackage, IconLoader2, IconTruck, IconCurrencyRupee } from '@tabler/icons-react'
 import { DateRangeFilter } from '@/components/analytics'
 import { Button } from '@/components/ui/button'
+import { usePageInsights } from '@/hooks/use-page-insights'
+import { InsightSheet } from '@/components/ai-engine/insight-sheet'
 import {
   Table,
   TableBody,
@@ -50,6 +52,7 @@ export function RtoAnalyticsContent({
 }: RtoAnalyticsContentProps) {
   const router = useRouter()
   const pathname = usePathname()
+  const insightProps = usePageInsights(slug, 'rto-analytics', initialFrom, initialTo)
   const [from, setFrom] = useState(initialFrom)
   const [to, setTo] = useState(initialTo)
   const [loading, setLoading] = useState(true)
@@ -95,15 +98,34 @@ export function RtoAnalyticsContent({
 
   return (
     <div className="flex flex-col gap-6 py-4 md:py-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
-          <IconPackage className="h-7 w-7" />
-          RTO Analytics
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Return-to-origin overview: rate, cost, and revenue lost. Shiprocket-first: RTO definition and revenue lost
-          use Shiprocket data only (COD amount or order total). No Shopify mapping required for main KPIs.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
+            <IconPackage className="h-7 w-7" />
+            RTO Analytics
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Return-to-origin overview: rate, cost, and revenue lost. Shiprocket-first: RTO definition and revenue lost
+            use Shiprocket data only (COD amount or order total). No Shopify mapping required for main KPIs.
+          </p>
+        </div>
+        <InsightSheet
+          page="rto-analytics"
+          from={from}
+          to={to}
+          sheetOpen={insightProps.sheetOpen}
+          onSheetOpenChange={insightProps.setSheetOpen}
+          insights={insightProps.insights}
+          loading={insightProps.loading}
+          error={insightProps.error}
+          cached={insightProps.cached}
+          model={insightProps.model}
+          dataThrough={insightProps.dataThrough}
+          insufficientData={insightProps.insufficientData}
+          isDone={insightProps.isDone}
+          onGenerate={insightProps.generate}
+          pageLoading={loading}
+        />
       </div>
 
       <div className="flex flex-wrap items-center gap-3">

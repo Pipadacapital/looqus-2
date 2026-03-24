@@ -6,6 +6,8 @@ import { DateRangeFilter } from '@/components/analytics'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
+import { usePageInsights } from '@/hooks/use-page-insights'
+import { InsightSheet } from '@/components/ai-engine/insight-sheet'
 import {
   Table,
   TableBody,
@@ -64,6 +66,7 @@ export function PincodeIntelligenceContent({
 }: PincodeIntelligenceContentProps) {
   const [from, setFrom] = useState(initialFrom)
   const [to, setTo] = useState(initialTo)
+  const insightProps = usePageInsights(slug, 'pincode-intelligence', from, to)
   const [search, setSearch] = useState('')
   const [stateFilter, setStateFilter] = useState('')
   const [minOrders, setMinOrders] = useState('')
@@ -126,15 +129,34 @@ export function PincodeIntelligenceContent({
 
   return (
     <div className="flex flex-col gap-6 p-4 md:p-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
-          <IconRoute className="h-7 w-7" />
-          Pincode Intelligence
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Delivery pincode view: orders, revenue, RTO %, COD %, and delivered % by area. Pincode/city/state from
-          Shiprocket; orders and revenue from matched Shopify orders. Same RTO/delivered definitions as Logistics.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
+            <IconRoute className="h-7 w-7" />
+            Pincode Intelligence
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Delivery pincode view: orders, revenue, RTO %, COD %, and delivered % by area. Pincode/city/state from
+            Shiprocket; orders and revenue from matched Shopify orders. Same RTO/delivered definitions as Logistics.
+          </p>
+        </div>
+        <InsightSheet
+          page="pincode-intelligence"
+          from={from}
+          to={to}
+          sheetOpen={insightProps.sheetOpen}
+          onSheetOpenChange={insightProps.setSheetOpen}
+          insights={insightProps.insights}
+          loading={insightProps.loading}
+          error={insightProps.error}
+          cached={insightProps.cached}
+          model={insightProps.model}
+          dataThrough={insightProps.dataThrough}
+          insufficientData={insightProps.insufficientData}
+          isDone={insightProps.isDone}
+          onGenerate={insightProps.generate}
+          pageLoading={loading}
+        />
       </div>
 
       <div className="flex flex-wrap items-end gap-4">

@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { format, subDays } from 'date-fns'
 import { IconChartBar, IconLoader2 } from '@tabler/icons-react'
 import { DateRangeFilter } from '@/components/analytics'
+import { usePageInsights } from '@/hooks/use-page-insights'
+import { InsightSheet } from '@/components/ai-engine/insight-sheet'
 import { formatCurrency } from '@/components/analytics/types'
 import {
   Select,
@@ -71,6 +73,7 @@ export function WaterfallContent({
 }: WaterfallContentProps) {
   const [from, setFrom] = useState(format(subDays(new Date(), 29), 'yyyy-MM-dd'))
   const [to, setTo] = useState(format(new Date(), 'yyyy-MM-dd'))
+  const insightProps = usePageInsights(slug, 'waterfall', from, to)
   const [customerFilter, setCustomerFilter] = useState<CustomerFilter>('all')
   const [loading, setLoading] = useState(true)
   const [data, setData] = useState<WaterfallResponse | null>(null)
@@ -160,13 +163,32 @@ export function WaterfallContent({
 
   return (
     <div className="space-y-6 p-4 md:p-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">
-          Contribution Margin Waterfall
-        </h1>
-        <p className="text-muted-foreground text-sm">
-          Step-down from gross sales to net profit for {workspaceName}
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Contribution Margin Waterfall
+          </h1>
+          <p className="text-muted-foreground text-sm">
+            Step-down from gross sales to net profit for {workspaceName}
+          </p>
+        </div>
+        <InsightSheet
+          page="waterfall"
+          from={from}
+          to={to}
+          sheetOpen={insightProps.sheetOpen}
+          onSheetOpenChange={insightProps.setSheetOpen}
+          insights={insightProps.insights}
+          loading={insightProps.loading}
+          error={insightProps.error}
+          cached={insightProps.cached}
+          model={insightProps.model}
+          dataThrough={insightProps.dataThrough}
+          insufficientData={insightProps.insufficientData}
+          isDone={insightProps.isDone}
+          onGenerate={insightProps.generate}
+          pageLoading={loading}
+        />
       </div>
 
       <div className="flex flex-wrap items-center gap-4">
