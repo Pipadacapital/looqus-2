@@ -283,8 +283,8 @@ model ShopifyConnection {
   installedAt               DateTime                    @default(now()) @map("installed_at")
   lastSyncAt                DateTime?                   @map("last_sync_at")
   updatedAt                 DateTime                    @updatedAt @map("updated_at")
-  clientId                  String                      @map("client_id")
-  clientSecret              String                      @map("client_secret")
+  clientId                  String?                     @map("client_id")
+  clientSecret              String?                     @map("client_secret")
   tokenExpiresAt            DateTime?                   @map("token_expires_at")
   analyticsDaily            ShopifyAnalyticsDaily[]
   workspace                 Workspace                   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)

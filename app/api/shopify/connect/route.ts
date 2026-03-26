@@ -9,9 +9,9 @@ import {
 } from '@/lib/shopify/client'
 
 /**
- * Saves the per-store Client ID + Secret as a PENDING connection,
- * then returns the Shopify OAuth authorization URL for the frontend
- * to redirect the user to.
+ * Accepts shopDomain + workspaceSlug, then returns the Shopify OAuth
+ * authorization URL for the frontend to redirect the user to.
+ * Credentials come from env (SHOPIFY_CLIENT_ID / SHOPIFY_CLIENT_SECRET).
  */
 export async function POST(request: NextRequest) {
   const supabase = await createClient()
@@ -25,8 +25,6 @@ export async function POST(request: NextRequest) {
 
   let body: {
     shopDomain: string
-    clientId: string
-    clientSecret: string
     workspaceSlug: string
   }
 
@@ -36,11 +34,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
   }
 
-  const { clientId, clientSecret, workspaceSlug } = body
+  const { workspaceSlug } = body
 
-  if (!body.shopDomain || !clientId || !clientSecret || !workspaceSlug) {
+  if (!body.shopDomain || !workspaceSlug) {
     return NextResponse.json(
-      { error: 'Missing required fields: shopDomain, clientId, clientSecret, workspaceSlug' },
+      { error: 'Missing required fields: shopDomain, workspaceSlug' },
       { status: 400 }
     )
   }
@@ -82,34 +80,9 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  // Save credentials as a PENDING connection so the callback can use them
-  await prisma.shopifyConnection.upsert({
-    where: {
-      workspaceId_shopDomain: {
-        workspaceId: workspace.id,
-        shopDomain,
-      },
-    },
-    create: {
-      workspaceId: workspace.id,
-      shopDomain,
-      clientId,
-      clientSecret,
-      scopes: [],
-      status: 'DISCONNECTED',
-    },
-    update: {
-      clientId,
-      clientSecret,
-      status: 'DISCONNECTED',
-    },
-  })
-
-  // Generate nonce and build OAuth URL
   const nonce = generateNonce()
-  const authUrl = buildAuthUrl(shopDomain, clientId, nonce)
+  const authUrl = buildAuthUrl(shopDomain, nonce)
 
-  // Build the state cookie so the callback can verify the request
   const oauthState = JSON.stringify({
     nonce,
     workspaceSlug,

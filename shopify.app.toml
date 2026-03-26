@@ -1,0 +1,18 @@
+name = "Brain by Pipada Capital"
+client_id = "${SHOPIFY_CLIENT_ID}"
+application_url = "https://brain.pipadacapital.com"
+embedded = false
+
+[access_scopes]
+scopes = "read_orders,read_all_orders,read_products,read_customers,read_analytics,read_inventory,read_reports"
+
+[auth]
+redirect_urls = [
+  "https://brain.pipadacapital.com/api/shopify/callback"
+]
+
+[webhooks]
+api_version = "2025-01"
+
+[pos]
+embedded = false

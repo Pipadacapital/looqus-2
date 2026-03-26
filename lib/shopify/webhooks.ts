@@ -17,19 +17,22 @@ export const WEBHOOK_TOPICS = [
   'CUSTOMERS_CREATE',
   'CUSTOMERS_UPDATE',
   'INVENTORY_LEVELS_UPDATE',
+  'APP_UNINSTALLED',
+  'SHOP_REDACT',
+  'CUSTOMERS_REDACT',
+  'CUSTOMERS_DATA_REQUEST',
 ] as const
 
 export type WebhookTopic = (typeof WEBHOOK_TOPICS)[number]
 
-/** Shopify sends X-Shopify-Hmac-SHA256 with HMAC-SHA256 of raw body using client secret */
+/** Shopify sends X-Shopify-Hmac-SHA256 with HMAC-SHA256 of raw body using the app client secret */
 export function verifyWebhookHmac(
   rawBody: string,
-  hmacHeader: string | null,
-  clientSecret: string
+  hmacHeader: string | null
 ): boolean {
   if (!hmacHeader) return false
   const computed = crypto
-    .createHmac('sha256', clientSecret)
+    .createHmac('sha256', process.env.SHOPIFY_CLIENT_SECRET!)
     .update(rawBody, 'utf8')
     .digest('base64')
   try {
@@ -431,6 +434,10 @@ export function parseWebhookTopic(
     CUSTOMERS_CREATE: 'CUSTOMERS_CREATE',
     CUSTOMERS_UPDATE: 'CUSTOMERS_UPDATE',
     INVENTORY_LEVELS_UPDATE: 'INVENTORY_LEVELS_UPDATE',
+    APP_UNINSTALLED: 'APP_UNINSTALLED',
+    SHOP_REDACT: 'SHOP_REDACT',
+    CUSTOMERS_REDACT: 'CUSTOMERS_REDACT',
+    CUSTOMERS_DATA_REQUEST: 'CUSTOMERS_DATA_REQUEST',
   }
   return mapped[normalized] ?? null
 }
@@ -447,6 +454,10 @@ export const WEBHOOK_TOPIC_GRAPHQL: Record<WebhookTopic, string> = {
   CUSTOMERS_CREATE: 'CUSTOMERS_CREATE',
   CUSTOMERS_UPDATE: 'CUSTOMERS_UPDATE',
   INVENTORY_LEVELS_UPDATE: 'INVENTORY_LEVELS_UPDATE',
+  APP_UNINSTALLED: 'APP_UNINSTALLED',
+  SHOP_REDACT: 'SHOP_REDACT',
+  CUSTOMERS_REDACT: 'CUSTOMERS_REDACT',
+  CUSTOMERS_DATA_REQUEST: 'CUSTOMERS_DATA_REQUEST',
 }
 
 const WEBHOOK_SUBSCRIPTION_CREATE = `
@@ -465,14 +476,27 @@ const WEBHOOK_SUBSCRIPTION_CREATE = `
   }
 `
 
+/** Handles app/uninstalled — disconnects the store and clears the access token. */
+export async function handleAppUninstalled(shopDomain: string): Promise<void> {
+  await prisma.shopifyConnection.updateMany({
+    where: { shopDomain },
+    data: {
+      status: 'DISCONNECTED',
+      accessToken: null,
+      tokenExpiresAt: null,
+      scopes: [],
+    },
+  })
+}
+
 /** Register all webhook subscriptions for a connected shop. Call after OAuth. */
 export async function registerWebhooks(
   shopDomain: string,
   accessToken: string
 ): Promise<{ registered: number; errors: string[] }> {
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL
+  const baseUrl = process.env.SHOPIFY_APP_URL || process.env.NEXT_PUBLIC_APP_URL
   if (!baseUrl) {
-    return { registered: 0, errors: ['NEXT_PUBLIC_APP_URL is not set'] }
+    return { registered: 0, errors: ['SHOPIFY_APP_URL is not set'] }
   }
   const webhookUri = `${baseUrl.replace(/\/$/, '')}/api/shopify/webhooks`
   const errors: string[] = []

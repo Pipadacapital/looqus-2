@@ -1,6 +1,8 @@
 import crypto from 'crypto'
 
 const SHOPIFY_API_VERSION = '2025-01'
+const SHOPIFY_CLIENT_ID = process.env.SHOPIFY_CLIENT_ID!
+const SHOPIFY_CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET!
 
 const DEFAULT_SCOPES =
   'read_orders,read_all_orders,read_products,read_customers,read_analytics,read_inventory,read_reports'
@@ -36,15 +38,11 @@ export function generateNonce(): string {
 /**
  * Builds the Shopify OAuth authorization URL using per-store credentials.
  */
-export function buildAuthUrl(
-  shop: string,
-  clientId: string,
-  state: string
-): string {
-  const redirectUri = `${process.env.NEXT_PUBLIC_APP_URL}/api/shopify/callback`
+export function buildAuthUrl(shop: string, state: string): string {
+  const redirectUri = `${process.env.SHOPIFY_APP_URL}/api/shopify/callback`
 
   const params = new URLSearchParams({
-    client_id: clientId,
+    client_id: SHOPIFY_CLIENT_ID,
     scope: DEFAULT_SCOPES,
     redirect_uri: redirectUri,
     state,
@@ -57,10 +55,7 @@ export function buildAuthUrl(
  * Validates the HMAC signature that Shopify sends on the OAuth callback.
  * Uses the per-store client secret for validation.
  */
-export function validateHmac(
-  query: Record<string, string>,
-  clientSecret: string
-): boolean {
+export function validateHmac(query: Record<string, string>): boolean {
   const hmac = query.hmac
   if (!hmac) return false
 
@@ -71,7 +66,7 @@ export function validateHmac(
   const message = entries.map(([key, value]) => `${key}=${value}`).join('&')
 
   const generatedHmac = crypto
-    .createHmac('sha256', clientSecret)
+    .createHmac('sha256', SHOPIFY_CLIENT_SECRET)
     .update(message)
     .digest('hex')
 
@@ -87,16 +82,14 @@ export function validateHmac(
  */
 export async function exchangeCodeForToken(
   shop: string,
-  code: string,
-  clientId: string,
-  clientSecret: string
+  code: string
 ): Promise<{ accessToken: string; scope: string }> {
   const response = await fetch(`https://${shop}/admin/oauth/access_token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
+      client_id: SHOPIFY_CLIENT_ID,
+      client_secret: SHOPIFY_CLIENT_SECRET,
       code,
     }),
   })

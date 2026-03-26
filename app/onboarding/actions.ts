@@ -24,8 +24,6 @@ export async function completeOnboarding(data: {
   industry: string
   monthlyRevenue: string
   storeUrl: string
-  shopifyClientId: string
-  shopifyClientSecret: string
   connectShopify: boolean
 }): Promise<OnboardingResult> {
   const supabase = await createClient()
@@ -45,8 +43,6 @@ export async function completeOnboarding(data: {
     industry,
     monthlyRevenue,
     storeUrl,
-    shopifyClientId,
-    shopifyClientSecret,
     connectShopify,
   } = data
 
@@ -79,8 +75,7 @@ export async function completeOnboarding(data: {
     ? storeUrl.replace(/\.myshopify\.com$/i, '').trim().toLowerCase()
     : null
 
-  const wantsShopify =
-    connectShopify && normalizedStoreUrl && shopifyClientId && shopifyClientSecret
+  const wantsShopify = connectShopify && normalizedStoreUrl
 
   const shopDomain = normalizedStoreUrl
     ? normalizeShopDomain(normalizedStoreUrl)
@@ -126,36 +121,13 @@ export async function completeOnboarding(data: {
 
     await seedFestivalsForWorkspace(tx, workspace.id)
 
-    // If connecting Shopify, save a pending connection with credentials (upsert so retries are safe)
-    if (wantsShopify && shopDomain) {
-      await tx.shopifyConnection.upsert({
-        where: {
-          workspaceId_shopDomain: {
-            workspaceId: workspace.id,
-            shopDomain,
-          },
-        },
-        create: {
-          workspaceId: workspace.id,
-          shopDomain,
-          clientId: shopifyClientId,
-          clientSecret: shopifyClientSecret,
-          scopes: [],
-          status: 'DISCONNECTED',
-        },
-        update: {
-          clientId: shopifyClientId,
-          clientSecret: shopifyClientSecret,
-          status: 'DISCONNECTED',
-        },
-      })
-    }
+    
   })
 
   // If user wants to connect Shopify, set OAuth state cookie and return the auth URL
   if (wantsShopify && shopDomain) {
     const nonce = generateNonce()
-    const authUrl = buildAuthUrl(shopDomain, shopifyClientId, nonce)
+    const authUrl = buildAuthUrl(shopDomain, nonce)
 
     const oauthState = JSON.stringify({
       nonce,

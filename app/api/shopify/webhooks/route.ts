@@ -9,6 +9,7 @@ import {
   handleProductDeleteWebhook,
   handleCustomerWebhook,
   handleInventoryLevelWebhook,
+  handleAppUninstalled,
 } from '@/lib/shopify/webhooks'
 
 /** Shopify sends POST with X-Shopify-Shop-Domain, X-Shopify-Hmac-SHA256, X-Shopify-Topic, raw JSON body */
@@ -24,7 +25,6 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  // Must read raw body for HMAC verification (do not use request.json() first)
   let rawBody: string
   try {
     rawBody = await request.text()
@@ -35,10 +35,45 @@ export async function POST(request: NextRequest) {
     )
   }
 
+  if (!verifyWebhookHmac(rawBody, hmac)) {
+    return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
+  }
+
   const normalizedShop = shopDomain.toLowerCase().replace(/^https?:\/\//, '').split('/')[0] || shopDomain
+
+  let payload: unknown
+  try {
+    payload = rawBody ? JSON.parse(rawBody) : {}
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
+  }
+
+  const topic = parseWebhookTopic(topicHeader)
+  if (!topic) {
+    return NextResponse.json({ ok: true })
+  }
+
+  // GDPR + uninstall topics don't require a CONNECTED connection
+  if (topic === 'APP_UNINSTALLED') {
+    try {
+      await handleAppUninstalled(normalizedShop)
+    } catch (err) {
+      console.error('[Shopify webhook] APP_UNINSTALLED handler error:', err)
+    }
+    return NextResponse.json({ ok: true })
+  }
+
+  if (topic === 'SHOP_REDACT' || topic === 'CUSTOMERS_REDACT' || topic === 'CUSTOMERS_DATA_REQUEST') {
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[Shopify webhook] ${topic} received for ${normalizedShop}`)
+    }
+    return NextResponse.json({ ok: true })
+  }
+
+  // Data webhooks require a connected store
   const connection = await prisma.shopifyConnection.findFirst({
     where: { shopDomain: normalizedShop },
-    select: { id: true, clientSecret: true, status: true },
+    select: { id: true, status: true },
   })
 
   if (!connection) {
@@ -50,22 +85,6 @@ export async function POST(request: NextRequest) {
       { error: 'Shop not connected' },
       { status: 400 }
     )
-  }
-
-  if (!verifyWebhookHmac(rawBody, hmac, connection.clientSecret)) {
-    return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
-  }
-
-  let payload: unknown
-  try {
-    payload = rawBody ? JSON.parse(rawBody) : {}
-  } catch {
-    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
-  }
-
-  const topic = parseWebhookTopic(topicHeader)
-  if (!topic) {
-    return NextResponse.json({ ok: true }) // Unknown topic, acknowledge
   }
 
   const connectionId = connection.id

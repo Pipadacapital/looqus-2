@@ -27,7 +27,6 @@ export async function GET(request: NextRequest) {
     )
   }
 
-  // Validate OAuth state cookie
   const oauthStateCookie = request.cookies.get('shopify_oauth_state')?.value
   if (!oauthStateCookie) {
     return NextResponse.redirect(
@@ -50,7 +49,6 @@ export async function GET(request: NextRequest) {
     )
   }
 
-  // Redirect to workspace dashboard with error so user can retry from Settings > Integrations
   const dashboardErrorUrl = (err: string) =>
     oauthState.workspaceSlug
       ? new URL(`/w/${oauthState.workspaceSlug}/dashboard?error=${err}`, request.url)
@@ -64,7 +62,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(dashboardErrorUrl('shop_mismatch'))
   }
 
-  // Look up the pending connection to get per-store Client ID + Secret
   const workspace = await prisma.workspace.findUnique({
     where: { slug: oauthState.workspaceSlug },
   })
@@ -75,32 +72,12 @@ export async function GET(request: NextRequest) {
     )
   }
 
-  const pendingConnection = await prisma.shopifyConnection.findUnique({
-    where: {
-      workspaceId_shopDomain: {
-        workspaceId: workspace.id,
-        shopDomain: shop,
-      },
-    },
-    select: { clientId: true, clientSecret: true },
-  })
-
-  if (!pendingConnection) {
-    return NextResponse.redirect(
-      new URL(
-        `/w/${oauthState.workspaceSlug}/dashboard?error=connection_not_found`,
-        request.url
-      )
-    )
-  }
-
-  // Validate HMAC using the per-store client secret
   const queryParams: Record<string, string> = {}
   searchParams.forEach((value, key) => {
     queryParams[key] = value
   })
 
-  if (!validateHmac(queryParams, pendingConnection.clientSecret)) {
+  if (!validateHmac(queryParams)) {
     return NextResponse.redirect(
       new URL(
         `/w/${oauthState.workspaceSlug}/dashboard?error=invalid_signature`,
@@ -109,14 +86,8 @@ export async function GET(request: NextRequest) {
     )
   }
 
-  // Exchange code for a permanent offline access token
   try {
-    const { accessToken, scope } = await exchangeCodeForToken(
-      shop,
-      code,
-      pendingConnection.clientId,
-      pendingConnection.clientSecret
-    )
+    const { accessToken, scope } = await exchangeCodeForToken(shop, code)
 
     let shopifyStoreId: string | null = null
     try {
@@ -126,14 +97,24 @@ export async function GET(request: NextRequest) {
       // Non-critical
     }
 
-    await prisma.shopifyConnection.update({
+    await prisma.shopifyConnection.upsert({
       where: {
         workspaceId_shopDomain: {
           workspaceId: workspace.id,
           shopDomain: shop,
         },
       },
-      data: {
+      create: {
+        workspaceId: workspace.id,
+        shopDomain: shop,
+        shopifyStoreId,
+        accessToken,
+        tokenExpiresAt: null,
+        scopes: scope.split(','),
+        status: 'CONNECTED',
+        installedAt: new Date(),
+      },
+      update: {
         shopifyStoreId,
         accessToken,
         tokenExpiresAt: null,
@@ -148,7 +129,6 @@ export async function GET(request: NextRequest) {
       data: { storeUrl: shop },
     })
 
-    // Register webhooks so we receive real-time orders, products, customers, inventory
     try {
       const { registered, errors } = await registerWebhooks(shop, accessToken)
       if (errors.length > 0 && process.env.NODE_ENV === 'development') {
@@ -159,10 +139,8 @@ export async function GET(request: NextRequest) {
       }
     } catch (webhookErr) {
       console.warn('[Shopify callback] Webhook registration failed:', webhookErr)
-      // Do not block redirect; user can still use manual sync
     }
 
-    // Clear cookie and redirect to dashboard
     const response = NextResponse.redirect(
       new URL(`/w/${oauthState.workspaceSlug}/dashboard`, request.url)
     )

@@ -105,8 +105,6 @@ export function IntegrationsContent({
   klaviyoConnection,
 }: IntegrationsContentProps) {
   const [storeHandle, setStoreHandle] = useState('')
-  const [clientId, setClientId] = useState('')
-  const [clientSecret, setClientSecret] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [connecting, setConnecting] = useState(false)
 
@@ -133,8 +131,7 @@ export function IntegrationsContent({
   const [kvConnecting, setKvConnecting] = useState(false)
   const [kvError, setKvError] = useState<string | null>(null)
 
-  const canConnect =
-    storeHandle.trim() && clientId.trim() && clientSecret.trim()
+  const canConnect = !!storeHandle.trim()
 
   const handleConnect = async () => {
     if (!canConnect) return
@@ -155,8 +152,6 @@ export function IntegrationsContent({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           shopDomain: cleaned,
-          clientId: clientId.trim(),
-          clientSecret: clientSecret.trim(),
           workspaceSlug,
         }),
       })
@@ -552,10 +547,7 @@ export function IntegrationsContent({
                   <DialogHeader>
                     <DialogTitle>Connect your Shopify store</DialogTitle>
                     <DialogDescription>
-                      Enter your store handle and the app credentials from the{' '}
-                      <a href="https://dev.shopify.com/dashboard/" target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2">
-                        Shopify Dev Dashboard
-                      </a>.
+                      Enter your store URL and click Continue. You&apos;ll be redirected to Shopify to approve the connection.
                     </DialogDescription>
                   </DialogHeader>
                   <div className="grid gap-4 py-2">
@@ -565,23 +557,6 @@ export function IntegrationsContent({
                         <Input id="store-handle" placeholder="your-store" value={storeHandle} onChange={(e) => setStoreHandle(e.target.value)} className="rounded-r-none" autoFocus />
                         <span className="flex h-9 items-center rounded-r-md border border-l-0 bg-muted px-3 text-sm text-muted-foreground">.myshopify.com</span>
                       </div>
-                    </div>
-                    <div className="grid gap-2">
-                      <Label htmlFor="dash-client-id">Client ID</Label>
-                      <Input id="dash-client-id" placeholder="Paste your app's Client ID" value={clientId} onChange={(e) => setClientId(e.target.value)} />
-                    </div>
-                    <div className="grid gap-2">
-                      <Label htmlFor="dash-client-secret">Client Secret</Label>
-                      <Input id="dash-client-secret" type="password" placeholder="Paste your app's Client Secret" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} />
-                    </div>
-                    <div className="rounded-lg border bg-muted/50 p-3">
-                      <p className="text-xs font-medium mb-1.5">How to get credentials</p>
-                      <ol className="text-xs text-muted-foreground space-y-0.5 list-decimal list-inside">
-                        <li>Create an app in the <a href="https://dev.shopify.com/dashboard/" target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2">Dev Dashboard</a></li>
-                        <li>Configure access scopes (read_orders, read_products, etc.)</li>
-                        <li>Install the app on your store</li>
-                        <li>Copy Client ID &amp; Secret from Settings</li>
-                      </ol>
                     </div>
                     {error && <p className="text-sm text-destructive">{error}</p>}
                   </div>
