@@ -86,6 +86,38 @@ export async function getCodPrepaidAnalytics(
     },
   })
 
+  // Collect all shiprocket order IDs from shipments (column + raw_json fallback).
+  const allOrderIds = shipments
+    .map((s) => {
+      const fromCol = s.orderId ? String(s.orderId) : null
+      const fromRaw =
+        s.rawJson && typeof s.rawJson === 'object'
+          ? String((s.rawJson as Record<string, unknown>).order_id ?? '')
+          : null
+      return fromCol || fromRaw || null
+    })
+    .filter(Boolean) as string[]
+
+  const shiprocketOrders = await prisma.shiprocketOrder.findMany({
+    where: {
+      connectionId: shiprocketConnectionId,
+      shiprocketId: { in: allOrderIds },
+    },
+    select: { shiprocketId: true, rawJson: true, total: true },
+  })
+
+  // Build lookup: shiprocketId -> order total
+  const orderTotalMap = new Map<string, number>()
+  for (const o of shiprocketOrders) {
+    const fromTotal = o.total != null ? Number(o.total) : null
+    const fromRaw =
+      o.rawJson && typeof o.rawJson === 'object'
+        ? Number((o.rawJson as Record<string, unknown>).total ?? 0)
+        : 0
+    const val = fromTotal && fromTotal > 0 ? fromTotal : fromRaw > 0 ? fromRaw : null
+    if (val) orderTotalMap.set(o.shiprocketId, val)
+  }
+
   const orderIds = [...new Set(shipments.map((s) => s.orderId).filter(Boolean))] as string[]
   const orderTotals = new Map<string, number>()
   if (orderIds.length > 0) {
@@ -116,11 +148,20 @@ export async function getCodPrepaidAnalytics(
     const isDelivered = isDeliveredByStatus(s.status)
     const codAmount = s.codAmount != null ? Number(s.codAmount) : null
     const orderTotal = s.orderId ? orderTotals.get(s.orderId) ?? null : null
-    const orderValue = shiprocketRtoRevenueLost(
-      { codAmount, isCod },
-      s.rawJson,
-      orderTotal
-    )
+    // For COD: use order total from shiprocket_orders (same approach as pincode intelligence).
+    const rawOrderId =
+      s.rawJson && typeof s.rawJson === 'object'
+        ? String((s.rawJson as Record<string, unknown>).order_id ?? '')
+        : ''
+    const orderIdKey = s.orderId ? String(s.orderId) : rawOrderId
+    const orderValueFromOrders = orderIdKey
+      ? orderTotalMap.get(orderIdKey) ?? null
+      : null
+
+    const orderValue = isCod
+      ? orderValueFromOrders ??
+        shiprocketRtoRevenueLost({ codAmount, isCod }, s.rawJson, orderTotal)
+      : shiprocketRtoRevenueLost({ codAmount: null, isCod: false }, s.rawJson, orderTotal)
 
     if (isCod) {
       codOrders++

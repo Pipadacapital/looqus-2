@@ -1,8 +1,6 @@
-import { Suspense } from 'react'
 import { redirect } from 'next/navigation'
 import { getCachedWorkspace } from '@/lib/server-cache'
-import { DashboardLoader } from './dashboard-loader'
-import Loading from './loading'
+import { DashboardContent } from './dashboard-content'
 
 export default async function DashboardPage({
   params,
@@ -18,8 +16,11 @@ export default async function DashboardPage({
   if (!workspace) redirect('/')
 
   return (
-    <Suspense fallback={<Loading />}>
-      <DashboardLoader slug={slug} connectionError={connectionError ?? null} />
-    </Suspense>
+    <DashboardContent
+      workspaceSlug={slug}
+      workspaceId={workspace.id}
+      workspaceName={workspace.name}
+      connectionError={connectionError ?? null}
+    />
   )
 }

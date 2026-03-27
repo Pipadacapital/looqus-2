@@ -111,6 +111,11 @@ export function IntegrationsContent({
   const [error, setError] = useState<string | null>(null)
 
   const [syncing, setSyncing] = useState<string | null>(null)
+  const [shiprocketSyncProgress, setShiprocketSyncProgress] = useState<{
+    stage: string
+    message: string
+    progress: number
+  } | null>(null)
   const [shopifySyncing, setShopifySyncing] = useState(false)
   const [disconnecting, setDisconnecting] = useState<string | null>(null)
   const [selectingAccount, setSelectingAccount] = useState(false)
@@ -348,13 +353,65 @@ export function IntegrationsContent({
 
   const handleShiprocketSync = async () => {
     setSyncing('shiprocket')
+    setShiprocketSyncProgress({
+      stage: 'starting',
+      message: 'Starting sync...',
+      progress: 5,
+    })
     try {
-      await fetch('/api/integrations/shiprocket/sync', {
+      const response = await fetch('/api/integrations/shiprocket/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workspaceId }),
       })
-      window.location.reload()
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.error || 'Sync failed')
+      }
+      if (!response.body) throw new Error('No response stream')
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let scheduledReload = false
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+
+        for (const line of lines) {
+          if (!line.trim()) continue
+          try {
+            const event = JSON.parse(line)
+            setShiprocketSyncProgress({
+              stage: event.stage,
+              message: event.message,
+              progress: event.progress,
+            })
+            if (
+              !scheduledReload &&
+              (event.stage === 'done' || event.stage === 'error')
+            ) {
+              scheduledReload = true
+              setTimeout(() => window.location.reload(), 2000)
+            }
+          } catch {
+            // Ignore malformed NDJSON line
+          }
+        }
+      }
+    } catch {
+      setShiprocketSyncProgress({
+        stage: 'error',
+        message: 'Sync failed',
+        progress: 0,
+      })
+      setTimeout(() => setShiprocketSyncProgress(null), 3000)
     } finally {
       setSyncing(null)
     }
@@ -909,6 +966,30 @@ export function IntegrationsContent({
                   </Button>
                 </div>
               </div>
+              {shiprocketSyncProgress && (
+                <div className="mt-3 space-y-1.5">
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span>{shiprocketSyncProgress.message}</span>
+                    <span>{shiprocketSyncProgress.progress}%</span>
+                  </div>
+                  <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-primary transition-all duration-500 ease-out"
+                      style={{ width: `${shiprocketSyncProgress.progress}%` }}
+                    />
+                  </div>
+                  {shiprocketSyncProgress.stage === 'done' && (
+                    <p className="text-xs text-green-600 dark:text-green-400">
+                      ✓ Sync complete
+                    </p>
+                  )}
+                  {shiprocketSyncProgress.stage === 'error' && (
+                    <p className="text-xs text-red-600 dark:text-red-400">
+                      ✗ {shiprocketSyncProgress.message}
+                    </p>
+                  )}
+                </div>
+              )}
 
               <div className="rounded-md border p-4 space-y-3">
                 <p className="text-sm font-medium">Shiprocket API User (for full pincode backfill)</p>

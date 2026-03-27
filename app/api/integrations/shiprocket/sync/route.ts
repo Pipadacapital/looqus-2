@@ -1,9 +1,14 @@
 export const runtime = 'nodejs'
+export const maxDuration = 800
 
 import { NextResponse, type NextRequest } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { requireWorkspaceAdmin } from '@/lib/integrations/helpers'
-import { syncShiprocketForConnection } from '@/lib/integrations/shiprocket-sync'
+import {
+  syncShiprocketForConnection,
+  backfillShiprocketCourierNames,
+  backfillShiprocketPincodes,
+} from '@/lib/integrations/shiprocket-sync'
 
 export async function POST(request: NextRequest) {
   let body: { workspaceId: string }
@@ -32,16 +37,109 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  try {
-    const result = await syncShiprocketForConnection(connection.id)
-    return NextResponse.json({
-      success: true,
-      warning: result?.warning ?? undefined,
-    })
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Sync failed' },
-      { status: 500 }
-    )
-  }
+  const encode = (data: object) =>
+    new TextEncoder().encode(JSON.stringify(data) + '\n')
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      try {
+        controller.enqueue(
+          encode({
+            stage: 'syncing',
+            message: 'Syncing shipments from Shiprocket...',
+            progress: 10,
+          })
+        )
+
+        const syncResult = await syncShiprocketForConnection(connection.id)
+
+        controller.enqueue(
+          encode({
+            stage: 'syncing_done',
+            message: `Synced ${syncResult?.newShipments ?? 0} new shipments`,
+            progress: 35,
+          })
+        )
+
+        controller.enqueue(
+          encode({
+            stage: 'courier',
+            message: 'Enriching courier data...',
+            progress: 40,
+          })
+        )
+
+        let courierResult = null
+        try {
+          courierResult = await backfillShiprocketCourierNames(connection.id)
+        } catch (e) {
+          console.warn('[sync] courier backfill failed:', e)
+        }
+
+        controller.enqueue(
+          encode({
+            stage: 'courier_done',
+            message: `Courier data enriched${
+              courierResult?.updatedFromTracking
+                ? ` (${courierResult.updatedFromTracking} resolved)`
+                : ''
+            }`,
+            progress: 70,
+          })
+        )
+
+        controller.enqueue(
+          encode({
+            stage: 'pincode',
+            message: 'Enriching pincode data...',
+            progress: 75,
+          })
+        )
+
+        let pincodeResult = null
+        try {
+          pincodeResult = await backfillShiprocketPincodes(connection.id)
+        } catch (e) {
+          console.warn('[sync] pincode backfill failed:', e)
+        }
+
+        controller.enqueue(
+          encode({
+            stage: 'pincode_done',
+            message: 'Pincode data enriched',
+            progress: 95,
+          })
+        )
+
+        controller.enqueue(
+          encode({
+            stage: 'done',
+            message: 'Sync complete',
+            progress: 100,
+            sync: syncResult,
+            courierBackfill: courierResult,
+            pincodeBackfill: pincodeResult,
+          })
+        )
+      } catch (error) {
+        controller.enqueue(
+          encode({
+            stage: 'error',
+            message: error instanceof Error ? error.message : 'Sync failed',
+            progress: 0,
+          })
+        )
+      } finally {
+        controller.close()
+      }
+    },
+  })
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'application/x-ndjson',
+      'Cache-Control': 'no-cache',
+      'X-Accel-Buffering': 'no',
+    },
+  })
 }

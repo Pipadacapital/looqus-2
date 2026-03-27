@@ -12,7 +12,8 @@ function parseNum(val: string | null, defaultVal: number): number {
 /**
  * GET /api/workspaces/[slug]/cod-prepaid-analytics
  * COD vs Prepaid analytics: realization rate, RTO rates, effective revenue, break-even.
- * Query: from, to, codFeePerOrder (₹/order), gatewayFeePercent (% of prepaid gross), returnShippingPerRto (₹). Defaults: 0, 2, 0.
+ * Query: from, to, codFeePerOrder (₹/order), returnShippingPerRto (₹). Defaults: 0, 0.
+ * Gateway fee % is sourced from latest WEBSITE cost in workspace costs (fallback 2%).
  */
 export async function GET(
   request: NextRequest,
@@ -32,7 +33,6 @@ export async function GET(
   const fromParam = searchParams.get('from')
   const toParam = searchParams.get('to')
   const codFeeParam = searchParams.get('codFeePerOrder')
-  const gatewayFeeParam = searchParams.get('gatewayFeePercent')
   const returnShippingParam = searchParams.get('returnShippingPerRto')
 
   const workspace = await prisma.workspace.findUnique({
@@ -74,7 +74,17 @@ export async function GET(
   const toDate = new Date(toStr + 'T23:59:59.999Z')
 
   const codFeePerOrder = Math.max(0, parseNum(codFeeParam, 0))
-  const gatewayFeePercent = Math.min(100, Math.max(0, parseNum(gatewayFeeParam, 2)))
+  const websiteCost = await prisma.workspaceCost.findFirst({
+    where: {
+      workspaceId: workspace.id,
+      costType: 'WEBSITE',
+    },
+    orderBy: { effectiveFrom: 'desc' },
+  })
+  const gatewayFeePercent = Math.min(
+    100,
+    Math.max(0, websiteCost ? Number(websiteCost.amount) : 2)
+  )
   const returnShippingPerRto = Math.max(0, parseNum(returnShippingParam, 0))
 
   if (!srConn) {

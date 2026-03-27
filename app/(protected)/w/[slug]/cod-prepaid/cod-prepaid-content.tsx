@@ -75,7 +75,6 @@ export function CodPrepaidContent({
   const [from, setFrom] = useState(initialFrom)
   const [to, setTo] = useState(initialTo)
   const [codFee, setCodFee] = useState(initialCodFee)
-  const [gatewayFeePercent, setGatewayFeePercent] = useState(initialGatewayFee)
   const [returnShipping, setReturnShipping] = useState(initialReturnShipping)
   const insightProps = usePageInsights(slug, 'cod-prepaid', from, to)
   const [loading, setLoading] = useState(true)
@@ -87,13 +86,11 @@ export function CodPrepaidContent({
     p.set('from', from)
     p.set('to', to)
     const cf = parseFloat(codFee)
-    const gf = parseFloat(gatewayFeePercent)
     const rs = parseFloat(returnShipping)
     if (Number.isFinite(cf)) p.set('codFeePerOrder', String(cf))
-    if (Number.isFinite(gf)) p.set('gatewayFeePercent', String(gf))
     if (Number.isFinite(rs)) p.set('returnShippingPerRto', String(rs))
     return p.toString()
-  }, [from, to, codFee, gatewayFeePercent, returnShipping])
+  }, [from, to, codFee, returnShipping])
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -126,9 +123,8 @@ export function CodPrepaidContent({
   }, [initialFrom, initialTo])
   useEffect(() => {
     setCodFee(initialCodFee)
-    setGatewayFeePercent(initialGatewayFee)
     setReturnShipping(initialReturnShipping)
-  }, [initialCodFee, initialGatewayFee, initialReturnShipping])
+  }, [initialCodFee, initialReturnShipping])
 
   const applyFilters = () => {
     router.push(`${pathname}?${buildParams()}`)
@@ -187,20 +183,6 @@ export function CodPrepaidContent({
               onChange={(e) => setCodFee(e.target.value)}
               className="w-24"
             />
-          </div>
-          <div className="space-y-1">
-            <Label htmlFor="gateway-fee" className="text-xs">Gateway fee %</Label>
-            <Input
-              id="gateway-fee"
-              type="number"
-              min={0}
-              max={100}
-              step={0.5}
-              value={gatewayFeePercent}
-              onChange={(e) => setGatewayFeePercent(e.target.value)}
-              className="w-24"
-            />
-            <p className="text-[10px] text-muted-foreground">of prepaid gross revenue</p>
           </div>
           <div className="space-y-1">
             <Label htmlFor="return-shipping" className="text-xs">Return shipping/RTO (₹)</Label>
@@ -355,8 +337,7 @@ export function CodPrepaidContent({
 
               {data.feesUsed && (
                 <p className="text-xs text-muted-foreground">
-                  Fees used: COD ₹{data.feesUsed.codFeePerOrder}/order, Gateway {data.feesUsed.gatewayFeePercent}% of prepaid gross,
-                  Return shipping ₹{data.feesUsed.returnShippingPerRto}/RTO
+                  Fees used: COD ₹{data.feesUsed.codFeePerOrder}/order, Gateway fee: {data.feesUsed.gatewayFeePercent}% (from Costs), Return shipping ₹{data.feesUsed.returnShippingPerRto}/RTO
                 </p>
               )}
 

@@ -448,7 +448,7 @@ async function upsertShipment(connectionId: string, s: ShiprocketShipmentRow) {
     status: s.status ?? null,
     statusCode: typeof s.status_code === 'number' ? s.status_code : null,
     courierName,
-    awbCode: s.awb_code ?? null,
+    awbCode: s.awb_code?.trim() || s.awb?.trim() || null,
     isCod: !!s.is_cod,
     codAmount,
     paymentMethod,
@@ -459,11 +459,17 @@ async function upsertShipment(connectionId: string, s: ShiprocketShipmentRow) {
     shiprocketCreatedAt,
     rawJson: s as object,
   }
+  const updateData = {
+    ...shared,
+    syncedAt: new Date(),
+    // Preserve enriched courier when API returns no courier for this sync pass.
+    courierName: courierName ?? undefined,
+  }
 
   await prisma.shiprocketShipment.upsert({
     where: { connectionId_shipmentId: { connectionId, shipmentId } },
     create: { connectionId, shipmentId, ...shared },
-    update: { ...shared, syncedAt: new Date() },
+    update: updateData,
   })
 }
 
@@ -606,7 +612,7 @@ export type BackfillCourierResult = {
 
 const BACKFILL_RAW_BATCH = 500
 const BACKFILL_TRACKING_BATCH_PER_REQUEST = 150
-const BACKFILL_TRACKING_DELAY_MS = 350
+const BACKFILL_TRACKING_DELAY_MS = 150
 
 /**
  * Backfill ShiprocketShipment.courierName for rows where it is null.
@@ -633,26 +639,66 @@ export async function backfillShiprocketCourierNames(
   do {
     const batch = await prisma.shiprocketShipment.findMany({
       where: { connectionId, courierName: null, rawJson: { not: Prisma.AnyNull } },
-      select: { id: true, rawJson: true },
+      select: { id: true, rawJson: true, awbCode: true, status: true },
       take: BACKFILL_RAW_BATCH,
       orderBy: { id: 'asc' },
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     })
     if (batch.length === 0) break
     for (const row of batch) {
+      const raw =
+        row.rawJson && typeof row.rawJson === 'object'
+          ? (row.rawJson as Record<string, unknown>)
+          : null
+      // Also backfill awbCode from rawJson.awb if missing.
+      const rawAwb =
+        raw && typeof raw.awb === 'string' && raw.awb.trim() !== ''
+          ? raw.awb.trim()
+          : null
+
+      // Mark self-fulfilled shipments explicitly when no AWB is present.
+      const isSelfFulfilled =
+        (!raw?.awb || raw.awb === '') &&
+        (String(row.status ?? '')
+          .toUpperCase()
+          .includes('SELF') ||
+          String(raw?.status ?? '')
+            .toUpperCase()
+            .includes('SELF'))
+
+      if (isSelfFulfilled) {
+        await prisma.shiprocketShipment.update({
+          where: { id: row.id },
+          data: {
+            courierName: 'Self Fulfilled',
+            ...(rawAwb && !row.awbCode ? { awbCode: rawAwb } : {}),
+          },
+        })
+        updatedFromRaw++
+        continue
+      }
+
       const courier = resolveCourierFromRawJson(row.rawJson)
       if (courier) {
         await prisma.shiprocketShipment.update({
           where: { id: row.id },
-          data: { courierName: courier },
+          data: {
+            courierName: courier,
+            ...(rawAwb && !row.awbCode ? { awbCode: rawAwb } : {}),
+          },
         })
         updatedFromRaw++
+      } else if (rawAwb && !row.awbCode) {
+        await prisma.shiprocketShipment.update({
+          where: { id: row.id },
+          data: { awbCode: rawAwb },
+        })
       }
     }
     cursor = batch[batch.length - 1]?.id
   } while (cursor)
 
-  // Phase 2: for remaining null, fetch tracking (capped per request to avoid timeout/rate limits)
+  // Phase 2: for remaining null, fetch tracking in iterations until no more resolvable rows.
   if (trackingCap > 0) {
     let token: string | undefined
     try {
@@ -661,27 +707,60 @@ export async function backfillShiprocketCourierNames(
       // Token failure: skip tracking phase
     }
     if (token) {
-      const toFetch = await prisma.shiprocketShipment.findMany({
-        where: { connectionId, courierName: null },
-        select: { id: true, shipmentId: true },
-        take: trackingCap,
-        orderBy: { id: 'asc' },
-      })
-      for (let i = 0; i < toFetch.length; i++) {
-        if (i > 0) await new Promise((r) => setTimeout(r, BACKFILL_TRACKING_DELAY_MS))
-        try {
-          const result = await fetchShipmentTracking(token, toFetch[i].shipmentId)
-          if (result.courierName) {
-            await prisma.shiprocketShipment.update({
-              where: { id: toFetch[i].id },
-              data: { courierName: result.courierName },
-            })
-            updatedFromTracking++
+      const batchSize = Math.min(100, trackingCap)
+      const attemptedIds = new Set<string>()
+      let totalResolvedFromTracking = 0
+      do {
+        const toFetch = await prisma.shiprocketShipment.findMany({
+          where: {
+            connectionId,
+            courierName: null,
+            id: { notIn: Array.from(attemptedIds) },
+            OR: [
+              { awbCode: { not: null, notIn: [''] } },
+              { rawJson: { not: Prisma.AnyNull } },
+            ],
+          },
+          select: { id: true, shipmentId: true, awbCode: true, rawJson: true },
+          take: batchSize,
+          orderBy: { id: 'asc' },
+        })
+        if (toFetch.length === 0) break
+
+        let iterationResolved = 0
+        for (let i = 0; i < toFetch.length; i++) {
+          if (i > 0) await new Promise((r) => setTimeout(r, BACKFILL_TRACKING_DELAY_MS))
+          const shipment = toFetch[i]
+          attemptedIds.add(shipment.id)
+          const raw =
+            shipment.rawJson && typeof shipment.rawJson === 'object'
+              ? (shipment.rawJson as Record<string, unknown>)
+              : null
+          const awb =
+            shipment.awbCode ||
+            (raw && typeof raw.awb === 'string' && raw.awb.trim() !== ''
+              ? raw.awb.trim()
+              : null) ||
+            null
+          if (!awb) continue
+          try {
+            const result = await fetchShipmentTracking(token, shipment.shipmentId)
+            if (result.courierName) {
+              await prisma.shiprocketShipment.update({
+                where: { id: shipment.id },
+                data: { courierName: result.courierName },
+              })
+              iterationResolved++
+            }
+          } catch {
+            // Skip failed tracking
           }
-        } catch {
-          // Skip failed tracking
         }
-      }
+
+        totalResolvedFromTracking += iterationResolved
+      } while (true)
+
+      updatedFromTracking = totalResolvedFromTracking
     }
   }
 
