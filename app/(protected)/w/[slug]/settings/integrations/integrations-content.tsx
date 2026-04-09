@@ -14,6 +14,7 @@ import {
   IconUnlink,
   IconTruck,
   IconMail,
+  IconDatabase,
 } from '@tabler/icons-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -81,6 +82,17 @@ type KlaviyoConnectionInfo = {
   createdAt: string
 }
 
+type UnicommerceConnectionInfo = {
+  id: string
+  tenant: string
+  username: string
+  facilityCodes?: string[]
+  status: string
+  lastSyncAt: string | null
+  lastSyncError: string | null
+  createdAt: string
+}
+
 interface IntegrationsContentProps {
   workspaceSlug: string
   workspaceId: string
@@ -90,6 +102,8 @@ interface IntegrationsContentProps {
   metaConnection: MetaConnectionInfo | null
   googleConnection: GoogleConnectionInfo | null
   shiprocketConnection: ShiprocketConnectionInfo | null
+  unicommerceConnection: UnicommerceConnectionInfo | null
+  productDataSource: 'SHOPIFY' | 'UNICOMMERCE'
   klaviyoConnection: KlaviyoConnectionInfo | null
 }
 
@@ -102,6 +116,8 @@ export function IntegrationsContent({
   metaConnection,
   googleConnection,
   shiprocketConnection,
+  unicommerceConnection,
+  productDataSource,
   klaviyoConnection,
 }: IntegrationsContentProps) {
   const [storeHandle, setStoreHandle] = useState('')
@@ -130,6 +146,25 @@ export function IntegrationsContent({
   const [srApiUserEmail, setSrApiUserEmail] = useState(shiprocketConnection?.shiprocketApiEmail ?? '')
   const [srApiUserPassword, setSrApiUserPassword] = useState('')
   const [srApiUserSaving, setSrApiUserSaving] = useState(false)
+
+  // Unicommerce connect form state
+  const [ucDialogOpen, setUcDialogOpen] = useState(false)
+  const [ucTenant, setUcTenant] = useState('')
+  const [ucUsername, setUcUsername] = useState('')
+  const [ucPassword, setUcPassword] = useState('')
+  const [ucConnecting, setUcConnecting] = useState(false)
+  const [ucSyncing, setUcSyncing] = useState(false)
+  const [ucDisconnecting, setUcDisconnecting] = useState(false)
+  const [ucError, setUcError] = useState<string | null>(null)
+  const [ucLastSyncResult, setUcLastSyncResult] = useState<{
+    synced: number
+    errors: number
+    facilities: number
+  } | null>(null)
+  const [selectedProductDataSource, setSelectedProductDataSource] = useState<
+    'SHOPIFY' | 'UNICOMMERCE'
+  >(productDataSource)
+  const [savingProductDataSource, setSavingProductDataSource] = useState(false)
 
   const [kvDialogOpen, setKvDialogOpen] = useState(false)
   const [kvApiKey, setKvApiKey] = useState('')
@@ -441,6 +476,110 @@ export function IntegrationsContent({
       window.location.reload()
     } finally {
       setSrApiUserSaving(false)
+    }
+  }
+
+  const handleUnicommerceConnect = async () => {
+    if (!ucTenant.trim() || !ucUsername.trim() || !ucPassword.trim()) return
+    setUcConnecting(true)
+    setUcError(null)
+    try {
+      const res = await fetch('/api/integrations/unicommerce/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId,
+          tenant: ucTenant.trim(),
+          username: ucUsername.trim(),
+          password: ucPassword,
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setUcError(data.error || 'Failed to connect Unicommerce')
+        return
+      }
+      setUcDialogOpen(false)
+      setUcTenant('')
+      setUcUsername('')
+      setUcPassword('')
+      window.location.reload()
+    } catch {
+      setUcError('Network error. Please try again.')
+    } finally {
+      setUcConnecting(false)
+    }
+  }
+
+  const handleUnicommerceDisconnect = async () => {
+    setUcDisconnecting(true)
+    try {
+      const res = await fetch('/api/integrations/unicommerce/disconnect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspaceId }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        setUcError(data.error || 'Failed to disconnect Unicommerce')
+        return
+      }
+      window.location.reload()
+    } finally {
+      setUcDisconnecting(false)
+    }
+  }
+
+  const handleUnicommerceSync = async () => {
+    setUcSyncing(true)
+    setUcError(null)
+    setUcLastSyncResult(null)
+    try {
+      const res = await fetch('/api/integrations/unicommerce/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspaceId }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setUcError(data.error || 'Unicommerce sync failed')
+        return
+      }
+      setUcLastSyncResult({
+        synced: data.synced ?? 0,
+        errors: data.errors ?? 0,
+        facilities: data.facilities ?? 0,
+      })
+      toast.success(
+        `Synced ${data.synced ?? 0} products from ${data.facilities ?? 0} facility${(data.facilities ?? 0) === 1 ? '' : 'ies'} (last 24h activity only - run daily to build full catalog)`
+      )
+      window.location.reload()
+    } finally {
+      setUcSyncing(false)
+    }
+  }
+
+  const handleSaveProductDataSource = async () => {
+    setSavingProductDataSource(true)
+    setUcError(null)
+    try {
+      const res = await fetch(
+        `/api/workspaces/${workspaceSlug}/settings/product-data-source`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ productDataSource: selectedProductDataSource }),
+        }
+      )
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setUcError(data.error || 'Failed to update product data source')
+        return
+      }
+      toast.success('Product data source updated')
+      window.location.reload()
+    } finally {
+      setSavingProductDataSource(false)
     }
   }
 
@@ -1092,6 +1231,250 @@ export function IntegrationsContent({
                         <><IconLoader2 className="mr-1.5 h-4 w-4 animate-spin" />Connecting...</>
                       ) : (
                         <><IconTruck className="mr-1.5 h-4 w-4" />Connect</>
+                      )}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Unicommerce */}
+      <div className="rounded-xl border bg-card shadow-sm">
+        <div className="flex items-center gap-3 border-b px-6 py-4">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-500/10">
+            <IconDatabase className="h-5 w-5 text-orange-600" />
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-medium">Unicommerce</p>
+            <p className="text-xs text-muted-foreground">
+              {unicommerceConnection
+                ? `Connected as ${unicommerceConnection.username}`
+                : 'Connect your Unicommerce account to use it as your product catalog source'}
+            </p>
+          </div>
+          {unicommerceConnection ? (
+            <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-600">
+              <IconCheck className="mr-1 h-3 w-3" />
+              Connected
+            </Badge>
+          ) : (
+            <Badge variant="secondary">Not connected</Badge>
+          )}
+        </div>
+
+        <div className="px-6 py-4">
+          {unicommerceConnection ? (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <p className="text-sm font-medium">{unicommerceConnection.username}</p>
+                  <p className="text-xs text-muted-foreground">
+                    Tenant URL: {`https://${unicommerceConnection.tenant}.unicommerce.com`}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Facilities:{' '}
+                    {(unicommerceConnection.facilityCodes ?? []).length > 0
+                      ? `${(unicommerceConnection.facilityCodes ?? []).join(', ')} (${(unicommerceConnection.facilityCodes ?? []).length} warehouse${(unicommerceConnection.facilityCodes ?? []).length === 1 ? '' : 's'})`
+                      : 'None discovered yet'}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Connected{' '}
+                    {formatDistanceToNow(new Date(unicommerceConnection.createdAt), {
+                      addSuffix: true,
+                    })}
+                    {unicommerceConnection.lastSyncAt && (
+                      <>
+                        {' · '}Last synced{' '}
+                        {formatDistanceToNow(
+                          new Date(unicommerceConnection.lastSyncAt),
+                          {
+                            addSuffix: true,
+                          }
+                        )}
+                      </>
+                    )}
+                  </p>
+                  {unicommerceConnection.lastSyncError && (
+                    <p className="text-xs text-destructive">
+                      {unicommerceConnection.lastSyncError}
+                    </p>
+                  )}
+                  {ucLastSyncResult && (
+                    <p className="text-xs text-muted-foreground">
+                      Synced {ucLastSyncResult.synced} products from{' '}
+                      {ucLastSyncResult.facilities} facility
+                      {ucLastSyncResult.facilities === 1 ? '' : 'ies'} (last 24h
+                      activity only - run daily to build full catalog)
+                      {ucLastSyncResult.errors > 0 ? `, ${ucLastSyncResult.errors} errors` : ''}
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleUnicommerceSync}
+                    disabled={ucSyncing}
+                  >
+                    {ucSyncing ? (
+                      <IconLoader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <IconRefresh className="mr-1.5 h-3.5 w-3.5" />
+                    )}
+                    Sync now
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleUnicommerceDisconnect}
+                    disabled={ucDisconnecting}
+                  >
+                    <IconUnlink className="mr-1.5 h-3.5 w-3.5" />
+                    Disconnect
+                  </Button>
+                </div>
+              </div>
+
+              <div className="rounded-md border p-4 space-y-3">
+                <p className="text-xs font-semibold tracking-wide text-muted-foreground">
+                  PRODUCT DATA SOURCE
+                </p>
+                <label className="flex items-start gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name="product-data-source"
+                    value="SHOPIFY"
+                    checked={selectedProductDataSource === 'SHOPIFY'}
+                    onChange={() => setSelectedProductDataSource('SHOPIFY')}
+                  />
+                  <span>Shopify — Use Shopify as your product catalog (default)</span>
+                </label>
+                <label className="flex items-start gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name="product-data-source"
+                    value="UNICOMMERCE"
+                    checked={selectedProductDataSource === 'UNICOMMERCE'}
+                    onChange={() => setSelectedProductDataSource('UNICOMMERCE')}
+                  />
+                  <span>Unicommerce — Use Unicommerce as your product catalog</span>
+                </label>
+                {selectedProductDataSource === 'UNICOMMERCE' && (
+                  <p className="text-xs text-amber-700 dark:text-amber-300">
+                    Product names, SKUs, MRP and inventory levels will be sourced from
+                    Unicommerce. COGS is always from your Brain Costs settings.
+                  </p>
+                )}
+                <Button
+                  size="sm"
+                  onClick={handleSaveProductDataSource}
+                  disabled={
+                    savingProductDataSource ||
+                    selectedProductDataSource === productDataSource
+                  }
+                >
+                  {savingProductDataSource ? (
+                    <>
+                      <IconLoader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    'Save'
+                  )}
+                </Button>
+              </div>
+              {ucError && <p className="text-sm text-destructive">{ucError}</p>}
+            </div>
+          ) : (
+            <div className="flex flex-col items-center gap-4 py-4 text-center">
+              <div className="max-w-sm space-y-1">
+                <p className="text-sm font-medium">No Unicommerce account connected</p>
+                <p className="text-xs text-muted-foreground">
+                  Connect your Unicommerce account to use it as your product catalog source.
+                  Syncs products active in the last 24 hours per run. Run daily to build your full catalog.
+                </p>
+              </div>
+              <Dialog open={ucDialogOpen} onOpenChange={setUcDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button>
+                    <IconDatabase className="mr-1.5 h-4 w-4" />
+                    Connect Unicommerce
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="sm:max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>Connect Unicommerce</DialogTitle>
+                    <DialogDescription>
+                      Enter your Unicommerce tenant and login credentials.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="grid gap-4 py-2">
+                    <div className="grid gap-2">
+                      <Label htmlFor="uc-tenant">Tenant</Label>
+                      <Input
+                        id="uc-tenant"
+                        placeholder="brandname"
+                        value={ucTenant}
+                        onChange={(e) => setUcTenant(e.target.value)}
+                        autoFocus
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Your Unicommerce subdomain e.g. brandname from
+                        brandname.unicommerce.com
+                      </p>
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="uc-username">Username</Label>
+                      <Input
+                        id="uc-username"
+                        type="email"
+                        placeholder="you@example.com"
+                        value={ucUsername}
+                        onChange={(e) => setUcUsername(e.target.value)}
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="uc-password">Password</Label>
+                      <Input
+                        id="uc-password"
+                        type="password"
+                        placeholder="Your Unicommerce password"
+                        value={ucPassword}
+                        onChange={(e) => setUcPassword(e.target.value)}
+                      />
+                    </div>
+                    {ucError && <p className="text-sm text-destructive">{ucError}</p>}
+                  </div>
+                  <DialogFooter>
+                    <Button
+                      variant="ghost"
+                      onClick={() => setUcDialogOpen(false)}
+                      disabled={ucConnecting}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={handleUnicommerceConnect}
+                      disabled={
+                        !ucTenant.trim() ||
+                        !ucUsername.trim() ||
+                        !ucPassword.trim() ||
+                        ucConnecting
+                      }
+                    >
+                      {ucConnecting ? (
+                        <>
+                          <IconLoader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                          Connecting...
+                        </>
+                      ) : (
+                        <>
+                          <IconDatabase className="mr-1.5 h-4 w-4" />
+                          Connect
+                        </>
                       )}
                     </Button>
                   </DialogFooter>

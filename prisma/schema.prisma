@@ -62,12 +62,14 @@ model Workspace {
   timezone                   String                     @default("UTC") @db.VarChar(100)
   skip_zero_sales_orders     Boolean                    @default(false)
   skipped_shopify_order_tags String[]                   @default([])
+  productDataSource          ProductDataSource          @default(SHOPIFY) @map("product_data_source")
   auditLogs                  AuditLog[]
   google_ads_connections     google_ads_connections?
   invitations                Invitation[]
   meta_ads_connections       meta_ads_connections?
   notifications              Notification[]
   shiprocketConnection       ShiprocketConnection?
+  unicommerceConnection      UnicommerceConnection?
   klaviyoConnection          KlaviyoConnection?
   shopifyConnections         ShopifyConnection[]
   emailPerformanceRows       EmailPerformance[]
@@ -471,6 +473,45 @@ model ShiprocketConnection {
   shipments          ShiprocketShipment[]
 
   @@map("shiprocket_connections")
+}
+
+model UnicommerceConnection {
+  id              String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  workspaceId     String               @unique @map("workspace_id") @db.Uuid
+  tenant          String
+  username        String
+  password        String
+  facilityCodes   String[]             @default([]) @map("facility_codes")
+  accessToken     String?              @map("access_token")
+  tokenObtainedAt DateTime?            @map("token_obtained_at")
+  status          ConnectionStatus     @default(CONNECTED)
+  lastSyncAt      DateTime?            @map("last_sync_at")
+  lastSyncError   String?              @map("last_sync_error")
+  createdAt       DateTime             @default(now()) @map("created_at")
+  updatedAt       DateTime             @updatedAt @map("updated_at")
+  workspace       Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  products        UnicommerceProduct[]
+
+  @@map("unicommerce_connections")
+}
+
+model UnicommerceProduct {
+  id           String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  connectionId String                @map("connection_id") @db.Uuid
+  skuCode      String                @map("sku_code")
+  name         String
+  brand        String?
+  mrp          Decimal?              @db.Decimal(12, 2)
+  imageUrl     String?               @map("image_url")
+  enabled      Boolean               @default(true)
+  inventory    Int?
+  rawJson      Json?                 @map("raw_json")
+  syncedAt     DateTime              @default(now()) @map("synced_at")
+  connection   UnicommerceConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@unique([connectionId, skuCode])
+  @@index([connectionId])
+  @@map("unicommerce_products")
 }
 
 model KlaviyoConnection {
@@ -912,4 +953,9 @@ enum WorkspaceCostType {
 enum WorkspaceCostBillingMode {
   monthly
   per_order
+}
+
+enum ProductDataSource {
+  SHOPIFY
+  UNICOMMERCE
 }

@@ -9,6 +9,7 @@ export async function IntegrationsLoader({ slug }: { slug: string }) {
       select: {
         id: true,
         name: true,
+        productDataSource: true,
         shopifyConnections: {
           where: { status: 'CONNECTED' },
           select: {
@@ -58,6 +59,17 @@ export async function IntegrationsLoader({ slug }: { slug: string }) {
             createdAt: true,
           },
         },
+        unicommerceConnection: {
+          select: {
+            id: true,
+            tenant: true,
+            username: true,
+            status: true,
+            lastSyncAt: true,
+            lastSyncError: true,
+            createdAt: true,
+          },
+        },
         klaviyoConnection: {
           select: {
             id: true,
@@ -85,6 +97,9 @@ export async function IntegrationsLoader({ slug }: { slug: string }) {
   const shiprocketRaw = workspace.shiprocketConnection
   const shiprocketConnection =
     shiprocketRaw?.status === 'CONNECTED' ? shiprocketRaw : null
+  const unicommerceRaw = workspace.unicommerceConnection
+  const unicommerceConnection =
+    unicommerceRaw?.status === 'CONNECTED' ? unicommerceRaw : null
   const klaviyoRaw = workspace.klaviyoConnection
   const klaviyoConnection =
     klaviyoRaw?.status === 'CONNECTED' ? klaviyoRaw : null
@@ -149,6 +164,20 @@ export async function IntegrationsLoader({ slug }: { slug: string }) {
             }
           : null
       }
+      unicommerceConnection={
+        unicommerceConnection
+          ? {
+              id: unicommerceConnection.id,
+              tenant: unicommerceConnection.tenant,
+              username: unicommerceConnection.username,
+              status: unicommerceConnection.status,
+              lastSyncAt: unicommerceConnection.lastSyncAt?.toISOString() ?? null,
+              lastSyncError: unicommerceConnection.lastSyncError,
+              createdAt: unicommerceConnection.createdAt.toISOString(),
+            }
+          : null
+      }
+      productDataSource={workspace.productDataSource}
       klaviyoConnection={
         klaviyoConnection
           ? {

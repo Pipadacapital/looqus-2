@@ -70,6 +70,17 @@ export default async function IntegrationsPage({
           createdAt: true,
         },
       },
+      unicommerceConnection: {
+        select: {
+          id: true,
+          tenant: true,
+          username: true,
+          status: true,
+          lastSyncAt: true,
+          lastSyncError: true,
+          createdAt: true,
+        },
+      },
       klaviyoConnection: {
         select: {
           id: true,
@@ -98,6 +109,9 @@ export default async function IntegrationsPage({
   const shiprocketRaw = workspace.shiprocketConnection
   const shiprocketConnection =
     shiprocketRaw?.status === 'CONNECTED' ? shiprocketRaw : null
+  const unicommerceRaw = workspace.unicommerceConnection
+  const unicommerceConnection =
+    unicommerceRaw?.status === 'CONNECTED' ? unicommerceRaw : null
 
   return (
     <IntegrationsContent
@@ -159,6 +173,20 @@ export default async function IntegrationsPage({
             }
           : null
       }
+      unicommerceConnection={
+        unicommerceConnection
+          ? {
+              id: unicommerceConnection.id,
+              tenant: unicommerceConnection.tenant,
+              username: unicommerceConnection.username,
+              status: unicommerceConnection.status,
+              lastSyncAt: unicommerceConnection.lastSyncAt?.toISOString() ?? null,
+              lastSyncError: unicommerceConnection.lastSyncError,
+              createdAt: unicommerceConnection.createdAt.toISOString(),
+            }
+          : null
+      }
+      productDataSource={workspace.productDataSource}
       klaviyoConnection={
         workspace.klaviyoConnection
           ? {

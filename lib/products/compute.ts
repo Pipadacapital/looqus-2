@@ -11,6 +11,10 @@ import {
 import { getEffectiveDailyAggregates } from '@/lib/effective-daily'
 import { resolveLineItemCogs, normalizeCogsSettings } from '@/lib/cogs'
 import { getDailyVariableContribution } from '@/lib/workspace-costs'
+import {
+  getUnicommerceProductMap,
+  isUnicommerceActive,
+} from '@/lib/unicommerce/product-resolver'
 
 const EXCHANGE_RATES: Record<string, number> = {
   USD: 1,
@@ -184,6 +188,11 @@ export async function computeProducts(
   if (!connectionId || !workspace?.id) {
     return { rows: [], totalRows: 0, currency: storeCurrency }
   }
+  const workspaceId = workspace.id
+  const useUnicommerce = await isUnicommerceActive(workspaceId)
+  const unicommerceMap = useUnicommerce
+    ? await getUnicommerceProductMap(workspaceId)
+    : null
 
   const fromDate = new Date(params.from + 'T00:00:00.000Z')
   const toDate = new Date(params.to + 'T23:59:59.999Z')
@@ -244,6 +253,7 @@ export async function computeProducts(
           orderId: true,
           shopifyId: true,
           productShopifyId: true,
+          sku: true,
           title: true,
           variantTitle: true,
           price: true,
@@ -256,7 +266,14 @@ export async function computeProducts(
   const productIds = [...new Set(lineItems.map((li) => li.productShopifyId).filter(Boolean))] as string[]
   const products = await prisma.shopifyProduct.findMany({
     where: { connectionId, shopifyId: { in: productIds } },
-    select: { shopifyId: true, title: true, vendor: true, productType: true, tags: true },
+    select: {
+      shopifyId: true,
+      title: true,
+      vendor: true,
+      productType: true,
+      tags: true,
+      imageUrl: true,
+    },
   })
   const productMap = new Map(products.map((p) => [p.shopifyId, p]))
   const lineItemById = new Map(lineItems.map((li) => [li.id, li]))
@@ -410,29 +427,40 @@ export async function computeProducts(
       const lineRefundedQty = useRefundLineTable ? 0 : lineRefundedQtyFallback(lineRefund, lineSales, li.quantity)
       const lineCogs = orderSales > 0 ? (lineSales / orderSales) * cogs : 0
       const lineVariable = orderSales > 0 ? (lineSales / orderSales) * orderVariableCost : 0
-      const product = li.productShopifyId ? productMap.get(li.productShopifyId) : null
+      const shopifyProduct = li.productShopifyId
+        ? productMap.get(li.productShopifyId)
+        : null
+      const ucProduct = unicommerceMap?.get(li.sku ?? '')
+      const productTitle =
+        ucProduct?.name ?? shopifyProduct?.title ?? li.title ?? li.sku ?? 'Unknown'
+      const productVendor = ucProduct?.brand ?? shopifyProduct?.vendor ?? null
+      const productType = shopifyProduct?.productType ?? null
+      const productTags = shopifyProduct?.tags ?? []
       const orderTags = (order as { tags?: string[] }).tags ?? []
 
       const keys: { key: string; label: string; w: number }[] = []
 
       if (params.groupBy === 'product') {
-        const key = li.productShopifyId ?? '__no_product__'
-        const label = product?.title ?? li.title
+        const groupKey = useUnicommerce
+          ? (li.sku ?? li.productShopifyId ?? 'unknown')
+          : (li.productShopifyId ?? 'unknown')
+        const key = groupKey
+        const label = productTitle
         keys.push({ key, label, w: 1 })
       } else if (params.groupBy === 'variant') {
         const vKey = (li.productShopifyId ?? '') + '|' + (li.variantTitle ?? 'default')
-        const label = `${product?.title ?? li.title}${li.variantTitle ? ` - ${li.variantTitle}` : ''}`
+        const label = `${productTitle}${li.variantTitle ? ` - ${li.variantTitle}` : ''}`
         keys.push({ key: vKey, label, w: 1 })
       } else if (params.groupBy === 'vendor') {
-        const vendor = product?.vendor ?? '—'
+        const vendor = productVendor ?? '—'
         const key = vendor || '__no_vendor__'
         keys.push({ key, label: vendor || '—', w: 1 })
       } else if (params.groupBy === 'type') {
-        const pt = product?.productType ?? '—'
+        const pt = productType ?? '—'
         const key = pt || '__no_type__'
         keys.push({ key, label: pt || '—', w: 1 })
       } else if (params.groupBy === 'product_tags') {
-        const tags = product?.tags ?? []
+        const tags = productTags
         const w = 1 / Math.max(tags.length || 1, 1)
         for (const tag of tags) {
           keys.push({ key: tag, label: tag, w })
@@ -489,11 +517,17 @@ export async function computeProducts(
       const li =
         (rli.line_item_id ? lineItemById.get(rli.line_item_id) : null) ??
         (rli.shopify_line_item_id ? lineItemByShopifyId.get(rli.shopify_line_item_id) ?? null : null)
-      const product = li?.productShopifyId
+      const shopifyProduct = li?.productShopifyId
         ? productMap.get(li.productShopifyId)
         : rli.product_shopify_id
           ? productMap.get(rli.product_shopify_id)
           : null
+      const ucProduct = unicommerceMap?.get(li?.sku ?? '')
+      const productTitle =
+        ucProduct?.name ?? shopifyProduct?.title ?? li?.title ?? li?.sku ?? 'Unknown'
+      const productVendor = ucProduct?.brand ?? shopifyProduct?.vendor ?? null
+      const productType = shopifyProduct?.productType ?? null
+      const productTags = shopifyProduct?.tags ?? []
       const order = orderById.get(rli.order_id)
       const orderTags = (order as { tags?: string[] } | undefined)?.tags ?? []
       const isNc = orderIdToNc.get(rli.order_id) ?? false
@@ -502,12 +536,15 @@ export async function computeProducts(
 
       const keys: { key: string; label: string; w: number }[] = []
       if (params.groupBy === 'product') {
-        const key = (li?.productShopifyId ?? rli.product_shopify_id) ?? '__unmapped__'
-        if (key === '__unmapped__') {
+        const groupKey = useUnicommerce
+          ? (li?.sku ?? li?.productShopifyId ?? rli.product_shopify_id ?? '__unmapped__')
+          : ((li?.productShopifyId ?? rli.product_shopify_id) ?? '__unmapped__')
+        const key = groupKey
+        if (!key || key === '__unmapped__') {
           refundRowsDropped++
           continue
         }
-        const label = product?.title ?? (li?.title ?? '—')
+        const label = productTitle
         keys.push({ key, label, w: 1 })
       } else if (params.groupBy === 'variant') {
         const vKey = (li?.productShopifyId ?? rli.product_shopify_id ?? '') + '|' + (li?.variantTitle ?? 'default')
@@ -515,18 +552,18 @@ export async function computeProducts(
           refundRowsDropped++
           continue
         }
-        const label = `${product?.title ?? li?.title ?? '—'}${li?.variantTitle ? ` - ${li.variantTitle}` : ''}`
+        const label = `${productTitle}${li?.variantTitle ? ` - ${li.variantTitle}` : ''}`
         keys.push({ key: vKey, label, w: 1 })
       } else if (params.groupBy === 'vendor') {
-        const vendor = product?.vendor ?? '—'
+        const vendor = productVendor ?? '—'
         const key = vendor || '__no_vendor__'
         keys.push({ key, label: vendor || '—', w: 1 })
       } else if (params.groupBy === 'type') {
-        const pt = product?.productType ?? '—'
+        const pt = productType ?? '—'
         const key = pt || '__no_type__'
         keys.push({ key, label: pt || '—', w: 1 })
       } else if (params.groupBy === 'product_tags') {
-        const tags = product?.tags ?? []
+        const tags = productTags
         const w = 1 / Math.max(tags.length || 1, 1)
         for (const tag of tags) {
           keys.push({ key: tag, label: tag, w })

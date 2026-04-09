@@ -13,6 +13,10 @@ import {
   getOrderInclusionRawFragment,
   normalizeOrderFilterSettings,
 } from '@/lib/order-filters'
+import {
+  getUnicommerceProductMap,
+  isUnicommerceActive,
+} from '@/lib/unicommerce/product-resolver'
 
 export async function GET(
   request: NextRequest,
@@ -68,6 +72,118 @@ export async function GET(
   }
 
   const connectionId = workspace.shopifyConnections[0]?.id
+  const useUnicommerce = await isUnicommerceActive(workspace.id)
+
+  if (useUnicommerce) {
+    const ucMap = await getUnicommerceProductMap(workspace.id)
+    const ucProducts = Array.from(ucMap.values())
+
+    // Apply search filter
+    const filtered = search
+      ? ucProducts.filter((p) =>
+          p.name.toLowerCase().includes(search.toLowerCase()) ||
+          p.skuCode.toLowerCase().includes(search.toLowerCase())
+        )
+      : ucProducts
+
+    // Get sales velocity per SKU from Shopify line items
+    // Find the Shopify connection for this workspace
+    const shopifyConn = await prisma.shopifyConnection.findFirst({
+      where: { workspaceId: workspace.id, status: 'CONNECTED' },
+      select: { id: true },
+    })
+
+    // Build velocity map: skuCode → { l30, l90, l180, l360 }
+    const velocityMap = new Map<
+      string,
+      { l30: number; l90: number; l180: number; l360: number }
+    >()
+
+    if (shopifyConn && filtered.length > 0) {
+      const skuCodes = filtered.map((p) => p.skuCode)
+      const now = new Date()
+      const d30 = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
+      const d90 = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000)
+      const d180 = new Date(now.getTime() - 180 * 24 * 60 * 60 * 1000)
+      const d360 = new Date(now.getTime() - 360 * 24 * 60 * 60 * 1000)
+
+      // Single query for 360d, then slice by date
+      const lineItems = await prisma.shopifyLineItem.findMany({
+        where: {
+          sku: { in: skuCodes },
+          order: {
+            connectionId: shopifyConn.id,
+            processedAt: { gte: d360 },
+          },
+        },
+        select: { sku: true, quantity: true, order: { select: { processedAt: true } } },
+      })
+
+      for (const li of lineItems) {
+        if (!li.sku) continue
+        const v = velocityMap.get(li.sku) ?? { l30: 0, l90: 0, l180: 0, l360: 0 }
+        const date = li.order?.processedAt
+        const qty = li.quantity ?? 0
+        v.l360 += qty
+        if (date && date >= d180) v.l180 += qty
+        if (date && date >= d90) v.l90 += qty
+        if (date && date >= d30) v.l30 += qty
+        velocityMap.set(li.sku, v)
+      }
+    }
+
+    // Map to exact InventoryRow shape
+    const rows = filtered.map((p) => {
+      const v = velocityMap.get(p.skuCode) ?? { l30: 0, l90: 0, l180: 0, l360: 0 }
+      const qty = p.inventory ?? 0
+      const dailyVelocity = v.l30 / 30
+      const daysLeft = dailyVelocity > 0 ? Math.round(qty / dailyVelocity) : null
+
+      const status =
+        qty === 0 ? 'Out of stock' :
+        daysLeft !== null && daysLeft < 21 ? 'Restock Soon' :
+        daysLeft !== null && daysLeft > 180 ? 'Overstocked' :
+        'Healthy'
+
+      return {
+        id: p.skuCode,
+        shopifyId: null,
+        title: p.name,
+        brand: p.brand ?? '',
+        skus: p.skuCode,
+        status,
+        quantity: qty,
+        costValue: 0,
+        price: p.mrp ?? null,
+        compareAtPrice: null,
+        sellThrough: 0,
+        qtyL30: v.l30,
+        qtyL90: v.l90,
+        qtyL180: v.l180,
+        qtyL360: v.l360,
+        qtyN14ly: 0,
+        daysLeft: daysLeft ?? 999999,
+        leadTimeDays: 0,
+        tags: '',
+      }
+    })
+
+    // Sort by quantity desc by default (mirror Shopify default)
+    rows.sort((a, b) => (b.quantity ?? 0) - (a.quantity ?? 0))
+
+    const total = rows.length
+    const totalPages = Math.ceil(total / pageSize)
+    const paginated = rows.slice((page - 1) * pageSize, page * pageSize)
+
+    return NextResponse.json({
+      data: paginated,
+      total,
+      page,
+      pageSize,
+      totalPages,
+    })
+  }
+
   if (!connectionId) {
     return NextResponse.json({
       data: [],
