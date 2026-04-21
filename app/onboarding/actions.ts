@@ -10,10 +10,14 @@ import {
   generateNonce,
   buildAuthUrl,
 } from '@/lib/shopify/client'
+import {
+  testWoocommerceConnection,
+} from '@/lib/integrations/woocommerce'
 
 export type OnboardingResult = {
   error?: string
   shopifyAuthUrl?: string
+  redirectTo?: string
 }
 
 export async function completeOnboarding(data: {
@@ -23,8 +27,14 @@ export async function completeOnboarding(data: {
   slug: string
   industry: string
   monthlyRevenue: string
+  platform: 'shopify' | 'woocommerce'
+  // Shopify
   storeUrl: string
   connectShopify: boolean
+  // WooCommerce
+  wcStoreUrl: string
+  wcConsumerKey: string
+  wcConsumerSecret: string
 }): Promise<OnboardingResult> {
   const supabase = await createClient()
   const {
@@ -42,8 +52,12 @@ export async function completeOnboarding(data: {
     slug,
     industry,
     monthlyRevenue,
+    platform,
     storeUrl,
     connectShopify,
+    wcStoreUrl,
+    wcConsumerKey,
+    wcConsumerSecret,
   } = data
 
   if (!brandName.trim()) {
@@ -75,12 +89,35 @@ export async function completeOnboarding(data: {
     ? storeUrl.replace(/\.myshopify\.com$/i, '').trim().toLowerCase()
     : null
 
-  const wantsShopify = connectShopify && normalizedStoreUrl
+  const wantsShopify = platform === 'shopify' && connectShopify && normalizedStoreUrl
 
   const shopDomain = normalizedStoreUrl
     ? normalizeShopDomain(normalizedStoreUrl)
     : null
 
+  const wantsWoocommerce =
+    platform === 'woocommerce' &&
+    wcStoreUrl.trim().length > 0 &&
+    wcConsumerKey.trim().length > 0 &&
+    wcConsumerSecret.trim().length > 0
+
+  // Validate WooCommerce credentials before creating workspace
+  if (wantsWoocommerce) {
+    const test = await testWoocommerceConnection(
+      wcStoreUrl.trim(),
+      wcConsumerKey.trim(),
+      wcConsumerSecret.trim()
+    )
+    if (!test.success) {
+      return { error: `WooCommerce connection failed: ${test.error ?? 'Invalid credentials'}` }
+    }
+  }
+
+  let workspaceId: string | null = null
+
+  // Keep the transaction small: only the 3 critical atomic operations.
+  // Festival seeding (30+ upserts in a loop) is done outside to avoid
+  // Prisma P2028 transaction timeout on Supabase PgBouncer.
   await prisma.$transaction(async (tx) => {
     await tx.user.upsert({
       where: { id: user.id },
@@ -107,9 +144,12 @@ export async function completeOnboarding(data: {
         industry: industry || null,
         monthlyRevenue: monthlyRevenue || null,
         storeUrl: shopDomain ?? null,
+        platform: wantsWoocommerce ? 'WOOCOMMERCE' : 'SHOPIFY',
         createdById: user.id,
       },
     })
+
+    workspaceId = workspace.id
 
     await tx.workspaceMember.create({
       data: {
@@ -118,11 +158,29 @@ export async function completeOnboarding(data: {
         role: 'OWNER',
       },
     })
-
-    await seedFestivalsForWorkspace(tx, workspace.id)
-
-    
   })
+
+  if (workspaceId) {
+    // Non-critical: seed festivals and create integration connection outside the
+    // transaction so the 30+ upsert loop doesn't expire the Prisma tx timeout.
+    try {
+      await seedFestivalsForWorkspace(prisma, workspaceId)
+    } catch {
+      // Non-fatal — workspace is already created, user can proceed.
+    }
+
+    if (wantsWoocommerce) {
+      await prisma.woocommerceConnection.create({
+        data: {
+          workspaceId,
+          storeUrl: wcStoreUrl.trim().replace(/\/+$/, ''),
+          consumerKey: wcConsumerKey.trim(),
+          consumerSecret: wcConsumerSecret.trim(),
+          status: 'CONNECTED',
+        },
+      })
+    }
+  }
 
   // If user wants to connect Shopify, set OAuth state cookie and return the auth URL
   if (wantsShopify && shopDomain) {

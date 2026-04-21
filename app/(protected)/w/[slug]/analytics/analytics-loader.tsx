@@ -6,6 +6,7 @@ export async function AnalyticsLoader({ slug }: { slug: string }) {
     where: { slug },
     select: {
       name: true,
+      platform: true,
       shopifyConnections: {
         where: { status: 'CONNECTED' },
         select: {
@@ -16,25 +17,42 @@ export async function AnalyticsLoader({ slug }: { slug: string }) {
         },
         take: 1,
       },
+      woocommerceConnection: {
+        where: { status: 'CONNECTED' },
+        select: {
+          id: true,
+          storeUrl: true,
+          status: true,
+          lastSyncAt: true,
+        },
+      },
     },
   })
 
-  const connection = workspace?.shopifyConnections[0] ?? null
+  const connection =
+    workspace?.platform === 'WOOCOMMERCE'
+      ? workspace?.woocommerceConnection
+        ? {
+            id: workspace.woocommerceConnection.id,
+            shopDomain: workspace.woocommerceConnection.storeUrl ?? 'WooCommerce',
+            status: workspace.woocommerceConnection.status,
+            lastSyncAt: workspace.woocommerceConnection.lastSyncAt?.toISOString() ?? null,
+          }
+        : null
+      : workspace?.shopifyConnections[0]
+        ? {
+            id: workspace.shopifyConnections[0].id,
+            shopDomain: workspace.shopifyConnections[0].shopDomain,
+            status: workspace.shopifyConnections[0].status,
+            lastSyncAt: workspace.shopifyConnections[0].lastSyncAt?.toISOString() ?? null,
+          }
+        : null
 
   return (
     <AnalyticsContent
       workspaceSlug={slug}
       workspaceName={workspace?.name ?? ''}
-      shopifyConnection={
-        connection
-          ? {
-              id: connection.id,
-              shopDomain: connection.shopDomain,
-              status: connection.status,
-              lastSyncAt: connection.lastSyncAt?.toISOString() ?? null,
-            }
-          : null
-      }
+      shopifyConnection={connection}
     />
   )
 }

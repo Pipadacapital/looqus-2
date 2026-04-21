@@ -13,10 +13,14 @@ export async function StoreLoader({ slug }: { slug: string }) {
     where: { slug },
     select: {
       id: true,
+      platform: true,
       shopifyConnections: {
         where: { status: 'CONNECTED' },
         select: { id: true, lastSyncAt: true },
         take: 1,
+      },
+      woocommerceConnection: {
+        select: { id: true, lastSyncAt: true, status: true },
       },
     },
   })
@@ -35,7 +39,13 @@ export async function StoreLoader({ slug }: { slug: string }) {
 
   if (!membership) redirect('/')
 
-  const connection = workspace.shopifyConnections[0] ?? null
+  const shopifyConnection = workspace.shopifyConnections[0] ?? null
+  const woocommerceConnection =
+    workspace.woocommerceConnection?.status === 'CONNECTED'
+      ? workspace.woocommerceConnection
+      : null
+  const isWoocommerce = workspace.platform === 'WOOCOMMERCE'
+  const activeConnection = isWoocommerce ? woocommerceConnection : shopifyConnection
 
   // Prefetch the first "Orders" page so the table doesn't wait for client-side `/api/...`.
   // This matches the default state inside `StoreOrdersTable` (page=1, pageSize=10, sort=processedAt, order=desc).
@@ -60,49 +70,83 @@ export async function StoreLoader({ slug }: { slug: string }) {
       }
     | null = null
 
-  if (connection) {
-    const connectionId = connection.id
+  if (activeConnection) {
+    const connectionId = activeConnection.id
     const page = 1
     const pageSize = 10
     const orderDir = 'desc' as const
 
-    const [orders, total] = await Promise.all([
-      prisma.shopifyOrder.findMany({
-        where: { connectionId },
-        orderBy: { processedAt: orderDir },
-        skip: 0,
-        take: pageSize,
-        select: {
-          id: true,
-          orderNumber: true,
-          name: true,
-          email: true,
-          totalPrice: true,
-          currency: true,
-          financialStatus: true,
-          fulfillmentStatus: true,
-          processedAt: true,
-          cancelledAt: true,
-        },
-      }),
-      prisma.shopifyOrder.count({
-        where: { connectionId },
-      }),
-    ])
+    const [orders, total] = isWoocommerce
+      ? await Promise.all([
+          prisma.woocommerceOrder.findMany({
+            where: { connectionId },
+            orderBy: { dateCreated: orderDir },
+            skip: 0,
+            take: pageSize,
+            select: {
+              id: true,
+              orderNumber: true,
+              customerEmail: true,
+              total: true,
+              currency: true,
+              status: true,
+              dateCreated: true,
+            },
+          }),
+          prisma.woocommerceOrder.count({
+            where: { connectionId },
+          }),
+        ])
+      : await Promise.all([
+          prisma.shopifyOrder.findMany({
+            where: { connectionId },
+            orderBy: { processedAt: orderDir },
+            skip: 0,
+            take: pageSize,
+            select: {
+              id: true,
+              orderNumber: true,
+              name: true,
+              email: true,
+              totalPrice: true,
+              currency: true,
+              financialStatus: true,
+              fulfillmentStatus: true,
+              processedAt: true,
+              cancelledAt: true,
+            },
+          }),
+          prisma.shopifyOrder.count({
+            where: { connectionId },
+          }),
+        ])
 
     initialOrders = {
-      data: orders.map((o) => ({
-        id: o.id,
-        orderNumber: o.orderNumber,
-        name: o.name,
-        email: o.email,
-        totalPrice: String(o.totalPrice),
-        currency: o.currency,
-        financialStatus: o.financialStatus,
-        fulfillmentStatus: o.fulfillmentStatus,
-        processedAt: o.processedAt.toISOString(),
-        cancelledAt: o.cancelledAt?.toISOString() ?? null,
-      })),
+      data: isWoocommerce
+        ? orders.map((o) => ({
+            id: o.id,
+            orderNumber: o.orderNumber ?? String(o.id),
+            name: o.orderNumber ?? `Order #${o.id}`,
+            email: o.customerEmail,
+            totalPrice: String(o.total ?? 0),
+            currency: o.currency ?? '',
+            financialStatus: o.status ?? '',
+            fulfillmentStatus: null,
+            processedAt: o.dateCreated?.toISOString() ?? new Date(0).toISOString(),
+            cancelledAt: null,
+          }))
+        : orders.map((o) => ({
+            id: o.id,
+            orderNumber: o.orderNumber,
+            name: o.name,
+            email: o.email,
+            totalPrice: String(o.totalPrice),
+            currency: o.currency,
+            financialStatus: o.financialStatus,
+            fulfillmentStatus: o.fulfillmentStatus,
+            processedAt: o.processedAt.toISOString(),
+            cancelledAt: o.cancelledAt?.toISOString() ?? null,
+          })),
       total,
       page,
       pageSize,
@@ -112,9 +156,10 @@ export async function StoreLoader({ slug }: { slug: string }) {
 
   return (
     <StoreContent
-      hasConnection={!!connection}
-      connectionId={connection?.id ?? null}
-      lastSyncAt={connection?.lastSyncAt?.toISOString() ?? null}
+      platform={workspace.platform}
+      hasConnection={!!activeConnection}
+      connectionId={activeConnection?.id ?? null}
+      lastSyncAt={activeConnection?.lastSyncAt?.toISOString() ?? null}
       initialOrders={initialOrders ?? undefined}
     />
   )

@@ -6,6 +6,7 @@ export async function TimingsLoader({ slug }: { slug: string }) {
     where: { slug },
     select: {
       name: true,
+      platform: true,
       shopifyConnections: {
         where: { status: 'CONNECTED' },
         select: {
@@ -16,15 +17,23 @@ export async function TimingsLoader({ slug }: { slug: string }) {
         },
         take: 1,
       },
+      woocommerceConnection: {
+        where: { status: 'CONNECTED' },
+        select: { id: true },
+      },
     },
   })
 
   const connection = workspace?.shopifyConnections[0] ?? null
+  const hasStoreConnection = workspace?.platform === 'WOOCOMMERCE'
+    ? !!workspace?.woocommerceConnection?.id
+    : !!connection
 
   return (
     <TimingsContent
       workspaceSlug={slug}
       workspaceName={workspace?.name ?? ''}
+      hasStoreConnection={hasStoreConnection}
       shopifyConnection={
         connection
           ? {

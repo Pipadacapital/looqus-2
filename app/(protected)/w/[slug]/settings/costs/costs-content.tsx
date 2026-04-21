@@ -103,6 +103,19 @@ type MiscExpense = {
   effectiveStartDate: string
 }
 
+const CURRENCY_OPTIONS = [
+  { value: 'INR', label: 'INR (₹)' },
+  { value: 'USD', label: 'USD ($)' },
+  { value: 'AED', label: 'AED (AED)' },
+  { value: 'EUR', label: 'EUR (€)' },
+  { value: 'GBP', label: 'GBP (£)' },
+  { value: 'AUD', label: 'AUD (A$)' },
+  { value: 'CAD', label: 'CAD (C$)' },
+  { value: 'SGD', label: 'SGD (S$)' },
+  { value: 'NZD', label: 'NZD (NZ$)' },
+  { value: 'SAR', label: 'SAR (SAR)' },
+]
+
 // ─── Component ──────────────────────────────────────────────────────────────
 
 export function CostsContent({ slug, isOwner }: { slug: string; isOwner: boolean }) {
@@ -470,12 +483,11 @@ export function CostsContent({ slug, isOwner }: { slug: string; isOwner: boolean
                                   </SelectTrigger>
                                 </FormControl>
                                 <SelectContent>
-                                  <SelectItem value="INR">INR (₹)</SelectItem>
-                                  <SelectItem value="USD">USD ($)</SelectItem>
-                                  <SelectItem value="EUR">EUR (€)</SelectItem>
-                                  <SelectItem value="GBP">GBP (£)</SelectItem>
-                                  <SelectItem value="AUD">AUD (A$)</SelectItem>
-                                  <SelectItem value="CAD">CAD (C$)</SelectItem>
+                                  {CURRENCY_OPTIONS.map((option) => (
+                                    <SelectItem key={option.value} value={option.value}>
+                                      {option.label}
+                                    </SelectItem>
+                                  ))}
                                 </SelectContent>
                               </Select>
                               <FormMessage />
@@ -667,10 +679,11 @@ export function CostsContent({ slug, isOwner }: { slug: string; isOwner: boolean
                                 </SelectTrigger>
                               </FormControl>
                               <SelectContent>
-                                <SelectItem value="INR">INR (₹)</SelectItem>
-                                <SelectItem value="USD">USD ($)</SelectItem>
-                                <SelectItem value="EUR">EUR (€)</SelectItem>
-                                <SelectItem value="GBP">GBP (£)</SelectItem>
+                                {CURRENCY_OPTIONS.map((option) => (
+                                  <SelectItem key={option.value} value={option.value}>
+                                    {option.label}
+                                  </SelectItem>
+                                ))}
                               </SelectContent>
                             </Select>
                             <FormMessage />
@@ -804,9 +817,26 @@ export function CostsContent({ slug, isOwner }: { slug: string; isOwner: boolean
                       className="w-36"
                     />
                   </div>
-                  <span className="text-sm text-muted-foreground">
-                    {founderSalary.currency}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <Label className="text-sm">Currency</Label>
+                    <Select
+                      value={founderSalary.currency}
+                      onValueChange={(value) =>
+                        setFounderSalary((prev) => ({ ...prev, currency: value }))
+                      }
+                    >
+                      <SelectTrigger className="w-36">
+                        <SelectValue placeholder="Currency" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {CURRENCY_OPTIONS.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
                   <Button
                     onClick={onSaveFounderSalary}
                     disabled={founderSalarySaving}

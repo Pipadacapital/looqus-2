@@ -33,10 +33,13 @@ export interface ShopifyAnalyticsSummary {
   conversionRate?: number | null
   /** Meta Ads spend for the period (converted to summary currency). */
   metaAdSpend?: number
+  metaAdCurrency?: string
   /** Google Ads spend for the period (converted to summary currency). */
   googleAdSpend?: number
+  googleAdCurrency?: string
   /** Total ad spend (Meta + Google) for the period. */
   totalAdSpend?: number
+  totalAdCurrency?: string
   /** ACOS (Advertising Cost of Sales) = (Total Ad spend / Total Revenue) × 100. Uses net sales as revenue. */
   acos?: number | null
   /** Count of shipments with an RTO tracking status in the period. */
@@ -61,6 +64,18 @@ export function formatCurrency(
   currency: string,
   options: Intl.NumberFormatOptions = { maximumFractionDigits: 0 }
 ): string {
-  const symbol = currency === 'INR' ? '₹' : '$'
-  return `${symbol}${value.toLocaleString('en-IN', options)}`
+  const code = (currency || 'USD').trim().toUpperCase()
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: code,
+      ...options,
+    }).format(value)
+  } catch {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      ...options,
+    }).format(value)
+  }
 }

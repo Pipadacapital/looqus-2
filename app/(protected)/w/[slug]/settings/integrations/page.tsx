@@ -20,7 +20,11 @@ export default async function IntegrationsPage({
 
   const workspace = await prisma.workspace.findUnique({
     where: { slug },
-    include: {
+    select: {
+      id: true,
+      name: true,
+      platform: true,
+      productDataSource: true,
       shopifyConnections: {
         where: { status: 'CONNECTED' },
         select: {
@@ -90,6 +94,16 @@ export default async function IntegrationsPage({
           createdAt: true,
         },
       },
+      woocommerceConnection: {
+        select: {
+          id: true,
+          storeUrl: true,
+          status: true,
+          lastSyncAt: true,
+          lastSyncError: true,
+          createdAt: true,
+        },
+      },
     },
   })
 
@@ -118,6 +132,7 @@ export default async function IntegrationsPage({
       workspaceSlug={slug}
       workspaceId={workspace.id}
       workspaceName={workspace.name}
+      workspacePlatform={workspace.platform}
       isSuperadmin={isSuperadmin}
       shopifyConnection={
         connection
@@ -195,6 +210,18 @@ export default async function IntegrationsPage({
               lastSyncAt: workspace.klaviyoConnection.lastSyncAt?.toISOString() ?? null,
               lastSyncError: workspace.klaviyoConnection.lastSyncError,
               createdAt: workspace.klaviyoConnection.createdAt.toISOString(),
+            }
+          : null
+      }
+      woocommerceConnection={
+        workspace.woocommerceConnection?.status === 'CONNECTED'
+          ? {
+              id: workspace.woocommerceConnection.id,
+              storeUrl: workspace.woocommerceConnection.storeUrl,
+              status: workspace.woocommerceConnection.status,
+              lastSyncAt: workspace.woocommerceConnection.lastSyncAt?.toISOString() ?? null,
+              lastSyncError: workspace.woocommerceConnection.lastSyncError,
+              createdAt: workspace.woocommerceConnection.createdAt.toISOString(),
             }
           : null
       }

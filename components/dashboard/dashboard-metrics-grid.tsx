@@ -94,8 +94,20 @@ function toNumber(value: unknown, fallback: number | null = 0): number | null {
 function formatValue(value: number | null, format: MetricFormat, currency: string): string {
   if (value == null) return '—'
   if (format === 'currency') {
-    const symbol = currency === 'INR' ? '₹' : '$'
-    return `${symbol}${value.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
+    const code = (currency || 'USD').trim().toUpperCase()
+    try {
+      return new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: code,
+        maximumFractionDigits: 0,
+      }).format(value)
+    } catch {
+      return new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: 'USD',
+        maximumFractionDigits: 0,
+      }).format(value)
+    }
   }
   if (format === 'number') return value.toLocaleString('en-IN', { maximumFractionDigits: 0 })
   if (format === 'multiplier') return `${value.toFixed(2)}x`
@@ -152,6 +164,9 @@ export function DashboardMetricsGrid({
 
   const summary = (analyticsData?.summary ?? {}) as Record<string, unknown>
   const currency = (summary.currency as string) || 'INR'
+  const metaAdCurrency = (summary.metaAdCurrency as string) || currency
+  const googleAdCurrency = (summary.googleAdCurrency as string) || currency
+  const totalAdCurrency = (summary.totalAdCurrency as string) || currency
   const acquisitionSummary =
     (acquisitionData?.summary as Record<string, unknown> | undefined) ?? undefined
   const marketingEfficiency =
@@ -218,6 +233,11 @@ export function DashboardMetricsGrid({
     prepaidRevenue: toNumber(prepaidRow?.grossRevenue),
     sessions: Number(summary.totalSessions) > 0 ? toNumber(summary.totalSessions) : null,
     conversionRate: Number(summary.conversionRate) > 0 ? toNumber(summary.conversionRate) : null,
+  }
+  const metricCurrencyOverrides: Partial<Record<string, string>> = {
+    metaSpend: metaAdCurrency,
+    googleSpend: googleAdCurrency,
+    totalAdSpend: totalAdCurrency,
   }
 
   const categories = useMemo(() => {
@@ -295,7 +315,11 @@ export function DashboardMetricsGrid({
               <p className="mt-1 text-xl font-semibold">
                 {metricValues[metric.id] == null
                   ? '—'
-                  : formatValue(metricValues[metric.id], metric.format, currency)}
+                  : formatValue(
+                      metricValues[metric.id],
+                      metric.format,
+                      metricCurrencyOverrides[metric.id] ?? currency
+                    )}
               </p>
             </div>
           ))}

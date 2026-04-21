@@ -56,6 +56,7 @@ export async function GET(
       meta_ads_connections: {
         select: {
           id: true,
+          currency: true,
           selected_ad_account_ids: true,
           selected_ad_account_id: true,
         },
@@ -63,12 +64,17 @@ export async function GET(
       google_ads_connections: {
         select: {
           id: true,
+          currency: true,
           selected_customer_ids: true,
           selected_customer_id: true,
         },
       },
       shiprocketConnection: {
         select: { id: true, status: true },
+      },
+      woocommerceConnection: {
+        where: { status: 'CONNECTED' },
+        select: { id: true, currency: true },
       },
     },
   })
@@ -90,8 +96,10 @@ export async function GET(
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
+  const isWoocommerce = workspace.platform === 'WOOCOMMERCE'
   const connectionId = workspace.shopifyConnections[0]?.id
-  if (!connectionId) {
+  const wooConnectionId = workspace.woocommerceConnection?.id
+  if (!connectionId && !wooConnectionId) {
     return NextResponse.json({
       daily: [],
       summary: null,
@@ -120,6 +128,289 @@ export async function GET(
 
   if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime()) || fromDate > toDate) {
     return NextResponse.json({ error: 'Invalid date range', daily: [], summary: null }, { status: 400 })
+  }
+
+  if (isWoocommerce && wooConnectionId) {
+    const [orders, products, workspaceCosts, miscExpenses] = await Promise.all([
+      prisma.woocommerceOrder.findMany({
+        where: {
+          connectionId: wooConnectionId,
+          status: { notIn: ['cancelled', 'failed', 'pending'] },
+          dateCreated: { gte: fromDate, lte: toDate },
+        },
+        select: {
+          id: true,
+          dateCreated: true,
+          total: true,
+          subtotal: true,
+          discountTotal: true,
+          totalTax: true,
+          currency: true,
+          lineItems: { select: { sku: true, quantity: true } },
+        },
+        orderBy: { dateCreated: 'asc' },
+      }),
+      prisma.woocommerceProduct.findMany({
+        where: {
+          connectionId: wooConnectionId,
+          sku: { not: null },
+          coq: { not: null },
+          status: { not: 'trash' },
+        },
+        select: { sku: true, coq: true },
+      }),
+      prisma.workspaceCost.findMany({
+        where: {
+          workspaceId: workspace.id,
+          effectiveFrom: { lte: toDate },
+        },
+      }),
+      prisma.workspaceMiscExpense.findMany({
+        where: {
+          workspaceId: workspace.id,
+          effectiveStartDate: { lte: toDate },
+        },
+      }),
+    ])
+
+    const storeCurrency =
+      workspace.woocommerceConnection?.currency ||
+      orders.find((o) => o.currency)?.currency ||
+      'USD'
+    const coqMap = new Map(
+      products.map((p) => [String(p.sku).trim().toLowerCase(), Number(p.coq ?? 0)])
+    )
+
+    const dayMap = new Map<
+      string,
+      {
+        netSales: number
+        grossSales: number
+        totalTax: number
+        totalDiscount: number
+        ordersCount: number
+        cogs: number
+      }
+    >()
+
+    for (const o of orders) {
+      if (!o.dateCreated) continue
+      const dateStr = o.dateCreated.toISOString().slice(0, 10)
+      const gross = Number(o.subtotal ?? o.total ?? 0)
+      const discount = Number(o.discountTotal ?? 0)
+      const tax = Number(o.totalTax ?? 0)
+      const net = Number(o.total ?? 0) - tax
+      let cogs = 0
+      for (const li of o.lineItems) {
+        const sku = li.sku?.trim().toLowerCase()
+        if (!sku) continue
+        cogs += (coqMap.get(sku) ?? 0) * (li.quantity ?? 0)
+      }
+      const cur = dayMap.get(dateStr) ?? {
+        netSales: 0,
+        grossSales: 0,
+        totalTax: 0,
+        totalDiscount: 0,
+        ordersCount: 0,
+        cogs: 0,
+      }
+      cur.netSales += net
+      cur.grossSales += gross
+      cur.totalTax += tax
+      cur.totalDiscount += Math.abs(discount)
+      cur.ordersCount += 1
+      cur.cogs += cogs
+      dayMap.set(dateStr, cur)
+    }
+
+    const dailyKeys = [...dayMap.keys()].sort()
+    const daily = dailyKeys.map((dateStr) => {
+      const d = dayMap.get(dateStr)!
+      const dayGrossSales = d.grossSales
+      let shipping = 0
+      let packaging = 0
+      let websiteCharges = 0
+      for (const cost of workspaceCosts) {
+        const costFromStr = cost.effectiveFrom.toISOString().slice(0, 10)
+        const costToStr = cost.effectiveTo
+          ? cost.effectiveTo.toISOString().slice(0, 10)
+          : '9999-12-31'
+        if (dateStr < costFromStr || dateStr > costToStr) continue
+        const contribution = getDailyVariableContribution(
+          {
+            costType: cost.costType,
+            amount: Number(cost.amount),
+            currency: cost.currency,
+            isPercent: cost.isPercent,
+            billingMode: cost.billingMode ?? 'monthly',
+          },
+          dateStr,
+          d.ordersCount,
+          dayGrossSales,
+          storeCurrency
+        )
+        if (cost.costType === 'SHIPPING') shipping += contribution
+        else if (cost.costType === 'PACKAGING') packaging += contribution
+        else if (cost.costType === 'WEBSITE') websiteCharges += contribution
+      }
+      const cm1 = d.netSales - d.cogs - shipping - packaging - websiteCharges
+      return {
+        date: dateStr,
+        netSales: d.netSales,
+        grossSales: d.grossSales,
+        totalTax: d.totalTax,
+        totalDiscount: d.totalDiscount,
+        ordersCount: d.ordersCount,
+        aov: d.ordersCount > 0 ? d.netSales / d.ordersCount : 0,
+        cogs: d.cogs,
+        shipping,
+        packaging,
+        websiteCharges,
+        cm1,
+        currency: storeCurrency,
+        sessions: null,
+        conversionRate: null,
+      }
+    })
+
+    const totalNetSales = daily.reduce((s, d) => s + d.netSales, 0)
+    const totalGrossSales = daily.reduce((s, d) => s + d.grossSales, 0)
+    const totalTax = daily.reduce((s, d) => s + d.totalTax, 0)
+    const totalDiscount = daily.reduce((s, d) => s + d.totalDiscount, 0)
+    const totalOrders = daily.reduce((s, d) => s + d.ordersCount, 0)
+    const totalCogs = daily.reduce((s, d) => s + d.cogs, 0)
+    const totalShipping = daily.reduce((s, d) => s + d.shipping, 0)
+    const totalPackaging = daily.reduce((s, d) => s + d.packaging, 0)
+    const totalWebsiteCharges = daily.reduce((s, d) => s + d.websiteCharges, 0)
+    const totalCm1 =
+      totalNetSales -
+      totalCogs -
+      totalShipping -
+      totalPackaging -
+      totalWebsiteCharges
+
+    const metaConn = workspace.meta_ads_connections
+    const googleConn = workspace.google_ads_connections
+    const metaSelectedIds = metaConn?.selected_ad_account_ids?.length
+      ? metaConn.selected_ad_account_ids
+      : metaConn?.selected_ad_account_id
+        ? [metaConn.selected_ad_account_id]
+        : undefined
+    const googleSelectedIds = googleConn?.selected_customer_ids?.length
+      ? googleConn.selected_customer_ids
+      : googleConn?.selected_customer_id
+        ? [googleConn.selected_customer_id]
+        : undefined
+
+    let metaAdSpend = 0
+    let googleAdSpend = 0
+    if (metaConn?.id) {
+      const metaAgg = await prisma.meta_ads_daily_metrics.aggregate({
+        where: {
+          connection_id: metaConn.id,
+          date: { gte: fromDate, lte: toDate },
+          ...(metaSelectedIds ? { ad_account_id: { in: metaSelectedIds } } : {}),
+        },
+        _sum: { spend: true },
+      })
+      metaAdSpend = Number(metaAgg._sum.spend ?? 0)
+    }
+    if (googleConn?.id) {
+      const googleAgg = await prisma.google_ads_daily_metrics.aggregate({
+        where: {
+          connection_id: googleConn.id,
+          date: { gte: fromDate, lte: toDate },
+          ...(googleSelectedIds
+            ? { customer_id: { in: googleSelectedIds } }
+            : {}),
+        },
+        _sum: { spend: true },
+      })
+      googleAdSpend = Number(googleAgg._sum.spend ?? 0)
+    }
+    const totalAdSpend = metaAdSpend + googleAdSpend
+    const metaAdCurrency = workspace.meta_ads_connections?.currency ?? storeCurrency
+    const googleAdCurrency = workspace.google_ads_connections?.currency ?? storeCurrency
+    const totalAdCurrency =
+      metaAdCurrency === googleAdCurrency ? metaAdCurrency : storeCurrency
+    const totalCm2 = totalCm1 - totalAdSpend
+    const miscExpensesTotal = miscExpenses.reduce(
+      (sum, e) => sum + Number(e.amount ?? 0),
+      0
+    )
+    const totalCm3 = totalCm2 - miscExpensesTotal
+    const cm3Pct =
+      totalNetSales > 0
+        ? Math.round((totalCm3 / totalNetSales) * 10000) / 100
+        : null
+
+    const summary = {
+      totalNetSales,
+      totalGrossSales,
+      totalTax,
+      totalDiscount,
+      totalOrders,
+      avgAov: totalOrders > 0 ? totalNetSales / totalOrders : 0,
+      totalCogs,
+      totalShipping,
+      totalPackaging,
+      totalWebsiteCharges,
+      cm1: totalCm1,
+      cm2: totalCm2,
+      miscExpensesTotal,
+      cm3: totalCm3,
+      cm3Pct,
+      currency: storeCurrency,
+      from: fromDate.toISOString().slice(0, 10),
+      to: toDate.toISOString().slice(0, 10),
+      prepaidPercentage: null,
+      totalSessions: null,
+      conversionRate: null,
+      metaAdSpend,
+      metaAdCurrency,
+      googleAdSpend,
+      googleAdCurrency,
+      totalAdSpend,
+      totalAdCurrency,
+      mer:
+        totalAdSpend > 0
+          ? Math.round((totalNetSales / totalAdSpend) * 100) / 100
+          : null,
+      acos:
+        totalNetSales > 0
+          ? Math.round((totalAdSpend / totalNetSales) * 10000) / 100
+          : null,
+      rtoOrders: 0,
+      rtoPercent: null,
+      rtoValue: 0,
+      rtoMapped: 0,
+      rtoUnmapped: 0,
+      totalShipmentsInRange: 0,
+    }
+
+    const goalRowMap = await fetchGoalRowsMap(
+      prisma,
+      workspace.id,
+      ['revenue', 'cm3', 'cm3_pct', 'mer', 'aov', 'acos'] as GoalMetricId[],
+      toDate
+    )
+    const goalEvaluations = buildGoalEvaluations(
+      {
+        revenue: totalNetSales,
+        cm3: totalCm3,
+        cm3_pct: cm3Pct ?? undefined,
+        mer: summary.mer ?? undefined,
+        aov: summary.avgAov,
+        acos: summary.acos ?? undefined,
+      },
+      goalRowMap
+    )
+
+    return NextResponse.json({
+      daily,
+      summary: { ...summary, goalEvaluations },
+      error: null,
+    })
   }
 
   const daily = await prisma.shopifyAnalyticsDaily.findMany({
@@ -359,6 +650,10 @@ export async function GET(
   })
 
   const totalAdSpend = metaAdSpend + googleAdSpend
+  const metaAdCurrency = workspace.meta_ads_connections?.currency ?? storeCurrency
+  const googleAdCurrency = workspace.google_ads_connections?.currency ?? storeCurrency
+  const totalAdCurrency =
+    metaAdCurrency === googleAdCurrency ? metaAdCurrency : storeCurrency
 
   // ── RTO metrics (from Shiprocket tracking; effective date, workspace order filters) ──
   let rtoOrders = 0
@@ -483,8 +778,11 @@ export async function GET(
     totalSessions,
     conversionRate: conversionRatePeriod,
     metaAdSpend: metaAdSpend,
+    metaAdCurrency,
     googleAdSpend: googleAdSpend,
+    googleAdCurrency,
     totalAdSpend: totalAdSpend,
+    totalAdCurrency,
     /** Same ratio as blended ROAS: net sales / ad spend (spec label: MER). */
     mer:
       totalAdSpend > 0

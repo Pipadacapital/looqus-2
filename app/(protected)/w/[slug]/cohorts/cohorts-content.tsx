@@ -154,8 +154,10 @@ export function CohortsContent({ workspaceSlug, workspaceName }: CohortsContentP
 
   const formatCurrency = (v: number) => {
     if (metric === 'repeat' || metric === 'repurchase') return (v * 100).toFixed(1) + '%'
-    return new Intl.NumberFormat('en-IN', {
-      style: 'decimal',
+    const code = (currency || 'USD').trim().toUpperCase()
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: code,
       minimumFractionDigits: 0,
       maximumFractionDigits: 0,
     }).format(Math.round(v))
@@ -266,7 +268,7 @@ export function CohortsContent({ workspaceSlug, workspaceName }: CohortsContentP
             </CardHeader>
             <CardContent>
               <span className="text-xl font-semibold">
-                ₹{formatCurrency(summary.averageCac)}
+                {formatCurrency(summary.averageCac)}
               </span>
             </CardContent>
           </Card>
@@ -329,11 +331,11 @@ export function CohortsContent({ workspaceSlug, workspaceName }: CohortsContentP
                     {format(new Date(r.cohortMonth + '-01'), 'MMM yyyy')}
                   </TableCell>
                   <TableCell>{r.newCustomers}</TableCell>
-                  <TableCell>₹{formatCurrency(r.cac)}</TableCell>
+                  <TableCell>{formatCurrency(r.cac)}</TableCell>
                     <TableCell>{(r.rr90 * 100).toFixed(1)}%</TableCell>
                     <TableCell className="whitespace-nowrap">{formatPayback(r.payback)}</TableCell>
-                  <TableCell>₹{formatCurrency(r.firstOrderR)}</TableCell>
-                  <TableCell>₹{formatCurrency(r.firstOrder)}</TableCell>
+                  <TableCell>{formatCurrency(r.firstOrderR)}</TableCell>
+                  <TableCell>{formatCurrency(r.firstOrder)}</TableCell>
                   {mCols.map((k) => (
                     <TableCell
                       key={k}
@@ -371,7 +373,7 @@ export function CohortsContent({ workspaceSlug, workspaceName }: CohortsContentP
                     <TableCell>Average</TableCell>
                     <TableCell>{Math.round(avg.newCustomers / n)}</TableCell>
                     <TableCell>
-                      ₹{totalN ? formatCurrency(avg.cac / totalN) : '0'}
+                      {totalN ? formatCurrency(avg.cac / totalN) : formatCurrency(0)}
                     </TableCell>
                     <TableCell>
                       {totalN ? ((avg.rr90 / totalN) * 100).toFixed(1) : 0}%
@@ -380,10 +382,10 @@ export function CohortsContent({ workspaceSlug, workspaceName }: CohortsContentP
                       {summary?.averagePayback != null ? `${summary.averagePayback.toFixed(1)} mo` : '—'}
                     </TableCell>
                     <TableCell>
-                      ₹{totalN ? formatCurrency(avg.firstOrderR / totalN) : '0'}
+                      {totalN ? formatCurrency(avg.firstOrderR / totalN) : formatCurrency(0)}
                     </TableCell>
                     <TableCell>
-                      ₹{totalN ? formatCurrency(avg.firstOrder / totalN) : '0'}
+                      {totalN ? formatCurrency(avg.firstOrder / totalN) : formatCurrency(0)}
                     </TableCell>
                     {avg.m.map((s, i) => (
                       <TableCell

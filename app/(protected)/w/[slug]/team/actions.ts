@@ -100,7 +100,7 @@ export async function inviteMember(data: {
   try {
     await sendMail({
       to: email,
-      subject: `${inviterName} invited you to ${workspace?.name ?? 'a workspace'} on Shopify Analytics`,
+      subject: `${inviterName} invited you to ${workspace?.name ?? 'a workspace'} on Brain`,
       template: InviteMemberEmail({
         workspaceName: workspace?.name ?? 'Workspace',
         inviterName,
@@ -266,6 +266,63 @@ export async function revokeInvitation(data: {
     where: { id: data.invitationId },
     data: { status: 'REVOKED' },
   })
+
+  revalidatePath(`/w/${data.workspaceSlug}/team`)
+  return { success: true }
+}
+
+// ─── Transfer ownership ──────────────────────────────────────────────────────
+
+export async function transferOwnership(data: {
+  targetMemberId: string
+  workspaceId: string
+  workspaceSlug: string
+}) {
+  const user = await getAuthUser()
+  if (!user) throw new Error('Not authenticated')
+
+  const currentMembership = await assertRole(user.id, data.workspaceId, ['OWNER'])
+
+  const target = await prisma.workspaceMember.findUnique({
+    where: { id: data.targetMemberId },
+  })
+
+  if (!target || target.workspaceId !== data.workspaceId) {
+    return { error: 'Member not found.' }
+  }
+
+  if (target.userId === user.id) {
+    return { error: 'You already own this workspace.' }
+  }
+
+  if (target.role === 'OWNER') {
+    return { error: 'This member is already the owner.' }
+  }
+
+  await prisma.$transaction([
+    prisma.workspaceMember.update({
+      where: { id: target.id },
+      data: { role: 'OWNER' },
+    }),
+    prisma.workspaceMember.update({
+      where: { id: currentMembership.id },
+      data: { role: 'ADMIN' },
+    }),
+  ])
+
+  const workspace = await prisma.workspace.findUnique({
+    where: { id: data.workspaceId },
+    select: { name: true },
+  })
+
+  await createNotification({
+    userId: target.userId,
+    workspaceId: data.workspaceId,
+    type: 'ROLE_CHANGED',
+    title: `You are now the workspace owner`,
+    body: `Ownership of ${workspace?.name ?? 'this workspace'} was transferred to you.`,
+    actionUrl: `/w/${data.workspaceSlug}/team`,
+  }).catch(() => {})
 
   revalidatePath(`/w/${data.workspaceSlug}/team`)
   return { success: true }

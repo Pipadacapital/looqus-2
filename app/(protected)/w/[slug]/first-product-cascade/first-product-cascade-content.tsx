@@ -65,7 +65,12 @@ export function FirstProductCascadeContent({ workspaceSlug, workspaceName }: Pro
       const json = await res.json()
       if (!res.ok) {
         setData(null)
-        setError(json.error ?? res.statusText)
+        const raw = (json.error as string | undefined) ?? res.statusText
+        const noStore =
+          json.code === 'NO_SHOPIFY' ||
+          json.code === 'NO_WOOCOMMERCE' ||
+          /no connected (shopify|woocommerce) store/i.test(raw)
+        setError(noStore ? 'No connected store' : raw)
         return
       }
       setData(json as FirstProductCascadeResult)

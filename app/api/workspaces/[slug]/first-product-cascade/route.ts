@@ -4,6 +4,7 @@ import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
 import { normalizeOrderFilterSettings } from '@/lib/order-filters'
 import { computeFirstProductCascade } from '@/lib/metrics/first-product-cascade'
+import { computeFirstProductCascadeWoo } from '@/lib/metrics/first-product-cascade-woocommerce'
 
 function parseDate(s: string | null): string | null {
   if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return null
@@ -57,6 +58,28 @@ export async function GET(
   })
   if (!membership) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
+
+  const isWoocommerce = workspace.platform === 'WOOCOMMERCE'
+
+  if (isWoocommerce) {
+    const wooConn = await prisma.woocommerceConnection.findUnique({
+      where: { workspaceId: workspace.id },
+      select: { id: true, currency: true, status: true },
+    })
+    if (!wooConn || wooConn.status !== 'CONNECTED') {
+      return NextResponse.json(
+        { error: 'No connected WooCommerce store', code: 'NO_WOOCOMMERCE' },
+        { status: 404 }
+      )
+    }
+    const result = await computeFirstProductCascadeWoo(prisma, wooConn.id, {
+      fromYyyyMmDd: from,
+      toYyyyMmDd: to,
+      observationDaysAfterTo: obs,
+      storeCurrency: wooConn.currency ?? 'USD',
+    })
+    return NextResponse.json(result)
   }
 
   const connectionId = workspace.shopifyConnections[0]?.id

@@ -19,10 +19,18 @@ export async function PATCH(
 
   const workspace = await prisma.workspace.findUnique({
     where: { slug },
-    include: {
+    select: {
+      id: true,
+      platform: true,
       shopifyConnections: {
         where: { status: 'CONNECTED' },
         select: { id: true },
+      },
+      woocommerceConnection: {
+        select: {
+          id: true,
+          status: true,
+        },
       },
     },
   })
@@ -44,18 +52,6 @@ export async function PATCH(
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
-  const connectionIds = workspace.shopifyConnections.map((c) => c.id)
-  const product = await prisma.shopifyProduct.findFirst({
-    where: {
-      id: productId,
-      connectionId: { in: connectionIds },
-    },
-  })
-
-  if (!product) {
-    return NextResponse.json({ error: 'Product not found' }, { status: 404 })
-  }
-
   const body = await request.json().catch(() => ({}))
   const coq = body.coq
 
@@ -69,10 +65,63 @@ export async function PATCH(
     }
   }
 
+  const normalizedCoq =
+    coq === undefined || coq === null || coq === '' ? null : Number(coq)
+
+  if (workspace.platform === 'WOOCOMMERCE') {
+    const connectionId =
+      workspace.woocommerceConnection?.status === 'CONNECTED'
+        ? workspace.woocommerceConnection.id
+        : null
+
+    if (!connectionId) {
+      return NextResponse.json({ error: 'WooCommerce connection not found' }, { status: 404 })
+    }
+
+    const product = await prisma.woocommerceProduct.findFirst({
+      where: {
+        id: productId,
+        connectionId,
+      },
+      select: { id: true },
+    })
+
+    if (!product) {
+      return NextResponse.json({ error: 'Product not found' }, { status: 404 })
+    }
+
+    const updated = await prisma.woocommerceProduct.update({
+      where: { id: productId },
+      data: { coq: normalizedCoq },
+      select: {
+        id: true,
+        coq: true,
+      },
+    })
+
+    return NextResponse.json({
+      id: updated.id,
+      coq: updated.coq != null ? Number(updated.coq) : null,
+    })
+  }
+
+  const connectionIds = workspace.shopifyConnections.map((c) => c.id)
+  const product = await prisma.shopifyProduct.findFirst({
+    where: {
+      id: productId,
+      connectionId: { in: connectionIds },
+    },
+    select: { id: true },
+  })
+
+  if (!product) {
+    return NextResponse.json({ error: 'Product not found' }, { status: 404 })
+  }
+
   const updated = await prisma.shopifyProduct.update({
     where: { id: productId },
     data: {
-      coq: coq === undefined || coq === null || coq === '' ? null : coq,
+      coq: normalizedCoq,
     },
     select: {
       id: true,

@@ -55,13 +55,13 @@ import type { InventoryStatus } from '@/lib/inventory-constants'
 
 type InventoryRow = {
     id: string
-    shopifyId: string
+    shopifyId: string | null
     title: string
     brand: string
     skus: string
     status: InventoryStatus
     quantity: number
-    costValue: number
+    costValue: number | null
     price: number | null
     compareAtPrice: number | null
     sellThrough: number
@@ -82,6 +82,10 @@ type InventoryResponse = {
     pageSize: number
     totalPages: number
     productTitle?: string // set when in variant view
+    /** When false, product rows are not Shopify variant drill-down targets (e.g. WooCommerce). */
+    productDrillDown?: boolean
+    inventorySource?: 'woocommerce'
+    currency?: string
 }
 
 // ────────────────────────── Status badge ──────────────────────────
@@ -114,7 +118,7 @@ function LeadTimeCell({
     canEdit,
 }: {
     value: number
-    shopifyId: string
+    shopifyId: string | null
     slug: string
     canEdit: boolean
 }) {
@@ -334,6 +338,21 @@ export function InventoryTable() {
         },
     })
 
+    const allowProductDrillDown = data?.productDrillDown !== false
+    const currencyCode = data?.currency?.trim() || 'INR'
+    const formatCurrency = (value: number, fractionDigits = 2) => {
+        try {
+            return new Intl.NumberFormat(undefined, {
+                style: 'currency',
+                currency: currencyCode,
+                minimumFractionDigits: fractionDigits,
+                maximumFractionDigits: fractionDigits,
+            }).format(value)
+        } catch {
+            return `${currencyCode} ${value.toFixed(fractionDigits)}`
+        }
+    }
+
     // ───── Column definitions ─────
 
     const columns = useMemo<ColumnDef<InventoryRow>[]>(
@@ -346,7 +365,7 @@ export function InventoryTable() {
                         <div className="max-w-[220px] truncate font-medium" title={row.original.title}>
                             {row.original.title}
                         </div>
-                    ) : (
+                    ) : allowProductDrillDown ? (
                         <button
                             onClick={() => goToVariantView(row.original.id)}
                             className="max-w-[220px] truncate font-medium text-left cursor-pointer hover:underline text-primary"
@@ -354,6 +373,13 @@ export function InventoryTable() {
                         >
                             {row.original.title}
                         </button>
+                    ) : (
+                        <div
+                            className="max-w-[220px] truncate font-medium"
+                            title={row.original.title}
+                        >
+                            {row.original.title}
+                        </div>
                     ),
                 enableHiding: false,
             },
@@ -387,7 +413,7 @@ export function InventoryTable() {
                         value={row.original.leadTimeDays}
                         shopifyId={row.original.shopifyId}
                         slug={slug}
-                        canEdit={isOwner}
+                        canEdit={isOwner && !!row.original.shopifyId}
                     />
                 ),
             },
@@ -411,9 +437,9 @@ export function InventoryTable() {
                 header: () => <div className="text-right">Cost Value</div>,
                 cell: ({ row }) => (
                     <div className="text-right text-muted-foreground tabular-nums">
-                        {row.original.costValue > 0
-                            ? `₹${row.original.costValue.toLocaleString()}`
-                            : '₹0'}
+                        {(row.original.costValue ?? 0) > 0
+                            ? formatCurrency(row.original.costValue ?? 0, 0)
+                            : formatCurrency(0, 0)}
                     </div>
                 ),
             },
@@ -423,7 +449,7 @@ export function InventoryTable() {
                 cell: ({ row }) => (
                     <div className="text-right text-muted-foreground tabular-nums">
                         {row.original.price != null
-                            ? `₹${Number(row.original.price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                            ? formatCurrency(Number(row.original.price), 2)
                             : '—'}
                     </div>
                 ),
@@ -434,7 +460,7 @@ export function InventoryTable() {
                 cell: ({ row }) => (
                     <div className="text-right text-muted-foreground tabular-nums">
                         {row.original.compareAtPrice != null
-                            ? `₹${Number(row.original.compareAtPrice).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                            ? formatCurrency(Number(row.original.compareAtPrice), 2)
                             : '—'}
                     </div>
                 ),
@@ -505,7 +531,7 @@ export function InventoryTable() {
                 ),
             },
         ],
-        [slug, isOwner, isVariantView, goToVariantView]
+        [slug, isOwner, isVariantView, goToVariantView, allowProductDrillDown, currencyCode]
     )
 
     // ────── TanStack Table ──────
@@ -593,7 +619,7 @@ export function InventoryTable() {
                     />
                 </div>
 
-                {canBackfill && (
+                {canBackfill && data?.inventorySource !== 'woocommerce' && (
                     <Button
                         variant="outline"
                         size="sm"

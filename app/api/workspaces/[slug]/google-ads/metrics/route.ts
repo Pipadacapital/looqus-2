@@ -79,6 +79,7 @@ export async function GET(
         where: { status: 'CONNECTED' },
         select: {
           id: true,
+          currency: true,
           selected_customer_id: true,
           customer_ids: true,
         },
@@ -352,5 +353,6 @@ export async function GET(
           ? 'Stages from conversion actions (ADD_TO_CART, BEGIN_CHECKOUT, PURCHASE). ATC/checkout use all_conversions; purchase count prefers conversions then all_conversions; ROAS uses purchase-stage value when present.'
           : 'No staged funnel rows in range — run Google Ads sync after upgrading. Until then funnel shows aggregate conversions only.',
     },
+    currency: connection.currency ?? 'USD',
   })
 }

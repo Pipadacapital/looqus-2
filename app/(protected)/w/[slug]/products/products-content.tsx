@@ -16,7 +16,6 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { DateRangeFilter } from '@/components/analytics'
-import { formatCurrency } from '@/components/analytics/types'
 import {
   Table,
   TableBody,
@@ -85,6 +84,22 @@ const DEFAULT_VISIBILITY: Record<string, boolean> = {}
 COLUMN_CONFIG.forEach((c) => {
   DEFAULT_VISIBILITY[c.id] = c.defaultVisible
 })
+
+/** Products page only: ISO currency from API + Intl (avoids shared formatCurrency INR vs $ shortcut). */
+function formatProductsCurrency(
+  value: number,
+  currencyCode: string,
+  options?: Intl.NumberFormatOptions
+): string {
+  const currency = currencyCode?.trim() || 'INR'
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+    ...options,
+  }).format(value)
+}
 
 const PARETO_COLORS: Record<string, string> = {
   A: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 border-0',
@@ -379,10 +394,7 @@ export function ProductsContent({ workspaceSlug, workspaceName }: ProductsConten
                                   : (row[col.id as keyof ProductsRow] as number)
                             return (
                               <TableCell key={col.id} className="text-right tabular-nums align-top">
-                                {formatCurrency(val, data.currency, {
-                                  minimumFractionDigits: 2,
-                                  maximumFractionDigits: 2,
-                                })}
+                                {formatProductsCurrency(val, data.currency)}
                               </TableCell>
                             )
                           }

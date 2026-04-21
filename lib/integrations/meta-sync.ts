@@ -1,5 +1,10 @@
 import { prisma } from '@/lib/prisma'
-import { fetchAdAccountInsights, fetchAdAccountAdInsights, type MetaInsightRow } from './meta'
+import {
+  fetchAdAccountInsights,
+  fetchAdAccountAdInsights,
+  fetchMetaAdAccountCurrency,
+  type MetaInsightRow,
+} from './meta'
 import { Decimal } from '@prisma/client/runtime/library'
 import {
   buildBackfillWindows,
@@ -48,6 +53,21 @@ export async function syncMetaAdsForConnection(
       data: { last_sync_error: 'Select accounts under manager to sync.' },
     })
     return { rowsSynced: 0 }
+  }
+
+  const currencyAccountId = targetAccounts[0]
+  if (currencyAccountId) {
+    try {
+      const currency = await fetchMetaAdAccountCurrency(connection.access_token, currencyAccountId)
+      if (currency) {
+        await prisma.meta_ads_connections.update({
+          where: { id: connection.id },
+          data: { currency },
+        })
+      }
+    } catch {
+      // Non-blocking: metrics sync should continue even if account currency fetch fails.
+    }
   }
 
   const opts: MetaSyncOptions =

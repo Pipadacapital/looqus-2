@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
 import { computeLtv } from '@/lib/ltv/compute'
+import { computeWoocommerceLtv } from '@/lib/ltv/compute-woocommerce'
 import type { LtvDimension, LtvMetric, LtvMode } from '@/lib/ltv/types'
 
 const METRICS: LtvMetric[] = ['cm2', 'revenue', 'repeat_rate']
@@ -109,6 +110,22 @@ export async function GET(
 
   if (!membership) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
+
+  const isWoocommerce = workspace.platform === 'WOOCOMMERCE'
+
+  if (isWoocommerce) {
+    const result = await computeWoocommerceLtv(prisma, workspace.id, {
+      from,
+      to,
+      metric: validMetric,
+      mode: validMode,
+      dimension: validDimension,
+      page,
+      pageSize,
+      search,
+    })
+    return NextResponse.json(result)
   }
 
   const result = await computeLtv(prisma, workspace as Parameters<typeof computeLtv>[1], {

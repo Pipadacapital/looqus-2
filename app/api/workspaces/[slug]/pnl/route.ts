@@ -100,6 +100,9 @@ export async function GET(
         select: { id: true },
         take: 1,
       },
+      woocommerceConnection: {
+        select: { id: true, status: true, currency: true },
+      },
       cogsSettings: true,
       meta_ads_connections: {
         select: {
@@ -133,12 +136,17 @@ export async function GET(
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
+  const isWoocommerce = workspace.platform === 'WOOCOMMERCE'
   const connectionId = workspace.shopifyConnections?.[0]?.id ?? null
-  if (!connectionId) {
+  const woocommerceConnectionId =
+    workspace.woocommerceConnection?.status === 'CONNECTED'
+      ? workspace.woocommerceConnection.id
+      : null
+  if ((!isWoocommerce && !connectionId) || (isWoocommerce && !woocommerceConnectionId)) {
     if (process.env.NODE_ENV === 'development') {
-      console.log('[P&L] No Shopify connection', { workspaceId: workspace.id, slug })
+      console.log('[P&L] No store connection', { workspaceId: workspace.id, slug, platform: workspace.platform })
     }
-    return NextResponse.json({ rows: [], currency: 'INR' })
+    return NextResponse.json({ rows: [], currency: isWoocommerce ? 'USD' : 'INR' })
   }
 
   const today = new Date()
@@ -152,12 +160,16 @@ export async function GET(
   const toDate = new Date(`${toStr}T23:59:59.999Z`)
 
   if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime()) || fromDate > toDate) {
-    return NextResponse.json({ error: 'Invalid date range', rows: [], currency: 'INR' }, { status: 400 })
+    return NextResponse.json(
+      { error: 'Invalid date range', rows: [], currency: isWoocommerce ? 'USD' : 'INR' },
+      { status: 400 }
+    )
   }
 
-  const storeCurrency = 'INR'
+  let storeCurrency = 'INR'
   const orderFilterSettings = normalizeOrderFilterSettings(workspace as any)
   const orderInclusionWhere = getOrderInclusionWhereFromWorkspace(workspace as any)
+  const effectiveConnectionId = isWoocommerce ? woocommerceConnectionId : connectionId
 
   // Load all data in parallel (orders and line items respect workspace order filters)
   const [
@@ -172,47 +184,69 @@ export async function GET(
     allOrdersInRange,
     filteredDaily,
   ] = await Promise.all([
-    prisma.shopifyAnalyticsDaily.findMany({
-      where: { connectionId, date: { gte: fromDate, lte: toDate } },
-      orderBy: { date: 'asc' },
-      select: {
-        date: true,
-        netSales: true,
-        grossSales: true,
-        totalTax: true,
-        totalDiscount: true,
-        ordersCount: true,
-        currency: true,
-        total_returns: true,
-        returns: true,
-      },
-    }),
+    isWoocommerce
+      ? Promise.resolve([])
+      : prisma.shopifyAnalyticsDaily.findMany({
+          where: { connectionId: effectiveConnectionId!, date: { gte: fromDate, lte: toDate } },
+          orderBy: { date: 'asc' },
+          select: {
+            date: true,
+            netSales: true,
+            grossSales: true,
+            totalTax: true,
+            totalDiscount: true,
+            ordersCount: true,
+            currency: true,
+            total_returns: true,
+            returns: true,
+          },
+        }),
     prisma.workspaceCost.findMany({
       where: { workspaceId: workspace.id, effectiveFrom: { lte: toDate } },
     }),
     prisma.workspaceMiscExpense.findMany({
       where: { workspaceId: workspace.id, effectiveStartDate: { lte: toDate } },
     }),
-    prisma.shopifyProduct.findMany({
-      where: { connectionId },
-      select: { shopifyId: true, coq: true },
-    }),
-    prisma.shopifyLineItem.findMany({
-      where: {
-        connectionId,
-        order: {
-          connectionId,
-          processedAt: { gte: fromDate, lte: toDate },
-          ...orderInclusionWhere,
-        },
-      },
-      select: {
-        productShopifyId: true,
-        quantity: true,
-        price: true,
-        order: { select: { id: true, processedAt: true } },
-      },
-    }),
+    isWoocommerce
+      ? prisma.woocommerceProduct.findMany({
+          where: { connectionId: effectiveConnectionId! },
+          select: { wcProductId: true, coq: true },
+        })
+      : prisma.shopifyProduct.findMany({
+          where: { connectionId: effectiveConnectionId! },
+          select: { shopifyId: true, coq: true },
+        }),
+    isWoocommerce
+      ? prisma.woocommerceLineItem.findMany({
+          where: {
+            order: {
+              connectionId: effectiveConnectionId!,
+              dateCreated: { gte: fromDate, lte: toDate },
+            },
+          },
+          select: {
+            productId: true,
+            quantity: true,
+            price: true,
+            order: { select: { id: true, dateCreated: true } },
+          },
+        })
+      : prisma.shopifyLineItem.findMany({
+          where: {
+            connectionId: effectiveConnectionId!,
+            order: {
+              connectionId: effectiveConnectionId!,
+              processedAt: { gte: fromDate, lte: toDate },
+              ...orderInclusionWhere,
+            },
+          },
+          select: {
+            productShopifyId: true,
+            quantity: true,
+            price: true,
+            order: { select: { id: true, processedAt: true } },
+          },
+        }),
     workspace.meta_ads_connections?.id
       ? prisma.meta_ads_daily_metrics.findMany({
           where: {
@@ -247,30 +281,87 @@ export async function GET(
           select: { shippedAt: true, shiprocketCreatedAt: true, rawJson: true },
         })
       : Promise.resolve([]),
-    prisma.shopifyOrder.findMany({
-      where: {
-        connectionId,
-        processedAt: { gte: fromDate, lte: toDate },
-        ...orderInclusionWhere,
-      },
-      select: {
-        id: true,
-        customerShopifyId: true,
-        processedAt: true,
-        totalPrice: true,
-        totalTax: true,
-        totalDiscount: true,
-      },
-    }),
+    isWoocommerce
+      ? prisma.woocommerceOrder.findMany({
+          where: {
+            connectionId: effectiveConnectionId!,
+            dateCreated: { gte: fromDate, lte: toDate },
+          },
+          select: {
+            id: true,
+            customerId: true,
+            dateCreated: true,
+            total: true,
+            totalTax: true,
+            discountTotal: true,
+            totalRefund: true,
+            productRefund: true,
+            shippingRefund: true,
+            currency: true,
+            status: true,
+          },
+        })
+      : prisma.shopifyOrder.findMany({
+          where: {
+            connectionId: effectiveConnectionId!,
+            processedAt: { gte: fromDate, lte: toDate },
+            ...orderInclusionWhere,
+          },
+          select: {
+            id: true,
+            customerShopifyId: true,
+            processedAt: true,
+            totalPrice: true,
+            totalTax: true,
+            totalDiscount: true,
+            currency: true,
+          },
+        }),
     hasNoOrderFilters(orderFilterSettings)
       ? Promise.resolve(new Map<string, { grossSales: number; ordersCount: number }>())
-      : getFilteredDailyAggregates(prisma, connectionId, fromDate, toDate, orderFilterSettings),
+      : isWoocommerce
+        ? Promise.resolve(new Map<string, { grossSales: number; ordersCount: number }>())
+        : getFilteredDailyAggregates(prisma, effectiveConnectionId!, fromDate, toDate, orderFilterSettings),
   ])
 
+  storeCurrency = isWoocommerce
+    ? (workspace.woocommerceConnection?.currency ?? 'USD')
+    : (() => {
+        const dailyWithCurrency = dailyAnalytics.find(
+          (d) => typeof d.currency === 'string' && d.currency.trim().length > 0
+        )
+        return dailyWithCurrency?.currency ?? 'INR'
+      })()
+
   // Diagnostic: latest order date, latest analytics date, row counts (for debugging P&L after 2026-03-08)
+  const getOrderDate = (order: any): Date | null =>
+    isWoocommerce ? (order.dateCreated ?? null) : (order.processedAt ?? null)
+  const getOrderGross = (order: any): number =>
+    isWoocommerce ? Number(order.total ?? 0) : Number(order.totalPrice ?? 0)
+  const getOrderTax = (order: any): number => Number(order.totalTax ?? 0)
+  const getOrderDiscount = (order: any): number =>
+    isWoocommerce ? Number(order.discountTotal ?? 0) : Number(order.totalDiscount ?? 0)
+  const getOrderCustomerId = (order: any): string | null =>
+    isWoocommerce
+      ? order.customerId != null
+        ? String(order.customerId)
+        : null
+      : (order.customerShopifyId ?? null)
+  const getOrderTotalRefund = (order: any): number =>
+    isWoocommerce ? Number(order.totalRefund ?? 0) : 0
+  const getOrderProductRefund = (order: any): number =>
+    isWoocommerce ? Number(order.productRefund ?? 0) : 0
+  const getOrderShippingRefund = (order: any): number =>
+    isWoocommerce ? Number(order.shippingRefund ?? 0) : 0
+
   const latestOrderDate =
     allOrdersInRange.length > 0
-      ? allOrdersInRange.reduce((max, o) => (o.processedAt > max ? o.processedAt : max), allOrdersInRange[0].processedAt)
+      ? allOrdersInRange.reduce((max: Date | null, o: any) => {
+          const date = getOrderDate(o)
+          if (!date) return max
+          if (!max) return date
+          return date > max ? date : max
+        }, null)
       : null
   const latestAnalyticsDate =
     dailyAnalytics.length > 0
@@ -292,10 +383,20 @@ export async function GET(
   // Build order-derived daily totals for every date that has orders (for fallback / fill-in).
   const orderDerivedByDate = new Map<
     string,
-    { grossSales: number; totalDiscount: number; totalTax: number; ordersCount: number; total_returns: number; returns: number }
+    {
+      grossSales: number
+      totalDiscount: number
+      totalTax: number
+      ordersCount: number
+      total_returns: number
+      returns: number
+      shipping_returns: number
+    }
   >()
   for (const o of allOrdersInRange) {
-    const dateStr = o.processedAt.toISOString().slice(0, 10)
+    const orderDate = getOrderDate(o)
+    if (!orderDate) continue
+    const dateStr = orderDate.toISOString().slice(0, 10)
     const cur = orderDerivedByDate.get(dateStr) ?? {
       grossSales: 0,
       totalDiscount: 0,
@@ -303,11 +404,15 @@ export async function GET(
       ordersCount: 0,
       total_returns: 0,
       returns: 0,
+      shipping_returns: 0,
     }
-    cur.grossSales += Number(o.totalPrice)
-    cur.totalDiscount += Number(o.totalDiscount ?? 0)
-    cur.totalTax += Number(o.totalTax)
+    cur.grossSales += getOrderGross(o)
+    cur.totalDiscount += getOrderDiscount(o)
+    cur.totalTax += getOrderTax(o)
     cur.ordersCount += 1
+    cur.total_returns += getOrderTotalRefund(o)
+    cur.returns += getOrderProductRefund(o)
+    cur.shipping_returns += getOrderShippingRefund(o)
     orderDerivedByDate.set(dateStr, cur)
   }
 
@@ -325,8 +430,8 @@ export async function GET(
       totalDiscount: new Decimal(v.totalDiscount),
       ordersCount: v.ordersCount,
       currency: storeCurrency,
-      total_returns: new Decimal(0),
-      returns: new Decimal(0),
+      total_returns: new Decimal(v.total_returns),
+      returns: new Decimal(v.returns),
     }
   })
   let effectiveDaily = [...dailyAnalytics, ...orderDerivedRows].sort(
@@ -339,14 +444,39 @@ export async function GET(
     })
   }
 
-  const coqMap = new Map(products.filter((p) => p.coq).map((p) => [p.shopifyId, Number(p.coq)]))
+  const coqMap = new Map(
+    products
+      .filter((p: any) => p.coq != null)
+      .map((p: any) => [isWoocommerce ? String(p.wcProductId) : p.shopifyId, Number(p.coq)])
+  )
   const cogsSettings = normalizeCogsSettings(workspace.cogsSettings)
-  const lineItemsWithDate = lineItemsInRange.map((li) => ({
-    price: Number(li.price),
-    quantity: li.quantity,
-    productShopifyId: li.productShopifyId,
-    orderProcessedAt: li.order.processedAt,
-  }))
+  const lineItemsWithDate = lineItemsInRange
+    .map((li: any) => {
+      const orderProcessedAt = isWoocommerce
+        ? (li.order?.dateCreated ?? null)
+        : (li.order?.processedAt ?? null)
+      if (!orderProcessedAt) return null
+      return {
+        price: Number(li.price ?? 0),
+        quantity: li.quantity ?? 0,
+        productShopifyId: isWoocommerce
+          ? li.productId != null
+            ? String(li.productId)
+            : null
+          : (li.productShopifyId ?? null),
+        orderProcessedAt,
+      }
+    })
+    .filter(
+      (
+        li
+      ): li is {
+        price: number
+        quantity: number
+        productShopifyId: string | null
+        orderProcessedAt: Date
+      } => li != null
+    )
   const { dailyCogs } = computeLineItemsCogs(lineItemsWithDate, coqMap, cogsSettings, {
     logSampleSource: process.env.NODE_ENV === 'development' ? 'pnl' : undefined,
   })
@@ -381,11 +511,13 @@ export async function GET(
   // First order per customer (from filtered orders in range) for NC/EC
   const firstAtMap = new Map<string, Date>()
   for (const order of allOrdersInRange) {
-    const cid = order.customerShopifyId
+    const cid = getOrderCustomerId(order)
     if (!cid || cid === '') continue
     const existing = firstAtMap.get(cid)
-    if (!existing || order.processedAt < existing) {
-      firstAtMap.set(cid, order.processedAt)
+    const orderDate = getOrderDate(order)
+    if (!orderDate) continue
+    if (!existing || orderDate < existing) {
+      firstAtMap.set(cid, orderDate)
     }
   }
 
@@ -401,10 +533,10 @@ export async function GET(
   const bucketByKey = new Map(buckets.map((b) => [b.key, b]))
 
   for (const order of allOrdersInRange) {
-    const orderDate = order.processedAt
-    const dateStr = orderDate.toISOString().slice(0, 10)
-    const rev = Number(order.totalPrice) - Number(order.totalTax)
-    const custId = order.customerShopifyId
+    const orderDate = getOrderDate(order)
+    if (!orderDate) continue
+    const rev = getOrderGross(order) - getOrderTax(order)
+    const custId = getOrderCustomerId(order)
     const firstAt = custId ? firstAtMap.get(custId) : null
     const isFirst = firstAt != null && orderDate.getTime() === firstAt.getTime()
 

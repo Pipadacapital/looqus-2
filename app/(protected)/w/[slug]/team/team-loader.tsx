@@ -51,6 +51,7 @@ export async function TeamLoader({ slug }: { slug: string }) {
   if (!currentMembership) redirect('/')
 
   const canManage = ['OWNER', 'ADMIN'].includes(currentMembership.role)
+  const currentUserRole = currentMembership.role
 
   return (
     <TeamContent
@@ -76,6 +77,7 @@ export async function TeamLoader({ slug }: { slug: string }) {
       }))}
       canManage={canManage}
       currentUserId={user.id}
+      currentUserRole={currentUserRole}
     />
   )
 }

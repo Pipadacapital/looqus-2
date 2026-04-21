@@ -9,6 +9,7 @@ export async function IntegrationsLoader({ slug }: { slug: string }) {
       select: {
         id: true,
         name: true,
+        platform: true,
         productDataSource: true,
         shopifyConnections: {
           where: { status: 'CONNECTED' },
@@ -79,6 +80,16 @@ export async function IntegrationsLoader({ slug }: { slug: string }) {
             createdAt: true,
           },
         },
+        woocommerceConnection: {
+          select: {
+            id: true,
+            storeUrl: true,
+            status: true,
+            lastSyncAt: true,
+            lastSyncError: true,
+            createdAt: true,
+          },
+        },
       },
     }),
     getCurrentUserRole(),
@@ -103,12 +114,16 @@ export async function IntegrationsLoader({ slug }: { slug: string }) {
   const klaviyoRaw = workspace.klaviyoConnection
   const klaviyoConnection =
     klaviyoRaw?.status === 'CONNECTED' ? klaviyoRaw : null
+  const woocommerceRaw = workspace.woocommerceConnection
+  const woocommerceConnection =
+    woocommerceRaw?.status === 'CONNECTED' ? woocommerceRaw : null
 
   return (
     <IntegrationsContent
-      workspaceSlug={slug} 
+      workspaceSlug={slug}
       workspaceId={workspace.id}
       workspaceName={workspace.name}
+      workspacePlatform={workspace.platform}
       isSuperadmin={isSuperadmin}
       shopifyConnection={
         connection
@@ -186,6 +201,18 @@ export async function IntegrationsLoader({ slug }: { slug: string }) {
               lastSyncAt: klaviyoConnection.lastSyncAt?.toISOString() ?? null,
               lastSyncError: klaviyoConnection.lastSyncError,
               createdAt: klaviyoConnection.createdAt.toISOString(),
+            }
+          : null
+      }
+      woocommerceConnection={
+        woocommerceConnection
+          ? {
+              id: woocommerceConnection.id,
+              storeUrl: woocommerceConnection.storeUrl,
+              status: woocommerceConnection.status,
+              lastSyncAt: woocommerceConnection.lastSyncAt?.toISOString() ?? null,
+              lastSyncError: woocommerceConnection.lastSyncError,
+              createdAt: woocommerceConnection.createdAt.toISOString(),
             }
           : null
       }

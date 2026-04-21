@@ -57,6 +57,7 @@ import {
   updateMemberRole,
   removeMember,
   revokeInvitation,
+  transferOwnership,
 } from './actions'
 
 const ROLES = [
@@ -101,6 +102,7 @@ interface TeamContentProps {
   pendingInvitations: PendingInvitation[]
   canManage: boolean
   currentUserId: string
+  currentUserRole: string
 }
 
 export function TeamContent({
@@ -110,6 +112,7 @@ export function TeamContent({
   pendingInvitations,
   canManage,
   currentUserId,
+  currentUserRole,
 }: TeamContentProps) {
   const [inviteOpen, setInviteOpen] = useState(false)
   const [inviteEmail, setInviteEmail] = useState('')
@@ -164,6 +167,17 @@ export function TeamContent({
     startTransition(async () => {
       const result = await revokeInvitation({
         invitationId,
+        workspaceId,
+        workspaceSlug,
+      })
+      if (result.error) setError(result.error)
+    })
+  }
+
+  const handleTransferOwnership = (targetMemberId: string) => {
+    startTransition(async () => {
+      const result = await transferOwnership({
+        targetMemberId,
         workspaceId,
         workspaceSlug,
       })
@@ -348,6 +362,17 @@ export function TeamContent({
                               </DropdownMenuSubContent>
                             </DropdownMenuSub>
                             <DropdownMenuSeparator />
+                            {currentUserRole === 'OWNER' && (
+                              <>
+                                <DropdownMenuItem
+                                  onClick={() => handleTransferOwnership(member.id)}
+                                  disabled={isPending}
+                                >
+                                  Transfer ownership
+                                </DropdownMenuItem>
+                                <DropdownMenuSeparator />
+                              </>
+                            )}
                             <DropdownMenuItem
                               onClick={() => handleRemove(member.id)}
                               className="text-destructive focus:text-destructive"

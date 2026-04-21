@@ -77,6 +77,7 @@ export async function GET(
         where: { status: 'CONNECTED' },
         select: {
           id: true,
+          currency: true,
           selected_ad_account_id: true,
           ad_account_ids: true,
         },
@@ -391,5 +392,6 @@ export async function GET(
       note:
         'ATC/checkout from pixel actions in synced raw_json. Re-sync if counts stay at zero.',
     },
+    currency: connection.currency ?? 'USD',
   })
 }

@@ -164,13 +164,13 @@ const emptyMarketing: MarketingEfficiency = {
 interface AcquisitionContentProps {
   workspaceSlug: string
   workspaceName: string
-  hasShopifyConnection: boolean
+  hasStoreConnection: boolean
 }
 
 export function AcquisitionContent({
   workspaceSlug,
   workspaceName,
-  hasShopifyConnection,
+  hasStoreConnection,
 }: AcquisitionContentProps) {
   const now = new Date()
   const ytdFrom = format(startOfYear(now), 'yyyy-MM-dd')
@@ -250,7 +250,7 @@ export function AcquisitionContent({
 
   const currency = data?.currency ?? 'INR'
 
-  if (!hasShopifyConnection) {
+  if (!hasStoreConnection) {
     return (
       <div className="flex flex-col gap-6 py-4 md:py-6">
         <div>
@@ -261,7 +261,7 @@ export function AcquisitionContent({
           <p className="text-sm text-muted-foreground mt-0.5">{workspaceName}</p>
         </div>
         <div className="rounded-xl border bg-card p-8 text-center text-muted-foreground">
-          Connect Shopify to view acquisition metrics.
+          Connect a store to view acquisition metrics.
         </div>
       </div>
     )
@@ -280,7 +280,7 @@ export function AcquisitionContent({
           </p>
         </div>
 
-        {hasShopifyConnection && (
+        {hasStoreConnection && (
           <InsightSheet
             page="acquisition"
             from={from}

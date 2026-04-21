@@ -125,6 +125,22 @@ export async function fetchMetaUserId(
   return data.id
 }
 
+export async function fetchMetaAdAccountCurrency(
+  accessToken: string,
+  adAccountId: string
+): Promise<string | null> {
+  const proof = appsecretProof(accessToken)
+  const normalizedId = adAccountId.startsWith('act_') ? adAccountId : `act_${adAccountId}`
+  const url =
+    `https://graph.facebook.com/${META_API_VERSION}/${normalizedId}` +
+    `?fields=name,currency,account_status&access_token=${accessToken}&appsecret_proof=${proof}`
+  const res = await fetch(url)
+  if (!res.ok) return null
+  const data = (await res.json()) as { currency?: unknown }
+  if (typeof data.currency !== 'string' || !data.currency.trim()) return null
+  return data.currency.trim().toUpperCase()
+}
+
 const META_RATE_LIMIT_RETRIES = 3
 const META_RATE_LIMIT_BACKOFF_MS = 2000
 

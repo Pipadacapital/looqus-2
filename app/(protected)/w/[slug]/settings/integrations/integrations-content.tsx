@@ -93,10 +93,20 @@ type UnicommerceConnectionInfo = {
   createdAt: string
 }
 
+type WoocommerceConnectionInfo = {
+  id: string
+  storeUrl: string
+  status: string
+  lastSyncAt: string | null
+  lastSyncError: string | null
+  createdAt: string
+}
+
 interface IntegrationsContentProps {
   workspaceSlug: string
   workspaceId: string
   workspaceName: string
+  workspacePlatform: 'SHOPIFY' | 'WOOCOMMERCE'
   isSuperadmin?: boolean
   shopifyConnection: ShopifyConnectionInfo | null
   metaConnection: MetaConnectionInfo | null
@@ -105,12 +115,14 @@ interface IntegrationsContentProps {
   unicommerceConnection: UnicommerceConnectionInfo | null
   productDataSource: 'SHOPIFY' | 'UNICOMMERCE'
   klaviyoConnection: KlaviyoConnectionInfo | null
+  woocommerceConnection: WoocommerceConnectionInfo | null
 }
 
 export function IntegrationsContent({
   workspaceSlug,
   workspaceId,
   workspaceName,
+  workspacePlatform,
   isSuperadmin = false,
   shopifyConnection,
   metaConnection,
@@ -119,6 +131,7 @@ export function IntegrationsContent({
   unicommerceConnection,
   productDataSource,
   klaviyoConnection,
+  woocommerceConnection,
 }: IntegrationsContentProps) {
   const [storeHandle, setStoreHandle] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -170,6 +183,16 @@ export function IntegrationsContent({
   const [kvApiKey, setKvApiKey] = useState('')
   const [kvConnecting, setKvConnecting] = useState(false)
   const [kvError, setKvError] = useState<string | null>(null)
+
+  // WooCommerce connect form state
+  const [wcDialogOpen, setWcDialogOpen] = useState(false)
+  const [wcStoreUrl, setWcStoreUrl] = useState('')
+  const [wcConsumerKey, setWcConsumerKey] = useState('')
+  const [wcConsumerSecret, setWcConsumerSecret] = useState('')
+  const [wcConnecting, setWcConnecting] = useState(false)
+  const [wcSyncing, setWcSyncing] = useState(false)
+  const [wcDisconnecting, setWcDisconnecting] = useState(false)
+  const [wcError, setWcError] = useState<string | null>(null)
 
   const canConnect = !!storeHandle.trim()
 
@@ -646,6 +669,74 @@ export function IntegrationsContent({
     }
   }
 
+  const handleWoocommerceConnect = async () => {
+    if (!wcStoreUrl.trim() || !wcConsumerKey.trim() || !wcConsumerSecret.trim()) return
+    setWcConnecting(true)
+    setWcError(null)
+    try {
+      const res = await fetch('/api/integrations/woocommerce/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspaceId, storeUrl: wcStoreUrl.trim(), consumerKey: wcConsumerKey.trim(), consumerSecret: wcConsumerSecret.trim() }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setWcError(data.error || 'Failed to connect WooCommerce')
+        return
+      }
+      setWcDialogOpen(false)
+      setWcStoreUrl('')
+      setWcConsumerKey('')
+      setWcConsumerSecret('')
+      toast.success('WooCommerce connected — run sync to import orders')
+      window.location.reload()
+    } catch {
+      setWcError('Network error. Please try again.')
+    } finally {
+      setWcConnecting(false)
+    }
+  }
+
+  const handleWoocommerceSync = async () => {
+    setWcSyncing(true)
+    setWcError(null)
+    try {
+      const res = await fetch('/api/integrations/woocommerce/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspaceId }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast.error(data.error || 'WooCommerce sync failed')
+        return
+      }
+      toast.success(`Synced ${data.ordersUpserted ?? 0} orders, ${data.lineItemsUpserted ?? 0} line items`)
+      window.location.reload()
+    } finally {
+      setWcSyncing(false)
+    }
+  }
+
+  const handleWoocommerceDisconnect = async () => {
+    setWcDisconnecting(true)
+    try {
+      const res = await fetch('/api/integrations/woocommerce/disconnect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspaceId }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        setWcError(data.error || 'Failed to disconnect WooCommerce')
+        return
+      }
+      window.location.reload()
+    } finally {
+      setWcDisconnecting(false)
+    }
+  }
+
   return (
     <div className="flex flex-col gap-6 py-4 md:py-6">
       <div>
@@ -653,12 +744,13 @@ export function IntegrationsContent({
           Integrations
         </h1>
         <p className="text-sm text-muted-foreground">
-          Connect Shopify, Meta, Google, Shiprocket, and Klaviyo for your workspace.
+          Connect {workspacePlatform === 'WOOCOMMERCE' ? 'WooCommerce' : 'Shopify'}, Meta, Google, Shiprocket, and Klaviyo for your workspace.
         </p>
       </div>
 
       {/* Shopify Connection Card */}
-      <div className="rounded-xl border bg-card shadow-sm">
+      {workspacePlatform === 'SHOPIFY' && (
+        <div className="rounded-xl border bg-card shadow-sm">
         <div className="flex items-center gap-3 border-b px-6 py-4">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#96bf48]/10">
             <IconPlugConnected className="h-5 w-5 text-[#96bf48]" />
@@ -771,7 +863,8 @@ export function IntegrationsContent({
             </div>
           )}
         </div>
-      </div>
+        </div>
+      )}
 
       {/* Meta Ads Connection Card */}
       <div className="rounded-xl border bg-card shadow-sm">
@@ -1600,6 +1693,164 @@ export function IntegrationsContent({
                         </>
                       ) : (
                         'Save & connect'
+                      )}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* WooCommerce Connection Card */}
+      <div className="rounded-xl border bg-card shadow-sm">
+        <div className="flex items-center gap-3 border-b px-6 py-4">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#7F54B3]/10">
+            <IconPlugConnected className="h-5 w-5 text-[#7F54B3]" />
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-medium">WooCommerce</p>
+            <p className="text-xs text-muted-foreground">
+              {woocommerceConnection
+                ? `Connected to ${woocommerceConnection.storeUrl}`
+                : 'Connect your WooCommerce / WordPress store'}
+            </p>
+          </div>
+          {woocommerceConnection ? (
+            <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-600">
+              <IconCheck className="mr-1 h-3 w-3" />
+              Connected
+            </Badge>
+          ) : (
+            <Badge variant="secondary">Not connected</Badge>
+          )}
+        </div>
+
+        <div className="px-6 py-4">
+          {woocommerceConnection ? (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <p className="text-sm font-medium">{woocommerceConnection.storeUrl}</p>
+                  <p className="text-xs text-muted-foreground">
+                    Connected{' '}
+                    {formatDistanceToNow(new Date(woocommerceConnection.createdAt), { addSuffix: true })}
+                    {woocommerceConnection.lastSyncAt && (
+                      <>
+                        {' · '}Last synced{' '}
+                        {formatDistanceToNow(new Date(woocommerceConnection.lastSyncAt), { addSuffix: true })}
+                      </>
+                    )}
+                  </p>
+                  {woocommerceConnection.lastSyncError && (
+                    <p className="text-xs text-destructive">{woocommerceConnection.lastSyncError}</p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleWoocommerceSync}
+                    disabled={wcSyncing}
+                  >
+                    {wcSyncing ? (
+                      <IconLoader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <IconRefresh className="mr-1.5 h-3.5 w-3.5" />
+                    )}
+                    Sync now
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleWoocommerceDisconnect}
+                    disabled={wcDisconnecting}
+                  >
+                    <IconUnlink className="mr-1.5 h-3.5 w-3.5" />
+                    Disconnect
+                  </Button>
+                </div>
+              </div>
+              {wcError && <p className="text-sm text-destructive">{wcError}</p>}
+              {workspacePlatform === 'WOOCOMMERCE' && (
+                <p className="text-xs text-muted-foreground">
+                  Run <strong>Sync now</strong> after connecting so orders and catalog sync to the database.
+                  The Inventory page lists products from that sync; until then it may show no products.
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="flex flex-col items-center gap-4 py-4 text-center">
+              <div className="max-w-sm space-y-1">
+                <p className="text-sm font-medium">No WooCommerce store connected</p>
+                <p className="text-xs text-muted-foreground">
+                  Connect your WordPress / WooCommerce store using REST API keys to pull in orders and products.
+                </p>
+              </div>
+              <Dialog open={wcDialogOpen} onOpenChange={setWcDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button>
+                    <IconPlugConnected className="mr-1.5 h-4 w-4" />
+                    Connect WooCommerce
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="sm:max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>Connect WooCommerce</DialogTitle>
+                    <DialogDescription>
+                      Enter your store URL and REST API credentials.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="grid gap-4 py-2">
+                    <div className="grid gap-2">
+                      <Label htmlFor="wc-store-url">Store URL</Label>
+                      <Input
+                        id="wc-store-url"
+                        placeholder="https://mybrand.com"
+                        value={wcStoreUrl}
+                        onChange={(e) => setWcStoreUrl(e.target.value)}
+                        autoFocus
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="wc-consumer-key">Consumer Key</Label>
+                      <Input
+                        id="wc-consumer-key"
+                        placeholder="ck_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                        value={wcConsumerKey}
+                        onChange={(e) => setWcConsumerKey(e.target.value)}
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="wc-consumer-secret">Consumer Secret</Label>
+                      <Input
+                        id="wc-consumer-secret"
+                        type="password"
+                        placeholder="cs_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                        value={wcConsumerSecret}
+                        onChange={(e) => setWcConsumerSecret(e.target.value)}
+                      />
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Generate API keys in your WordPress dashboard under{' '}
+                      <strong>WooCommerce → Settings → Advanced → REST API</strong>.
+                      Set permissions to <strong>Read</strong>.
+                    </p>
+                    {wcError && <p className="text-sm text-destructive">{wcError}</p>}
+                  </div>
+                  <DialogFooter>
+                    <Button variant="ghost" onClick={() => setWcDialogOpen(false)} disabled={wcConnecting}>
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={handleWoocommerceConnect}
+                      disabled={!wcStoreUrl.trim() || !wcConsumerKey.trim() || !wcConsumerSecret.trim() || wcConnecting}
+                    >
+                      {wcConnecting ? (
+                        <><IconLoader2 className="mr-1.5 h-4 w-4 animate-spin" />Connecting...</>
+                      ) : (
+                        <><IconPlugConnected className="mr-1.5 h-4 w-4" />Connect</>
                       )}
                     </Button>
                   </DialogFooter>

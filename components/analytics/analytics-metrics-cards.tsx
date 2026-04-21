@@ -79,15 +79,24 @@ export function AnalyticsMetricsCards({
     },
     {
       label: 'Meta Ad spend',
-      value: formatCurrency(summary.metaAdSpend ?? 0, 'INR'),
+      value: formatCurrency(
+        summary.metaAdSpend ?? 0,
+        summary.metaAdCurrency ?? summary.currency
+      ),
     },
     {
       label: 'Google Ad spend',
-      value: formatCurrency(summary.googleAdSpend ?? 0, 'INR'),
+      value: formatCurrency(
+        summary.googleAdSpend ?? 0,
+        summary.googleAdCurrency ?? summary.currency
+      ),
     },
     {
       label: 'Total Ad spend',
-      value: formatCurrency(summary.totalAdSpend ?? 0, 'INR'),
+      value: formatCurrency(
+        summary.totalAdSpend ?? 0,
+        summary.totalAdCurrency ?? summary.currency
+      ),
     },
     {
       label: 'CM2',

@@ -22,11 +22,13 @@ import { useWorkspace } from '@/hooks/use-workspace'
 import { Button } from '@/components/ui/button'
 
 export function StoreContent({
+  platform,
   hasConnection,
   connectionId,
   lastSyncAt,
   initialOrders,
 }: {
+  platform: 'SHOPIFY' | 'WOOCOMMERCE'
   hasConnection: boolean
   connectionId: string | null
   lastSyncAt: string | null
@@ -38,24 +40,35 @@ export function StoreContent({
   const [syncing, setSyncing] = useState(false)
   const [backfilling, setBackfilling] = useState(false)
   const [customerBackfilling, setCustomerBackfilling] = useState(false)
+  const isWoocommerce = platform === 'WOOCOMMERCE'
 
-  const handleRefreshFromShopify = async () => {
-    if (!connectionId) return
+  const handleRefreshFromStore = async () => {
     setSyncing(true)
     try {
-      const res = await fetch('/api/shopify/sync', {
+      const res = await fetch(
+        isWoocommerce ? '/api/integrations/woocommerce/sync' : '/api/shopify/sync',
+        {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ connectionId }),
-      })
+          body: JSON.stringify(
+            isWoocommerce ? { workspaceId: current.id } : { connectionId }
+          ),
+        }
+      )
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        toast.error(data.error ?? 'Shopify sync failed')
+        toast.error(data.error ?? `${isWoocommerce ? 'WooCommerce' : 'Shopify'} sync failed`)
         return
       }
-      toast.success(
-        `Synced ${data.products ?? 0} products, ${data.orders ?? 0} orders, ${data.customers ?? 0} customers`
-      )
+      if (isWoocommerce) {
+        toast.success(
+          `Synced ${data.ordersUpserted ?? 0} orders, ${data.lineItemsUpserted ?? 0} line items`
+        )
+      } else {
+        toast.success(
+          `Synced ${data.products ?? 0} products, ${data.orders ?? 0} orders, ${data.customers ?? 0} customers`
+        )
+      }
       queryClient.invalidateQueries({ queryKey: ['store', 'products', slug] })
     } finally {
       setSyncing(false)
@@ -103,8 +116,8 @@ export function StoreContent({
   if (!hasConnection) {
     return (
       <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground">
-        Connect a Shopify store from the Dashboard to view orders, products, and
-        customers here.
+        Connect a {isWoocommerce ? 'WooCommerce' : 'Shopify'} store from Integrations
+        to view orders, products, and customers here.
       </div>
     )
   }
@@ -124,36 +137,40 @@ export function StoreContent({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {!isWoocommerce && (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleCustomerBackfill}
+                disabled={customerBackfilling || syncing || backfilling}
+              >
+                {customerBackfilling ? (
+                  <IconLoader2 className="size-4 animate-spin" />
+                ) : (
+                  <IconUsers className="size-4" />
+                )}
+                <span className="ml-2">Backfill Customers</span>
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleBulkBackfill}
+                disabled={backfilling || syncing || customerBackfilling}
+              >
+                {backfilling ? (
+                  <IconLoader2 className="size-4 animate-spin" />
+                ) : (
+                  <IconDatabaseImport className="size-4" />
+                )}
+                <span className="ml-2">Bulk Backfill (4 Years)</span>
+              </Button>
+            </>
+          )}
           <Button
             variant="outline"
             size="sm"
-            onClick={handleCustomerBackfill}
-            disabled={customerBackfilling || syncing || backfilling}
-          >
-            {customerBackfilling ? (
-              <IconLoader2 className="size-4 animate-spin" />
-            ) : (
-              <IconUsers className="size-4" />
-            )}
-            <span className="ml-2">Backfill Customers</span>
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleBulkBackfill}
-            disabled={backfilling || syncing || customerBackfilling}
-          >
-            {backfilling ? (
-              <IconLoader2 className="size-4 animate-spin" />
-            ) : (
-              <IconDatabaseImport className="size-4" />
-            )}
-            <span className="ml-2">Bulk Backfill (4 Years)</span>
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleRefreshFromShopify}
+            onClick={handleRefreshFromStore}
             disabled={syncing || backfilling || customerBackfilling}
           >
             {syncing ? (
@@ -161,7 +178,7 @@ export function StoreContent({
             ) : (
               <IconRefresh className="size-4" />
             )}
-            <span className="ml-2">Refresh from Shopify</span>
+            <span className="ml-2">Refresh from {isWoocommerce ? 'WooCommerce' : 'Shopify'}</span>
           </Button>
         </div>
       </div>

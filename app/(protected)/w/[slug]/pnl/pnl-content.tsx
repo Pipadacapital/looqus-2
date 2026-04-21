@@ -13,7 +13,6 @@ import {
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { DateRangeFilter } from '@/components/analytics'
-import { formatCurrency } from '@/components/analytics/types'
 import {
   Table,
   TableBody,
@@ -102,6 +101,21 @@ COLUMN_CONFIG.forEach((c) => {
   DEFAULT_VISIBILITY[c.id] = c.defaultVisible
 })
 
+/** P&L only: uses API `currency` (ISO 4217) with Intl — avoids shared formatCurrency’s INR vs $ shortcut. */
+function formatPnlCurrency(
+  value: number,
+  currencyCode: string,
+  opts: { minimumFractionDigits?: number; maximumFractionDigits?: number } = {}
+): string {
+  const currency = currencyCode?.trim() || 'INR'
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency,
+    minimumFractionDigits: opts.minimumFractionDigits ?? 2,
+    maximumFractionDigits: opts.maximumFractionDigits ?? 2,
+  }).format(value)
+}
+
 // Presets for PnL: Year to date, Last year (in addition to DateRangeFilter presets)
 function applyPnlPreset(
   preset: 'ytd' | 'lastYear',
@@ -130,12 +144,16 @@ type ShopifyConnectionInfo = {
 interface PnlContentProps {
   workspaceSlug: string
   workspaceName: string
+  workspacePlatform: 'SHOPIFY' | 'WOOCOMMERCE'
+  hasStoreConnection: boolean
   shopifyConnection: ShopifyConnectionInfo | null
 }
 
 export function PnlContent({
   workspaceSlug,
   workspaceName,
+  workspacePlatform,
+  hasStoreConnection,
   shopifyConnection,
 }: PnlContentProps) {
   const [from, setFrom] = useState<string>(() =>
@@ -150,7 +168,7 @@ export function PnlContent({
 
   const [data, setData] = useState<{ rows: PnLRow[]; currency: string }>({ rows: [], currency: 'INR' })
   const [loading, setLoading] = useState(
-    () => !!workspaceSlug && !!from && !!to && !!shopifyConnection?.id
+    () => !!workspaceSlug && !!from && !!to && hasStoreConnection
   )
   const [error, setError] = useState<string | null>(null)
 
@@ -231,7 +249,7 @@ export function PnlContent({
     netSalesRow: number
   ): string {
     if (valueMode !== 'percentage' || !NUMERIC_COLUMNS.has(key)) {
-      return formatCurrency(value, data.currency, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      return formatPnlCurrency(value, data.currency, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     }
     const base = netSalesRow || totalNetSales || 1
     const pct = (value / base) * 100
@@ -240,7 +258,7 @@ export function PnlContent({
 
   const totalPages = Math.max(1, Math.ceil(data.rows.length / pageSize))
 
-  if (!shopifyConnection) {
+  if (!hasStoreConnection) {
     return (
       <div className="flex flex-col gap-6 py-4 md:py-6">
         <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
@@ -250,7 +268,7 @@ export function PnlContent({
         <div className="rounded-xl border bg-card shadow-sm p-8 text-center">
           <p className="text-sm font-medium mb-1">No store connected</p>
           <p className="text-xs text-muted-foreground mb-4">
-            Connect your Shopify store from the dashboard to view P&L.
+            Connect your {workspacePlatform === 'WOOCOMMERCE' ? 'WooCommerce' : 'Shopify'} store from Integrations to view P&L.
           </p>
           <Button asChild>
             <Link href={`/w/${workspaceSlug}/dashboard`}>
@@ -274,7 +292,7 @@ export function PnlContent({
           <p className="text-sm text-muted-foreground mt-0.5">{workspaceName}</p>
         </div>
 
-        {shopifyConnection && (
+        {hasStoreConnection && (
           <InsightSheet
             page="pnl"
             from={from}

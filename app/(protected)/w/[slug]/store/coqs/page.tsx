@@ -22,18 +22,29 @@ export default async function StoreCoqsPage({
 
   const workspace = await prisma.workspace.findUnique({
     where: { slug },
-    include: {
+    select: {
+      id: true,
+      platform: true,
       shopifyConnections: {
         where: { status: 'CONNECTED' },
         select: { id: true },
         take: 1,
+      },
+      woocommerceConnection: {
+        select: {
+          id: true,
+          status: true,
+        },
       },
     },
   })
 
   if (!workspace) redirect('/')
 
-  const hasConnection = workspace.shopifyConnections.length > 0
+  const hasConnection =
+    workspace.platform === 'WOOCOMMERCE'
+      ? workspace.woocommerceConnection?.status === 'CONNECTED'
+      : workspace.shopifyConnections.length > 0
 
   if (!hasConnection) {
     return (
@@ -45,7 +56,7 @@ export default async function StoreCoqsPage({
           </Link>
         </Button>
         <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground">
-          Connect a Shopify store from the Dashboard to set product COGS.
+          Connect a {workspace.platform === 'WOOCOMMERCE' ? 'WooCommerce' : 'Shopify'} store from Integrations to set product COGS.
         </div>
       </div>
     )

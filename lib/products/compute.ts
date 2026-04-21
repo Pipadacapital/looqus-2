@@ -877,3 +877,494 @@ export async function computeProducts(
     currency: storeCurrency,
   }
 }
+
+/** Same refund-qty fallback as Shopify product aggregation when line-level refund qty is unavailable. */
+function lineRefundedQtyFallbackWoo(lineRefund: number, lineSales: number, quantity: number): number {
+  if (lineSales <= 0 || quantity <= 0) return 0
+  const raw = (lineRefund / lineSales) * quantity
+  const rounded = Math.round(raw)
+  return Math.max(0, Math.min(quantity, rounded))
+}
+
+async function fetchWooDailyRatesForProducts(
+  prisma: PrismaClient,
+  workspaceId: string,
+  wooConnId: string,
+  fromDate: Date,
+  toDate: Date,
+  storeCurrency: string
+): Promise<
+  Map<string, { ordersCount: number; grossSales: number; totalReturns: number; variableCost: number }>
+> {
+  const [ordersByDay, workspaceCosts] = await Promise.all([
+    prisma.woocommerceOrder.findMany({
+      where: {
+        connectionId: wooConnId,
+        dateCreated: { gte: fromDate, lte: toDate },
+        status: { notIn: ['cancelled', 'failed', 'pending'] },
+      },
+      select: { dateCreated: true, total: true, totalRefund: true },
+    }),
+    prisma.workspaceCost.findMany({
+      where: { workspaceId, effectiveFrom: { lte: toDate } },
+    }),
+  ])
+  const dayAgg = new Map<string, { grossSales: number; ordersCount: number; totalReturns: number }>()
+  for (const o of ordersByDay) {
+    if (!o.dateCreated) continue
+    const ds = o.dateCreated.toISOString().slice(0, 10)
+    const cur = dayAgg.get(ds) ?? { grossSales: 0, ordersCount: 0, totalReturns: 0 }
+    cur.grossSales += Number(o.total ?? 0)
+    cur.ordersCount += 1
+    cur.totalReturns += Number(o.totalRefund ?? 0)
+    dayAgg.set(ds, cur)
+  }
+
+  const out = new Map<
+    string,
+    { ordersCount: number; grossSales: number; totalReturns: number; variableCost: number }
+  >()
+  const cursor = new Date(fromDate.getTime())
+  cursor.setUTCHours(0, 0, 0, 0)
+  const end = new Date(toDate.getTime())
+  end.setUTCHours(23, 59, 59, 999)
+  while (cursor <= end) {
+    const dateStr = cursor.toISOString().slice(0, 10)
+    const d = dayAgg.get(dateStr)
+    const ordersCount = d?.ordersCount ?? 0
+    const grossSales = d?.grossSales ?? 0
+    const totalReturns = d?.totalReturns ?? 0
+    let variableCost = 0
+    for (const cost of workspaceCosts) {
+      const costFromStr = cost.effectiveFrom.toISOString().slice(0, 10)
+      const costToStr = cost.effectiveTo ? cost.effectiveTo.toISOString().slice(0, 10) : '9999-12-31'
+      if (dateStr < costFromStr || dateStr > costToStr) continue
+      variableCost += getDailyVariableContribution(
+        {
+          costType: cost.costType,
+          amount: Number(cost.amount),
+          currency: cost.currency,
+          isPercent: cost.isPercent,
+          billingMode: cost.billingMode ?? 'monthly',
+        },
+        dateStr,
+        ordersCount || 1,
+        grossSales,
+        storeCurrency
+      )
+    }
+    out.set(dateStr, {
+      ordersCount: ordersCount || 1,
+      grossSales,
+      totalReturns,
+      variableCost,
+    })
+    cursor.setUTCDate(cursor.getUTCDate() + 1)
+  }
+  return out
+}
+
+/**
+ * WooCommerce-only product profitability (same response shape as computeProducts).
+ * Does not modify computeProducts.
+ */
+export async function computeWoocommerceProducts(
+  prisma: PrismaClient,
+  workspaceId: string,
+  params: {
+    from: string
+    to: string
+    groupBy: ProductsGroupBy
+    search?: string
+    sort: ProductsSortColumn
+    dir: 'asc' | 'desc'
+    page: number
+    pageSize: number
+  }
+): Promise<{ rows: ProductsRow[]; totalRows: number; currency: string }> {
+  const wooConn = await prisma.woocommerceConnection.findFirst({
+    where: { workspaceId, status: 'CONNECTED' },
+    select: { id: true, currency: true },
+  })
+  if (!wooConn) {
+    return { rows: [], totalRows: 0, currency: 'USD' }
+  }
+
+  const storeCurrency = wooConn.currency ?? 'USD'
+  const fromDate = new Date(params.from + 'T00:00:00.000Z')
+  const toDate = new Date(params.to + 'T23:59:59.999Z')
+
+  const groupBy: 'product' | 'variant' =
+    params.groupBy === 'variant' ? 'variant' : 'product'
+
+  const [lineItems, cogsSettingsRaw, wcProducts, ordersForFirst] = await Promise.all([
+    prisma.woocommerceLineItem.findMany({
+      where: {
+        order: {
+          connectionId: wooConn.id,
+          dateCreated: { gte: fromDate, lte: toDate },
+          status: { notIn: ['cancelled', 'failed', 'pending'] },
+        },
+      },
+      include: {
+        order: {
+          select: {
+            id: true,
+            total: true,
+            totalRefund: true,
+            customerEmail: true,
+            dateCreated: true,
+          },
+        },
+      },
+    }),
+    prisma.workspaceCogsSettings.findUnique({
+      where: { workspaceId },
+    }),
+    prisma.woocommerceProduct.findMany({
+      where: { connectionId: wooConn.id },
+      select: {
+        wcProductId: true,
+        name: true,
+        sku: true,
+        categories: true,
+        coq: true,
+      },
+    }),
+    prisma.woocommerceOrder.findMany({
+      where: {
+        connectionId: wooConn.id,
+        dateCreated: { lte: toDate },
+        customerEmail: { not: null },
+        status: { notIn: ['cancelled', 'failed', 'pending'] },
+      },
+      select: { id: true, customerEmail: true, dateCreated: true },
+      orderBy: [{ dateCreated: 'asc' }, { id: 'asc' }],
+    }),
+  ])
+
+  const productMap = new Map(wcProducts.map((p) => [p.wcProductId, p]))
+  const cogsSettings = normalizeCogsSettings(cogsSettingsRaw)
+  const coqMap = new Map(
+    wcProducts.filter((p) => p.coq != null).map((p) => [String(p.wcProductId), Number(p.coq)])
+  )
+
+  const firstByEmail = new Map<string, { firstAt: Date; orderId: string }>()
+  for (const o of ordersForFirst) {
+    const em = o.customerEmail?.trim().toLowerCase()
+    if (!em) continue
+    if (!firstByEmail.has(em)) {
+      firstByEmail.set(em, { firstAt: o.dateCreated!, orderId: o.id })
+    }
+  }
+
+  const dailyRates = await fetchWooDailyRatesForProducts(
+    prisma,
+    workspaceId,
+    wooConn.id,
+    fromDate,
+    toDate,
+    storeCurrency
+  )
+
+  type Agg = {
+    label: string
+    sales: number
+    refunds: number
+    sold: number
+    refunded: number
+    orders: Set<string>
+    ncOrders: Set<string>
+    ecOrders: Set<string>
+    ncSales: number
+    ecSales: number
+    ncRefunds: number
+    ecRefunds: number
+    ncRevenue: number
+    ecRevenue: number
+    ncSold: number
+    ncRefunded: number
+    ecSold: number
+    ecRefunded: number
+    cogs: number
+    variableCost: number
+  }
+
+  const aggByKey = new Map<string, Agg>()
+  function getOrCreate(key: string, label: string): Agg {
+    let a = aggByKey.get(key)
+    if (!a) {
+      a = {
+        label,
+        sales: 0,
+        refunds: 0,
+        sold: 0,
+        refunded: 0,
+        orders: new Set(),
+        ncOrders: new Set(),
+        ecOrders: new Set(),
+        ncSales: 0,
+        ecSales: 0,
+        ncRefunds: 0,
+        ecRefunds: 0,
+        ncRevenue: 0,
+        ecRevenue: 0,
+        ncSold: 0,
+        ncRefunded: 0,
+        ecSold: 0,
+        ecRefunded: 0,
+        cogs: 0,
+        variableCost: 0,
+      }
+      aggByKey.set(key, a)
+    }
+    return a
+  }
+
+  const lineItemsByOrder = new Map<string, typeof lineItems>()
+  for (const li of lineItems) {
+    const list = lineItemsByOrder.get(li.orderId) ?? []
+    list.push(li)
+    lineItemsByOrder.set(li.orderId, list)
+  }
+
+  const orderById = new Map<string, (typeof lineItems)[number]['order']>()
+  for (const li of lineItems) {
+    if (li.order) orderById.set(li.orderId, li.order)
+  }
+  const orderIdToNc = new Map<string, boolean>()
+  for (const [oid, order] of orderById) {
+    if (!order?.dateCreated) continue
+    const em = order.customerEmail?.trim().toLowerCase()
+    const first = em ? firstByEmail.get(em) : null
+    const isNc =
+      first != null &&
+      first.firstAt >= fromDate &&
+      first.firstAt <= toDate &&
+      order.id === first.orderId
+    orderIdToNc.set(oid, isNc)
+  }
+
+  for (const li of lineItems) {
+    const order = li.order
+    if (!order?.dateCreated) continue
+    const dateStr = order.dateCreated.toISOString().slice(0, 10)
+    const rates = dailyRates.get(dateStr)
+    const dayOrders = rates?.ordersCount ?? 1
+    const dayGross = rates?.grossSales ?? 0
+    const dayReturns = rates?.totalReturns ?? 0
+    const orderVariableCost = (rates?.variableCost ?? 0) / dayOrders
+    const orderTotal = Number(order.total ?? 0)
+    const lis = lineItemsByOrder.get(order.id) ?? []
+    const orderSales = lis.reduce((s, x) => s + Number(x.price ?? 0) * (x.quantity ?? 0), 0) || 1
+    const orderRefundAlloc = dayGross > 0 ? (orderTotal / dayGross) * dayReturns : 0
+    const isNc = orderIdToNc.get(order.id) ?? false
+
+    const lineSales = Number(li.price ?? 0) * (li.quantity ?? 0)
+    const weight = lineSales / orderSales
+    const lineRefund = orderRefundAlloc * weight
+    const lineRefundedQty = lineRefundedQtyFallbackWoo(lineRefund, lineSales, li.quantity ?? 0)
+    const lineCogs = resolveLineItemCogs(
+      {
+        price: Number(li.price ?? 0),
+        quantity: li.quantity ?? 0,
+        productShopifyId: li.productId != null ? String(li.productId) : null,
+      },
+      coqMap,
+      cogsSettings
+    )
+    const lineVariable = orderSales > 0 ? (lineSales / orderSales) * orderVariableCost : 0
+
+    const wcProduct = li.productId != null ? productMap.get(li.productId) : null
+    const productTitle = wcProduct?.name ?? li.name ?? li.sku ?? 'Unknown'
+
+    const keys: { key: string; label: string; w: number }[] = []
+    if (groupBy === 'product') {
+      const key = String(li.productId ?? li.sku ?? 'unknown')
+      keys.push({ key, label: productTitle, w: 1 })
+    } else {
+      const vKey = `${li.productId ?? 'unknown'}|${li.variationId ?? 'default'}`
+      const label = `${productTitle}${li.name && li.name !== productTitle ? ` — ${li.name}` : ''}`
+      keys.push({ key: vKey, label, w: 1 })
+    }
+
+    for (const { key, label, w } of keys) {
+      const agg = getOrCreate(key, label)
+      agg.sales += lineSales * w
+      agg.refunds += lineRefund * w
+      agg.sold += (li.quantity ?? 0) * w
+      agg.refunded += lineRefundedQty * w
+      agg.cogs += lineCogs * w
+      agg.variableCost += lineVariable * w
+      agg.orders.add(order.id)
+      if (isNc) {
+        agg.ncOrders.add(order.id)
+        agg.ncSales += lineSales * w
+        agg.ncRefunds += lineRefund * w
+        agg.ncRevenue += (lineSales - lineRefund) * w
+        agg.ncSold += (li.quantity ?? 0) * w
+        agg.ncRefunded += lineRefundedQty * w
+      } else {
+        agg.ecOrders.add(order.id)
+        agg.ecSales += lineSales * w
+        agg.ecRefunds += lineRefund * w
+        agg.ecRevenue += (lineSales - lineRefund) * w
+        agg.ecSold += (li.quantity ?? 0) * w
+        agg.ecRefunded += lineRefundedQty * w
+      }
+    }
+  }
+
+  const totalCm1 = [...aggByKey.values()].reduce(
+    (s, a) => s + (a.sales - a.refunds - a.cogs - a.variableCost),
+    0
+  )
+  const sortedByCm1 = [...aggByKey.entries()].sort((a, b) => {
+    const cm1A = a[1].sales - a[1].refunds - a[1].cogs - a[1].variableCost
+    const cm1B = b[1].sales - b[1].refunds - b[1].cogs - b[1].variableCost
+    return cm1B - cm1A
+  })
+  const positiveCm1List = sortedByCm1
+    .map(([, a]) => a.sales - a.refunds - a.cogs - a.variableCost)
+    .filter((v) => v > 0)
+
+  const rows: ProductsRow[] = []
+  for (let i = 0; i < sortedByCm1.length; i++) {
+    const [, a] = sortedByCm1[i]
+    const sold = Math.round(a.sold)
+    const refunded = Math.min(Math.round(a.refunded), sold)
+    const revenue = a.sales - a.refunds
+    const netQuantity = sold - refunded
+    const ordersCount = a.orders.size
+    const ncOrdersCount = a.ncOrders.size
+    const ecOrdersCount = a.ecOrders.size
+    const ncSold = Math.round(a.ncSold)
+    const ncRefunded = Math.min(Math.round(a.ncRefunded), ncSold)
+    const ecSold = Math.round(a.ecSold)
+    const ecRefunded = Math.min(Math.round(a.ecRefunded), ecSold)
+    const returnRate = sold > 0 ? (refunded / sold) * 100 : 0
+    const ncReturnRate = ncSold > 0 ? (ncRefunded / ncSold) * 100 : 0
+    const ecReturnRate = ecSold > 0 ? (ecRefunded / ecSold) * 100 : 0
+    const cm1 = revenue - a.cogs - a.variableCost
+    const positiveRank = sortedByCm1
+      .slice(0, i)
+      .filter(([, r]) => r.sales - r.refunds - r.cogs - r.variableCost > 0).length
+    const paretoGrade = computeParetoGrade(cm1, positiveCm1List, positiveRank)
+    const cm1Pct = revenue > 0 ? (cm1 / revenue) * 100 : 0
+    const cm1Total = totalCm1 !== 0 ? (cm1 / totalCm1) * 100 : 0
+    const aovVal = ordersCount > 0 ? revenue / ordersCount : 0
+    const ncAovVal = ncOrdersCount > 0 ? a.ncRevenue / ncOrdersCount : 0
+    const ecAovVal = ecOrdersCount > 0 ? a.ecRevenue / ecOrdersCount : 0
+
+    rows.push({
+      label: a.label,
+      paretoGrade,
+      cm1,
+      cm1Pct,
+      cm1Total,
+      sales: a.sales,
+      refunds: a.refunds,
+      revenue,
+      sold,
+      refunded,
+      netQuantity,
+      returnRate,
+      ncReturnRate,
+      ecReturnRate,
+      orders: ordersCount,
+      ncOrders: ncOrdersCount,
+      ecOrders: ecOrdersCount,
+      aov: aovVal,
+      ncAov: ncAovVal,
+      ecAov: ecAovVal,
+    })
+  }
+
+  let filtered = rows
+  if (params.search && params.search.trim()) {
+    const q = params.search.trim().toLowerCase()
+    filtered = rows.filter((r) => r.label.toLowerCase().includes(q))
+  }
+
+  const totalRows = filtered.length
+  const sort = params.sort
+  const dir = params.dir
+  const paretoOrder = { A: 4, B: 3, C: 2, F: 1 } as const
+  filtered.sort((a, b) => {
+    let diff = 0
+    switch (sort) {
+      case 'label':
+        diff = a.label.localeCompare(b.label)
+        break
+      case 'pareto_grade':
+        diff = (paretoOrder[a.paretoGrade] ?? 0) - (paretoOrder[b.paretoGrade] ?? 0)
+        break
+      case 'cm1':
+        diff = a.cm1 - b.cm1
+        break
+      case 'cm1_pct':
+        diff = a.cm1Pct - b.cm1Pct
+        break
+      case 'cm1_total':
+        diff = a.cm1Total - b.cm1Total
+        break
+      case 'sales':
+        diff = a.sales - b.sales
+        break
+      case 'refunds':
+        diff = a.refunds - b.refunds
+        break
+      case 'revenue':
+        diff = a.revenue - b.revenue
+        break
+      case 'sold':
+        diff = a.sold - b.sold
+        break
+      case 'refunded':
+        diff = a.refunded - b.refunded
+        break
+      case 'net_quantity':
+        diff = a.netQuantity - b.netQuantity
+        break
+      case 'return_rate':
+        diff = a.returnRate - b.returnRate
+        break
+      case 'nc_return_rate':
+        diff = a.ncReturnRate - b.ncReturnRate
+        break
+      case 'ec_return_rate':
+        diff = a.ecReturnRate - b.ecReturnRate
+        break
+      case 'orders':
+        diff = a.orders - b.orders
+        break
+      case 'nc_orders':
+        diff = a.ncOrders - b.ncOrders
+        break
+      case 'ec_orders':
+        diff = a.ecOrders - b.ecOrders
+        break
+      case 'aov':
+        diff = a.aov - b.aov
+        break
+      case 'nc_aov':
+        diff = a.ncAov - b.ncAov
+        break
+      case 'ec_aov':
+        diff = a.ecAov - b.ecAov
+        break
+      default:
+        diff = a.cm1 - b.cm1
+    }
+    return dir === 'asc' ? diff : -diff
+  })
+
+  const start = (params.page - 1) * params.pageSize
+  const paginated = filtered.slice(start, start + params.pageSize)
+
+  return {
+    rows: paginated,
+    totalRows,
+    currency: storeCurrency,
+  }
+}

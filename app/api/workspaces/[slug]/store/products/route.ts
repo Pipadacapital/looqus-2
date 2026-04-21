@@ -31,11 +31,16 @@ export async function GET(
 
   const workspace = await prisma.workspace.findUnique({
     where: { slug },
-    include: {
+    select: {
+      id: true,
+      platform: true,
       shopifyConnections: {
         where: { status: 'CONNECTED' },
         select: { id: true },
         take: 1,
+      },
+      woocommerceConnection: {
+        select: { id: true, status: true },
       },
     },
   })
@@ -57,7 +62,12 @@ export async function GET(
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
-  const connectionId = workspace.shopifyConnections[0]?.id
+  const isWoocommerce = workspace.platform === 'WOOCOMMERCE'
+  const connectionId = isWoocommerce
+    ? workspace.woocommerceConnection?.status === 'CONNECTED'
+      ? workspace.woocommerceConnection.id
+      : null
+    : workspace.shopifyConnections[0]?.id
   if (!connectionId) {
     return NextResponse.json({
       data: [],
@@ -68,10 +78,122 @@ export async function GET(
     })
   }
 
-  const sortField = SORT_FIELDS.includes(sort as (typeof SORT_FIELDS)[number])
-    ? sort
-    : 'title'
+  const sortField = SORT_FIELDS.includes(sort as (typeof SORT_FIELDS)[number]) ? sort : 'title'
   const orderDir = ORDER_VALUES.includes(order) ? order : 'asc'
+
+  if (isWoocommerce) {
+    const where: Prisma.WoocommerceProductWhereInput = { connectionId }
+
+    if (search) {
+      where.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { slug: { contains: search, mode: 'insensitive' } },
+        { sku: { contains: search, mode: 'insensitive' } },
+      ]
+    }
+    if (statusFilter) {
+      where.status = statusFilter
+    }
+    if (coqFilter === 'set') {
+      where.coq = { not: null }
+    } else if (coqFilter === 'not_set') {
+      where.coq = null
+    }
+
+    const orderBy: Prisma.WoocommerceProductOrderByWithRelationInput =
+      sortField === 'title'
+        ? { name: orderDir }
+        : sortField === 'status'
+          ? { status: orderDir }
+          : sortField === 'totalInventory'
+            ? { stockQuantity: orderDir }
+            : { wcProductId: orderDir }
+
+    const [products, total] = await Promise.all([
+      prisma.woocommerceProduct.findMany({
+        where,
+        orderBy,
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        select: {
+          id: true,
+          wcProductId: true,
+          name: true,
+          slug: true,
+          sku: true,
+          status: true,
+          stockQuantity: true,
+          coq: true,
+          categories: true,
+          images: true,
+          rawJson: true,
+          syncedAt: true,
+        },
+      }),
+      prisma.woocommerceProduct.count({ where }),
+    ])
+
+    return NextResponse.json({
+      data: products.map((p) => {
+        const images = Array.isArray(p.images) ? p.images : []
+        const firstImage = images[0] as { src?: string } | undefined
+        const categories = Array.isArray(p.categories) ? p.categories : []
+        const categoryNames = categories
+          .map((category) =>
+            typeof category === 'object' && category !== null && 'name' in category
+              ? String((category as { name?: unknown }).name ?? '')
+              : ''
+          )
+          .filter((name) => name.length > 0)
+        const raw = (p.rawJson && typeof p.rawJson === 'object'
+          ? (p.rawJson as Record<string, unknown>)
+          : null)
+        const publishedAtRaw =
+          (typeof raw?.date_created_gmt === 'string' && raw.date_created_gmt) ||
+          (typeof raw?.date_created === 'string' && raw.date_created) ||
+          (typeof raw?.date_modified_gmt === 'string' && raw.date_modified_gmt) ||
+          (typeof raw?.date_modified === 'string' && raw.date_modified) ||
+          null
+        const attributes = Array.isArray(raw?.attributes) ? raw.attributes : []
+        const vendorFromAttributes = attributes.find((attribute) => {
+          if (typeof attribute !== 'object' || attribute == null) return false
+          const name = (attribute as { name?: unknown }).name
+          return (
+            typeof name === 'string' &&
+            (name.toLowerCase() === 'brand' || name.toLowerCase() === 'vendor')
+          )
+        }) as { options?: unknown } | undefined
+        const vendorOptions = Array.isArray(vendorFromAttributes?.options)
+          ? vendorFromAttributes?.options
+          : []
+        const vendor =
+          vendorOptions.length > 0
+            ? String(vendorOptions[0])
+            : typeof raw?.brand === 'string'
+              ? raw.brand
+              : null
+
+        return {
+          id: p.id,
+          title: p.name ?? `Product #${p.wcProductId}`,
+          handle: p.slug ?? p.sku ?? String(p.wcProductId),
+          vendor,
+          productType:
+            categoryNames.length > 0 ? categoryNames.join(', ') : null,
+          status: (p.status ?? 'draft').toUpperCase(),
+          imageUrl: firstImage?.src ?? null,
+          totalInventory: p.stockQuantity,
+          publishedAt: publishedAtRaw,
+          coq: p.coq != null ? Number(p.coq) : null,
+          createdAt: p.syncedAt.toISOString(),
+        }
+      }),
+      total,
+      page,
+      pageSize,
+      totalPages: Math.ceil(total / pageSize),
+    })
+  }
 
   const where: Prisma.ShopifyProductWhereInput = { connectionId }
 

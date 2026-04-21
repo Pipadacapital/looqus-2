@@ -7,6 +7,7 @@ import {
   exchangeMetaCode,
   exchangeForLongLivedToken,
   fetchMetaAdAccounts,
+  fetchMetaAdAccountCurrency,
   fetchMetaUserId,
 } from '@/lib/integrations/meta'
 
@@ -57,10 +58,14 @@ export async function GET(request: NextRequest) {
     // Fetch ad accounts and user ID (best effort)
     let adAccountIds: string[] = []
     let metaUserId: string | null = null
+    let currency: string | null = null
 
     try {
       const accounts = await fetchMetaAdAccounts(accessToken)
       adAccountIds = accounts.map((a) => a.id)
+      if (adAccountIds.length > 0) {
+        currency = await fetchMetaAdAccountCurrency(accessToken, adAccountIds[0])
+      }
     } catch {
       // Will show UI message to reconfigure
     }
@@ -80,6 +85,7 @@ export async function GET(request: NextRequest) {
         token_expires_at: tokenExpiresAt,
         scopes: ['ads_management', 'ads_read', 'business_management', 'read_insights'],
         ad_account_ids: adAccountIds,
+        currency: currency ?? 'USD',
         meta_user_id: metaUserId,
         status: 'CONNECTED',
         updated_at: now,
@@ -89,6 +95,7 @@ export async function GET(request: NextRequest) {
         token_expires_at: tokenExpiresAt,
         scopes: ['ads_management', 'ads_read', 'business_management', 'read_insights'],
         ad_account_ids: adAccountIds,
+        currency: currency ?? 'USD',
         meta_user_id: metaUserId,
         status: 'CONNECTED',
         last_sync_error: null,

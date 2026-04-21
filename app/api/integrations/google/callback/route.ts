@@ -8,6 +8,7 @@ import {
   listAccessibleCustomers,
   listManagerChildAccounts,
   fetchGoogleUserEmail,
+  fetchGoogleCustomerCurrency,
 } from '@/lib/integrations/google'
 
 export async function GET(request: NextRequest) {
@@ -107,6 +108,10 @@ export async function GET(request: NextRequest) {
 
     // Auto-select if exactly one customer
     const selectedCustomerId = customerIds.length === 1 ? customerIds[0] : null
+    const currency =
+      selectedCustomerId != null
+        ? await fetchGoogleCustomerCurrency(accessToken, selectedCustomerId).catch(() => null)
+        : null
 
     await prisma.google_ads_connections.upsert({
       where: { workspace_id: workspace.id },
@@ -118,6 +123,7 @@ export async function GET(request: NextRequest) {
         selected_customer_id: selectedCustomerId,
         login_customer_id: loginCustomerId ?? null,
         google_email: googleEmail,
+        currency: currency ?? 'USD',
         status: 'CONNECTED',
         last_sync_error: lastSyncError,
         updated_at: new Date(),
@@ -129,6 +135,7 @@ export async function GET(request: NextRequest) {
         selected_customer_id: selectedCustomerId,
         login_customer_id: loginCustomerId ?? null,
         google_email: googleEmail,
+        currency: currency ?? 'USD',
         status: 'CONNECTED',
         last_sync_error: lastSyncError,
       },

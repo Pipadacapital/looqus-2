@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
-import { computeProducts } from '@/lib/products/compute'
+import { computeProducts, computeWoocommerceProducts } from '@/lib/products/compute'
 import type { ProductsGroupBy, ProductsSortColumn } from '@/lib/products/types'
 
 const GROUP_BY_VALUES: ProductsGroupBy[] = [
@@ -111,8 +111,9 @@ export async function GET(
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
+  const isWoocommerce = workspace.platform === 'WOOCOMMERCE'
   const connectionId = workspace.shopifyConnections?.[0]?.id ?? null
-  if (process.env.NODE_ENV === 'development') {
+  if (process.env.NODE_ENV === 'development' && !isWoocommerce) {
     const [ordersCount, lineItemsCount, dailyCount, refundCount] = await Promise.all([
       connectionId
         ? prisma.shopifyOrder.count({
@@ -153,6 +154,20 @@ export async function GET(
   }
 
   try {
+    if (isWoocommerce) {
+      const result = await computeWoocommerceProducts(prisma, workspace.id, {
+        from,
+        to,
+        groupBy: validGroupBy,
+        search,
+        sort: validSort,
+        dir,
+        page,
+        pageSize,
+      })
+      return NextResponse.json(result)
+    }
+
     const result = await computeProducts(prisma, workspace as Parameters<typeof computeProducts>[1], {
       from,
       to,

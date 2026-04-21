@@ -230,4 +230,18 @@ export type GoogleAdsMetricRow = {
   rawJson: unknown
 }
 
+export async function fetchGoogleCustomerCurrency(
+  accessToken: string,
+  customerId: string
+): Promise<string | null> {
+  const query = `SELECT customer.id, customer.currency_code, customer.time_zone FROM customer LIMIT 1`
+  const rows = await executeGaql(accessToken, customerId, query)
+  const first = (rows[0] as { customer?: { currencyCode?: unknown; currency_code?: unknown } } | undefined)
+    ?.customer
+  const currency =
+    (typeof first?.currencyCode === 'string' ? first.currencyCode : null) ??
+    (typeof first?.currency_code === 'string' ? first.currency_code : null)
+  return currency?.trim()?.toUpperCase() || null
+}
+
 export { GOOGLE_DEVELOPER_TOKEN, GOOGLE_LOGIN_CUSTOMER_ID }

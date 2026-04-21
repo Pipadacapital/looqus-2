@@ -144,12 +144,14 @@ type MetricsResponse = {
     summary: MetaFunnelRow
     note: string
   }
+  currency?: string
 }
 
-function formatCurrency(value: number) {
-  return new Intl.NumberFormat('en-IN', {
+function formatCurrency(value: number, currencyCode: string) {
+  const currency = currencyCode?.trim() || 'USD'
+  return new Intl.NumberFormat(undefined, {
     style: 'currency',
-    currency: 'INR',
+    currency,
     maximumFractionDigits: 0,
     minimumFractionDigits: 0,
   }).format(value)
@@ -213,11 +215,13 @@ function CreativeAdsTable({
   search,
   note,
   totalDailyRows,
+  currencyCode,
 }: {
   rows: MetaCreativeAdRow[]
   search: string
   note?: string
   totalDailyRows: number
+  currencyCode: string
 }) {
   const filtered = useMemo(() => {
     if (!search.trim()) return rows
@@ -292,7 +296,7 @@ function CreativeAdsTable({
                   <IntentBadge intent={r.intent} />
                 </TableCell>
                 <TableCell className="text-right tabular-nums font-medium">
-                  {formatCurrency(r.spend)}
+                  {formatCurrency(r.spend, currencyCode)}
                 </TableCell>
                 <TableCell className="text-right tabular-nums text-muted-foreground">
                   {formatNumber(r.impressions)}
@@ -438,6 +442,7 @@ export function MetaAdsContent({
 
   const adAccountIds = data?.adAccountIds ?? []
   const activeAdAccountId = data?.activeAdAccountId ?? null
+  const currencyCode = data?.currency?.trim() || 'USD'
 
   const handleSelectAccount = async (selectedAdAccountId: string) => {
     if (selectedAdAccountId === activeAdAccountId) return
@@ -507,7 +512,7 @@ export function MetaAdsContent({
         header: () => <div className="text-right">Spend</div>,
         cell: ({ row }) => (
           <div className="text-right font-medium tabular-nums">
-            {formatCurrency(row.original.spend)}
+            {formatCurrency(row.original.spend, currencyCode)}
           </div>
         ),
       },
@@ -543,7 +548,7 @@ export function MetaAdsContent({
         header: () => <div className="text-right">CPC</div>,
         cell: ({ row }) => (
           <div className="text-right text-muted-foreground tabular-nums">
-            {formatCurrency(row.original.cpc)}
+            {formatCurrency(row.original.cpc, currencyCode)}
           </div>
         ),
       },
@@ -552,7 +557,7 @@ export function MetaAdsContent({
         header: () => <div className="text-right">CPM</div>,
         cell: ({ row }) => (
           <div className="text-right text-muted-foreground tabular-nums">
-            {formatCurrency(row.original.cpm)}
+            {formatCurrency(row.original.cpm, currencyCode)}
           </div>
         ),
       },
@@ -570,7 +575,7 @@ export function MetaAdsContent({
         header: () => <div className="text-right">Revenue</div>,
         cell: ({ row }) => (
           <div className="text-right font-medium tabular-nums">
-            {formatCurrency(row.original.revenue)}
+            {formatCurrency(row.original.revenue, currencyCode)}
           </div>
         ),
       },
@@ -606,7 +611,7 @@ export function MetaAdsContent({
         ),
       },
     ],
-    []
+    [currencyCode]
   )
 
   const adsetColumns = useMemo<ColumnDef<MetaAdsAdsetRow>[]>(
@@ -690,7 +695,7 @@ export function MetaAdsContent({
         header: () => <div className="text-right">Spend</div>,
         cell: ({ row }) => (
           <div className="text-right font-medium tabular-nums">
-            {formatCurrency(row.original.spend)}
+            {formatCurrency(row.original.spend, currencyCode)}
           </div>
         ),
       },
@@ -735,7 +740,7 @@ export function MetaAdsContent({
         header: () => <div className="text-right">Revenue</div>,
         cell: ({ row }) => (
           <div className="text-right font-medium tabular-nums">
-            {formatCurrency(row.original.revenue)}
+            {formatCurrency(row.original.revenue, currencyCode)}
           </div>
         ),
       },
@@ -749,7 +754,7 @@ export function MetaAdsContent({
         ),
       },
     ],
-    []
+    [currencyCode]
   )
 
   type TableRow = MetaAdsCampaignRow | MetaAdsAdsetRow | MetaAdsDailyRow
@@ -896,7 +901,7 @@ export function MetaAdsContent({
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 text-sm">
             {(
               [
-                ['Spend', formatCurrency(data.funnel.summary.spend), null],
+                ['Spend', formatCurrency(data.funnel.summary.spend, currencyCode), null],
                 ['Impressions', formatNumber(data.funnel.summary.impressions), null],
                 ['Clicks', formatNumber(data.funnel.summary.clicks), null],
                 ['CTR', `${data.funnel.summary.ctrPct.toFixed(2)}%`, null],
@@ -936,21 +941,21 @@ export function MetaAdsContent({
                 [
                   'Cost / ATC',
                   data.funnel.summary.costPerAtc != null
-                    ? formatCurrency(data.funnel.summary.costPerAtc)
+                    ? formatCurrency(data.funnel.summary.costPerAtc, currencyCode)
                     : '—',
                   null,
                 ],
                 [
                   'Cost / checkout',
                   data.funnel.summary.costPerCheckout != null
-                    ? formatCurrency(data.funnel.summary.costPerCheckout)
+                    ? formatCurrency(data.funnel.summary.costPerCheckout, currencyCode)
                     : '—',
                   null,
                 ],
                 [
                   'Cost / purchase',
                   data.funnel.summary.costPerPurchase != null
-                    ? formatCurrency(data.funnel.summary.costPerPurchase)
+                    ? formatCurrency(data.funnel.summary.costPerPurchase, currencyCode)
                     : '—',
                   null,
                 ],
@@ -981,7 +986,7 @@ export function MetaAdsContent({
                 Spend
               </p>
               <p className="mt-1 text-xl font-semibold tabular-nums">
-                {formatCurrency(summary.spend)}
+                {formatCurrency(summary.spend, currencyCode)}
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 {summary.from} – {summary.to}
@@ -992,7 +997,7 @@ export function MetaAdsContent({
                 Revenue
               </p>
               <p className="mt-1 text-xl font-semibold tabular-nums">
-                {formatCurrency(summary.revenue)}
+                {formatCurrency(summary.revenue, currencyCode)}
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 {summary.from} – {summary.to}
@@ -1012,7 +1017,7 @@ export function MetaAdsContent({
                 <KpiGoalLine
                   metricId="meta_roas"
                   evaluation={data.summary.goalEvaluations.meta_roas}
-                  currency="INR"
+                  currency={currencyCode}
                 />
               ) : null}
             </div>
@@ -1092,7 +1097,7 @@ export function MetaAdsContent({
                     >
                       <p className="text-xs font-medium text-muted-foreground">{intentLabel(k)}</p>
                       <p className="text-lg font-semibold tabular-nums mt-1">
-                        {formatCurrency(b.spend)}
+                        {formatCurrency(b.spend, currencyCode)}
                       </p>
                       <p className="text-xs text-muted-foreground">
                         {formatPercent(pct)} of spend · {b.campaignCount} campaign
@@ -1224,6 +1229,7 @@ export function MetaAdsContent({
                   search={search}
                   note={creativeData?.note}
                   totalDailyRows={creativeData?.totalDailyRows ?? 0}
+                  currencyCode={currencyCode}
                 />
               )
             ) : isLoading ? (
@@ -1262,7 +1268,7 @@ export function MetaAdsContent({
                             </div>
                           ) : null}
                         </TableCell>
-                        <TableCell className="text-right tabular-nums">{formatCurrency(f.spend)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatCurrency(f.spend, currencyCode)}</TableCell>
                         <TableCell className="text-right tabular-nums">{formatNumber(f.impressions)}</TableCell>
                         <TableCell className="text-right tabular-nums">{formatNumber(f.clicks)}</TableCell>
                         <TableCell className="text-right tabular-nums">{f.ctrPct.toFixed(2)}%</TableCell>

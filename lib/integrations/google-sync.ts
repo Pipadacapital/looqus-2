@@ -2,6 +2,7 @@ import { prisma } from '@/lib/prisma'
 import {
   refreshGoogleAccessToken,
   executeGaql,
+  fetchGoogleCustomerCurrency,
   type GoogleAdsMetricRow,
 } from './google'
 import { Decimal } from '@prisma/client/runtime/library'
@@ -78,6 +79,20 @@ export async function syncGoogleAdsForConnection(
   }
 
   const { accessToken } = await refreshGoogleAccessToken(connection.refresh_token)
+  const currencyCustomerId = targetCustomers[0]
+  if (currencyCustomerId) {
+    try {
+      const currency = await fetchGoogleCustomerCurrency(accessToken, currencyCustomerId)
+      if (currency) {
+        await prisma.google_ads_connections.update({
+          where: { id: connection.id },
+          data: { currency },
+        })
+      }
+    } catch {
+      // Non-blocking: metrics sync should continue even if customer currency fetch fails.
+    }
+  }
   const errors: string[] = []
   let rowsSynced = 0
 

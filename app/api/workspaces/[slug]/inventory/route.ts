@@ -17,6 +17,78 @@ import {
   getUnicommerceProductMap,
   isUnicommerceActive,
 } from '@/lib/unicommerce/product-resolver'
+import { fetchWoocommerceProductVariations } from '@/lib/integrations/woocommerce'
+
+const WOO_LEAD_TIME_PREFIX = 'woo:p'
+
+function wooLeadTimeProductKey(wcProductId: number) {
+  return `${WOO_LEAD_TIME_PREFIX}${wcProductId}`
+}
+
+function getBrandFromWooRawJson(rawJson: unknown): string {
+  if (rawJson == null || typeof rawJson !== 'object') return ''
+  const r = rawJson as Record<string, unknown>
+  const brands = r.brands
+  if (Array.isArray(brands) && brands.length > 0) {
+    const b0 = brands[0] as Record<string, unknown> | undefined
+    const name = b0?.name
+    if (typeof name === 'string' && name.trim()) return name.trim()
+  }
+  const attrs = r.attributes
+  if (Array.isArray(attrs)) {
+    const brandAttr = attrs.find(
+      (a: unknown) =>
+        typeof a === 'object' &&
+        a != null &&
+        typeof (a as { name?: unknown }).name === 'string' &&
+        String((a as { name: string }).name).toLowerCase() === 'brand'
+    ) as { options?: unknown; option?: unknown } | undefined
+    const opts = brandAttr?.options
+    if (Array.isArray(opts) && opts.length > 0 && typeof opts[0] === 'string') {
+      return String(opts[0]).trim()
+    }
+    if (typeof brandAttr?.option === 'string' && brandAttr.option.trim()) {
+      return brandAttr.option.trim()
+    }
+  }
+  const meta = r.meta_data
+  if (Array.isArray(meta)) {
+    const brandMeta = meta.find((m: unknown) => {
+      if (typeof m !== 'object' || m == null) return false
+      const key = (m as { key?: unknown }).key
+      return key === '_brand' || key === 'brand' || key === 'pa_brand'
+    }) as { value?: unknown } | undefined
+    if (brandMeta?.value != null && String(brandMeta.value).trim()) {
+      return String(brandMeta.value).trim()
+    }
+  }
+  const tags = r.tags
+  if (Array.isArray(tags)) {
+    const brandTag = tags.find((t: unknown) => {
+      if (typeof t !== 'object' || t == null) return false
+      const name = String((t as { name?: unknown }).name ?? '').toLowerCase()
+      return name.startsWith('brand:')
+    }) as { name?: unknown } | undefined
+    if (typeof brandTag?.name === 'string') {
+      return brandTag.name.replace(/^brand:/i, '').trim()
+    }
+  }
+  return ''
+}
+
+function getTagsFromWooRawJson(rawJson: unknown): string {
+  if (rawJson == null || typeof rawJson !== 'object') return '—'
+  const tags = (rawJson as { tags?: unknown }).tags
+  if (!Array.isArray(tags) || tags.length === 0) return '—'
+  const names = tags
+    .map((t: unknown) =>
+      typeof t === 'object' && t != null && typeof (t as { name?: unknown }).name === 'string'
+        ? String((t as { name: string }).name).trim()
+        : ''
+    )
+    .filter(Boolean)
+  return names.length > 0 ? names.join(', ') : '—'
+}
 
 export async function GET(
   request: NextRequest,
@@ -181,6 +253,302 @@ export async function GET(
       page,
       pageSize,
       totalPages,
+    })
+  }
+
+  const isWoocommerce = workspace.platform === 'WOOCOMMERCE'
+
+  if (isWoocommerce) {
+    const wooConn = await prisma.woocommerceConnection.findUnique({
+      where: { workspaceId: workspace.id },
+      select: {
+        id: true,
+        currency: true,
+        status: true,
+        storeUrl: true,
+        consumerKey: true,
+        consumerSecret: true,
+      },
+    })
+
+    if (!wooConn || wooConn.status !== 'CONNECTED') {
+      return NextResponse.json({
+        data: [],
+        total: 0,
+        page,
+        pageSize,
+        totalPages: 0,
+        productDrillDown: false,
+        inventorySource: 'woocommerce',
+      })
+    }
+
+    const asOfDate = new Date(asOf + 'T23:59:59.999Z')
+    const l30Start = new Date(asOf + 'T00:00:00.000Z')
+    l30Start.setUTCDate(l30Start.getUTCDate() - 30)
+    const l90Start = new Date(asOf + 'T00:00:00.000Z')
+    l90Start.setUTCDate(l90Start.getUTCDate() - 90)
+    const l180Start = new Date(asOf + 'T00:00:00.000Z')
+    l180Start.setUTCDate(l180Start.getUTCDate() - 180)
+    const l360Start = new Date(asOf + 'T00:00:00.000Z')
+    l360Start.setUTCDate(l360Start.getUTCDate() - 360)
+
+    const n14lyStart = new Date(asOf + 'T00:00:00.000Z')
+    n14lyStart.setUTCFullYear(n14lyStart.getUTCFullYear() - 1)
+    const n14lyEnd = new Date(n14lyStart.getTime())
+    n14lyEnd.setUTCDate(n14lyEnd.getUTCDate() + 14)
+
+    const wooOrderStatusNotIn = ['cancelled', 'failed', 'pending', 'trash'] as const
+
+    if (productId) {
+      return handleWooInventoryVariantView({
+        wooConn,
+        workspaceId: workspace.id,
+        productId,
+        page,
+        pageSize,
+        sort,
+        dir,
+        search,
+        asOfDate,
+        l30Start,
+        l90Start,
+        l180Start,
+        l360Start,
+        n14lyStart,
+        n14lyEnd,
+        wooOrderStatusNotIn,
+      })
+    }
+
+    const allProducts = await prisma.woocommerceProduct.findMany({
+      where: {
+        connectionId: wooConn.id,
+        OR: [{ status: null }, { status: { not: 'trash' } }],
+      },
+      select: {
+        wcProductId: true,
+        name: true,
+        sku: true,
+        stockQuantity: true,
+        regularPrice: true,
+        salePrice: true,
+        coq: true,
+        rawJson: true,
+      },
+    })
+
+    const filtered = search
+      ? allProducts.filter(
+          (p) =>
+            (p.name ?? '').toLowerCase().includes(search.toLowerCase()) ||
+            (p.sku ?? '').toLowerCase().includes(search.toLowerCase())
+        )
+      : allProducts
+    if (process.env.NODE_ENV === 'development' && filtered.length > 0) {
+      console.log(
+        '[WC Inventory] sample rawJson:',
+        JSON.stringify(filtered[0]?.rawJson ?? null, null, 2).slice(0, 1000)
+      )
+    }
+
+    const skuCodes = [
+      ...new Set(
+        filtered.map((p) => p.sku).filter((s): s is string => !!s && s.trim() !== '')
+      ),
+    ]
+
+    const velocityMap = new Map<
+      string,
+      { l30: number; l90: number; l180: number; l360: number }
+    >()
+
+    if (skuCodes.length > 0) {
+      const lineItems = await prisma.woocommerceLineItem.findMany({
+        where: {
+          sku: { in: skuCodes },
+          order: {
+            connectionId: wooConn.id,
+            dateCreated: { gte: l360Start, lte: asOfDate },
+            status: { notIn: [...wooOrderStatusNotIn] },
+          },
+        },
+        select: {
+          sku: true,
+          quantity: true,
+          order: { select: { dateCreated: true } },
+        },
+      })
+
+      for (const li of lineItems) {
+        if (!li.sku) continue
+        const v = velocityMap.get(li.sku) ?? { l30: 0, l90: 0, l180: 0, l360: 0 }
+        const date = li.order?.dateCreated
+        const qty = li.quantity ?? 0
+        v.l360 += qty
+        if (date && date >= l180Start) v.l180 += qty
+        if (date && date >= l90Start) v.l90 += qty
+        if (date && date >= l30Start) v.l30 += qty
+        velocityMap.set(li.sku, v)
+      }
+    }
+
+    const n14lyMap = new Map<string, number>()
+    if (skuCodes.length > 0) {
+      const n14Items = await prisma.woocommerceLineItem.findMany({
+        where: {
+          sku: { in: skuCodes },
+          order: {
+            connectionId: wooConn.id,
+            dateCreated: { gte: n14lyStart, lte: n14lyEnd },
+            status: { notIn: [...wooOrderStatusNotIn] },
+          },
+        },
+        select: { sku: true, quantity: true },
+      })
+      for (const li of n14Items) {
+        if (!li.sku) continue
+        const q = li.quantity ?? 0
+        n14lyMap.set(li.sku, (n14lyMap.get(li.sku) ?? 0) + q)
+      }
+    }
+
+    const cogsMap = new Map(
+      allProducts
+        .filter((p) => (p.sku?.trim()?.length ?? 0) > 0 && p.coq != null)
+        .map((p) => [String(p.sku).trim(), Number(p.coq)])
+    )
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[WC Inventory] cogsMap keys:', Array.from(cogsMap.keys()).slice(0, 5))
+      console.log('[WC Inventory] product SKUs:', filtered.slice(0, 5).map((p) => p.sku))
+    }
+
+    const leadKeys = filtered.map((p) => wooLeadTimeProductKey(p.wcProductId))
+    const leadRows =
+      leadKeys.length > 0
+        ? await prisma.productLeadTime.findMany({
+            where: {
+              workspaceId: workspace.id,
+              productShopifyId: { in: leadKeys },
+            },
+            select: { productShopifyId: true, leadTimeDays: true },
+          })
+        : []
+    const leadMap = new Map(leadRows.map((r) => [r.productShopifyId, r.leadTimeDays]))
+
+    const rows = filtered.map((p) => {
+      const skuKey = p.sku?.trim() ?? ''
+      const v =
+        skuKey !== ''
+          ? (velocityMap.get(skuKey) ?? { l30: 0, l90: 0, l180: 0, l360: 0 })
+          : { l30: 0, l90: 0, l180: 0, l360: 0 }
+      const qty = p.stockQuantity ?? 0
+      const qtyL30 = v.l30
+      const qtyL90 = v.l90
+      const qtyL180 = v.l180
+      const qtyL360 = v.l360
+      const daysLeft = computeDaysLeft(qty, qtyL30, qtyL90, qtyL180, qtyL360)
+      const status = classifyInventoryStatus(qty, daysLeft)
+      const sellThrough = computeSellThrough(qty, qtyL360)
+
+      const regularPrice = p.regularPrice != null ? Number(p.regularPrice) : null
+      const salePrice = p.salePrice != null ? Number(p.salePrice) : null
+      const price =
+        salePrice != null && salePrice > 0 ? salePrice : regularPrice
+      const compareAtPrice =
+        salePrice != null &&
+        salePrice > 0 &&
+        regularPrice != null &&
+        regularPrice > salePrice
+          ? regularPrice
+          : null
+
+      const coqPerUnit = skuKey !== '' ? (cogsMap.get(skuKey) ?? 0) : 0
+      const costValue = coqPerUnit > 0 ? coqPerUnit * qty : null
+
+      const qtyN14ly = skuKey !== '' ? (n14lyMap.get(skuKey) ?? 0) : 0
+
+      return {
+        id: String(p.wcProductId),
+        shopifyId: wooLeadTimeProductKey(p.wcProductId),
+        title: p.name ?? p.sku ?? 'Unknown',
+        brand: getBrandFromWooRawJson(p.rawJson),
+        skus: p.sku ?? '—',
+        status,
+        quantity: qty,
+        costValue,
+        price,
+        compareAtPrice,
+        sellThrough,
+        qtyL30,
+        qtyL90,
+        qtyL180,
+        qtyL360,
+        qtyN14ly,
+        daysLeft,
+        leadTimeDays: leadMap.get(wooLeadTimeProductKey(p.wcProductId)) ?? 0,
+        tags: getTagsFromWooRawJson(p.rawJson),
+      }
+    })
+
+    const dirMul = dir === 'desc' ? -1 : 1
+    rows.sort((a, b) => {
+      switch (sort) {
+        case 'title':
+          return a.title.localeCompare(b.title) * dirMul
+        case 'vendor':
+          return a.brand.localeCompare(b.brand) * dirMul
+        case 'quantity':
+          return (a.quantity - b.quantity) * dirMul
+        case 'status':
+          return a.status.localeCompare(b.status) * dirMul
+        case 'qtyL30':
+          return (a.qtyL30 - b.qtyL30) * dirMul
+        case 'qtyL90':
+          return (a.qtyL90 - b.qtyL90) * dirMul
+        case 'qtyL180':
+          return (a.qtyL180 - b.qtyL180) * dirMul
+        case 'qtyL360':
+          return (a.qtyL360 - b.qtyL360) * dirMul
+        case 'qtyN14ly':
+          return (a.qtyN14ly - b.qtyN14ly) * dirMul
+        case 'compareAtPrice': {
+          const av = a.compareAtPrice ?? -1
+          const bv = b.compareAtPrice ?? -1
+          return (av - bv) * dirMul
+        }
+        case 'costValue': {
+          const av = a.costValue ?? 0
+          const bv = b.costValue ?? 0
+          return (av - bv) * dirMul
+        }
+        case 'price': {
+          const av = a.price ?? -1
+          const bv = b.price ?? -1
+          return (av - bv) * dirMul
+        }
+        case 'sellThrough':
+          return (a.sellThrough - b.sellThrough) * dirMul
+        case 'daysLeft':
+          return (a.daysLeft - b.daysLeft) * dirMul
+        default:
+          return (a.quantity - b.quantity) * dirMul
+      }
+    })
+
+    const total = rows.length
+    const totalPages = Math.ceil(total / pageSize)
+    const paginated = rows.slice((page - 1) * pageSize, page * pageSize)
+
+    return NextResponse.json({
+      data: paginated,
+      total,
+      page,
+      pageSize,
+      totalPages,
+      currency: wooConn.currency ?? 'USD',
+      productDrillDown: true,
+      inventorySource: 'woocommerce',
     })
   }
 
@@ -798,5 +1166,340 @@ async function handleVariantView(opts: {
     pageSize,
     totalPages,
     productTitle: product.title,
+  })
+}
+
+async function handleWooInventoryVariantView(opts: {
+  wooConn: {
+    id: string
+    currency?: string | null
+    storeUrl: string
+    consumerKey: string
+    consumerSecret: string
+  }
+  workspaceId: string
+  productId: string
+  page: number
+  pageSize: number
+  sort: string
+  dir: string
+  search: string
+  asOfDate: Date
+  l30Start: Date
+  l90Start: Date
+  l180Start: Date
+  l360Start: Date
+  n14lyStart: Date
+  n14lyEnd: Date
+  wooOrderStatusNotIn: readonly string[]
+}) {
+  const {
+    wooConn,
+    workspaceId,
+    productId,
+    page,
+    pageSize,
+    sort,
+    dir,
+    search,
+    asOfDate,
+    l30Start,
+    l90Start,
+    l180Start,
+    l360Start,
+    n14lyStart,
+    n14lyEnd,
+    wooOrderStatusNotIn,
+  } = opts
+
+  const wcParentId = parseInt(productId, 10)
+  if (!Number.isFinite(wcParentId)) {
+    return NextResponse.json({ error: 'Invalid product id' }, { status: 400 })
+  }
+
+  const parent = await prisma.woocommerceProduct.findFirst({
+    where: { connectionId: wooConn.id, wcProductId: wcParentId },
+    select: {
+      wcProductId: true,
+      name: true,
+      sku: true,
+      stockQuantity: true,
+      regularPrice: true,
+      salePrice: true,
+      coq: true,
+      rawJson: true,
+    },
+  })
+
+  if (!parent) {
+    return NextResponse.json({ error: 'Product not found' }, { status: 404 })
+  }
+
+  let variations: any[] = []
+  try {
+    variations = await fetchWoocommerceProductVariations(
+      wooConn.storeUrl,
+      wooConn.consumerKey,
+      wooConn.consumerSecret,
+      wcParentId
+    )
+  } catch {
+    return NextResponse.json(
+      { error: 'Could not load variations from WooCommerce' },
+      { status: 502 }
+    )
+  }
+
+  const parentCoq = parent.coq != null ? Number(parent.coq) : 0
+  const leadTimeKey = wooLeadTimeProductKey(wcParentId)
+  const leadTimeRecord = await prisma.productLeadTime.findUnique({
+    where: {
+      workspaceId_productShopifyId: {
+        workspaceId,
+        productShopifyId: leadTimeKey,
+      },
+    },
+  })
+  const leadTimeDays = leadTimeRecord?.leadTimeDays ?? 0
+
+  type VPart = {
+    id: string
+    sku: string
+    title: string
+    qty: number
+    price: number | null
+    compareAtPrice: number | null
+    raw: any
+  }
+
+  let parts: VPart[] = []
+
+  if (variations.length === 0) {
+    const regularPrice = parent.regularPrice != null ? Number(parent.regularPrice) : null
+    const salePrice = parent.salePrice != null ? Number(parent.salePrice) : null
+    const price =
+      salePrice != null && salePrice > 0 ? salePrice : regularPrice
+    const compareAtPrice =
+      salePrice != null &&
+      salePrice > 0 &&
+      regularPrice != null &&
+      regularPrice > salePrice
+        ? regularPrice
+        : null
+    parts = [
+      {
+        id: String(parent.wcProductId),
+        sku: parent.sku?.trim() ?? '',
+        title: parent.name ?? parent.sku ?? 'Product',
+        qty: parent.stockQuantity ?? 0,
+        price,
+        compareAtPrice,
+        raw: parent.rawJson,
+      },
+    ]
+  } else {
+    parts = variations.map((v: any, idx: number) => {
+      const reg =
+        v.regular_price != null && String(v.regular_price) !== ''
+          ? Number(v.regular_price)
+          : null
+      const sale =
+        v.sale_price != null && String(v.sale_price) !== ''
+          ? Number(v.sale_price)
+          : null
+      const price = sale != null && sale > 0 ? sale : reg
+      const compareAtPrice =
+        sale != null && sale > 0 && reg != null && reg > sale ? reg : null
+      const sku = typeof v.sku === 'string' ? v.sku.trim() : ''
+      const qty =
+        typeof v.stock_quantity === 'number'
+          ? v.stock_quantity
+          : typeof v.stockQuantity === 'number'
+            ? v.stockQuantity
+            : 0
+      const vid = v.id != null ? String(v.id) : ''
+      return {
+        id: vid || `v-${wcParentId}-${idx}`,
+        sku,
+        title:
+          (typeof v.name === 'string' && v.name.trim()) ||
+          sku ||
+          `Variant ${v.id ?? ''}`,
+        qty,
+        price,
+        compareAtPrice,
+        raw: v,
+      }
+    })
+  }
+
+  const q = search.trim().toLowerCase()
+  const filteredParts = q
+    ? parts.filter(
+        (p) =>
+          p.title.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q)
+      )
+    : parts
+
+  const skuCodes = [
+    ...new Set(filteredParts.map((p) => p.sku).filter((s) => s.length > 0)),
+  ]
+
+  const velocityMap = new Map<
+    string,
+    { l30: number; l90: number; l180: number; l360: number }
+  >()
+
+  if (skuCodes.length > 0) {
+    const lineItems = await prisma.woocommerceLineItem.findMany({
+      where: {
+        sku: { in: skuCodes },
+        order: {
+          connectionId: wooConn.id,
+          dateCreated: { gte: l360Start, lte: asOfDate },
+          status: { notIn: [...wooOrderStatusNotIn] },
+        },
+      },
+      select: {
+        sku: true,
+        quantity: true,
+        order: { select: { dateCreated: true } },
+      },
+    })
+
+    for (const li of lineItems) {
+      if (!li.sku) continue
+      const vel = velocityMap.get(li.sku) ?? { l30: 0, l90: 0, l180: 0, l360: 0 }
+      const date = li.order?.dateCreated
+      const qty = li.quantity ?? 0
+      vel.l360 += qty
+      if (date && date >= l180Start) vel.l180 += qty
+      if (date && date >= l90Start) vel.l90 += qty
+      if (date && date >= l30Start) vel.l30 += qty
+      velocityMap.set(li.sku, vel)
+    }
+  }
+
+  const n14lyMap = new Map<string, number>()
+  if (skuCodes.length > 0) {
+    const n14Items = await prisma.woocommerceLineItem.findMany({
+      where: {
+        sku: { in: skuCodes },
+        order: {
+          connectionId: wooConn.id,
+          dateCreated: { gte: n14lyStart, lte: n14lyEnd },
+          status: { notIn: [...wooOrderStatusNotIn] },
+        },
+      },
+      select: { sku: true, quantity: true },
+    })
+    for (const li of n14Items) {
+      if (!li.sku) continue
+      n14lyMap.set(li.sku, (n14lyMap.get(li.sku) ?? 0) + (li.quantity ?? 0))
+    }
+  }
+
+  const parentTags = getTagsFromWooRawJson(parent.rawJson)
+  const rows = filteredParts.map((part) => {
+    const skuKey = part.sku
+    const vel =
+      skuKey !== ''
+        ? (velocityMap.get(skuKey) ?? { l30: 0, l90: 0, l180: 0, l360: 0 })
+        : { l30: 0, l90: 0, l180: 0, l360: 0 }
+    const qty = part.qty
+    const qtyL30 = vel.l30
+    const qtyL90 = vel.l90
+    const qtyL180 = vel.l180
+    const qtyL360 = vel.l360
+    const daysLeft = computeDaysLeft(qty, qtyL30, qtyL90, qtyL180, qtyL360)
+    const status = classifyInventoryStatus(qty, daysLeft)
+    const sellThrough = computeSellThrough(qty, qtyL360)
+    const costValue = parentCoq > 0 ? parentCoq * qty : null
+    const qtyN14ly = skuKey !== '' ? (n14lyMap.get(skuKey) ?? 0) : 0
+    const brand =
+      getBrandFromWooRawJson(part.raw) || getBrandFromWooRawJson(parent.rawJson)
+
+    return {
+      id: part.id,
+      shopifyId: leadTimeKey,
+      title: part.title,
+      brand,
+      skus: part.sku || '—',
+      status,
+      quantity: qty,
+      costValue,
+      price: part.price,
+      compareAtPrice: part.compareAtPrice,
+      sellThrough,
+      qtyL30,
+      qtyL90,
+      qtyL180,
+      qtyL360,
+      qtyN14ly,
+      daysLeft,
+      leadTimeDays,
+      tags: parentTags,
+    }
+  })
+
+  const dirMul = dir === 'desc' ? -1 : 1
+  rows.sort((a, b) => {
+    switch (sort) {
+      case 'title':
+        return a.title.localeCompare(b.title) * dirMul
+      case 'sku':
+        return a.skus.localeCompare(b.skus) * dirMul
+      case 'quantity':
+        return (a.quantity - b.quantity) * dirMul
+      case 'status':
+        return a.status.localeCompare(b.status) * dirMul
+      case 'qtyL30':
+        return (a.qtyL30 - b.qtyL30) * dirMul
+      case 'qtyL90':
+        return (a.qtyL90 - b.qtyL90) * dirMul
+      case 'qtyL180':
+        return (a.qtyL180 - b.qtyL180) * dirMul
+      case 'qtyL360':
+        return (a.qtyL360 - b.qtyL360) * dirMul
+      case 'qtyN14ly':
+        return (a.qtyN14ly - b.qtyN14ly) * dirMul
+      case 'compareAtPrice': {
+        const av = a.compareAtPrice ?? -1
+        const bv = b.compareAtPrice ?? -1
+        return (av - bv) * dirMul
+      }
+      case 'price': {
+        const av = a.price ?? -1
+        const bv = b.price ?? -1
+        return (av - bv) * dirMul
+      }
+      case 'costValue': {
+        const av = a.costValue ?? 0
+        const bv = b.costValue ?? 0
+        return (av - bv) * dirMul
+      }
+      case 'sellThrough':
+        return (a.sellThrough - b.sellThrough) * dirMul
+      case 'daysLeft':
+        return (a.daysLeft - b.daysLeft) * dirMul
+      default:
+        return a.title.localeCompare(b.title) * dirMul
+    }
+  })
+
+  const total = rows.length
+  const totalPages = Math.ceil(total / pageSize)
+  const paginated = rows.slice((page - 1) * pageSize, page * pageSize)
+
+  return NextResponse.json({
+    data: paginated,
+    total,
+    page,
+    pageSize,
+    totalPages,
+    currency: wooConn.currency ?? 'USD',
+    productTitle: parent.name ?? parent.sku ?? 'Product',
+    productDrillDown: true,
+    inventorySource: 'woocommerce',
   })
 }

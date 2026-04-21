@@ -31,11 +31,16 @@ export async function GET(
 
   const workspace = await prisma.workspace.findUnique({
     where: { slug },
-    include: {
+    select: {
+      id: true,
+      platform: true,
       shopifyConnections: {
         where: { status: 'CONNECTED' },
         select: { id: true },
         take: 1,
+      },
+      woocommerceConnection: {
+        select: { id: true, status: true },
       },
     },
   })
@@ -57,7 +62,12 @@ export async function GET(
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
-  const connectionId = workspace.shopifyConnections[0]?.id
+  const isWoocommerce = workspace.platform === 'WOOCOMMERCE'
+  const connectionId = isWoocommerce
+    ? workspace.woocommerceConnection?.status === 'CONNECTED'
+      ? workspace.woocommerceConnection.id
+      : null
+    : workspace.shopifyConnections[0]?.id
   if (!connectionId) {
     return NextResponse.json({
       data: [],
@@ -72,6 +82,67 @@ export async function GET(
     ? sort
     : 'processedAt'
   const orderDir = ORDER_VALUES.includes(order) ? order : 'desc'
+
+  if (isWoocommerce) {
+    const where: Prisma.WoocommerceOrderWhereInput = { connectionId }
+
+    if (search) {
+      where.OR = [
+        { orderNumber: { contains: search, mode: 'insensitive' } },
+        { customerEmail: { contains: search, mode: 'insensitive' } },
+      ]
+    }
+    if (financialStatus) {
+      where.status = financialStatus
+    }
+
+    const orderBy: Prisma.WoocommerceOrderOrderByWithRelationInput =
+      sortField === 'name'
+        ? { orderNumber: orderDir }
+        : sortField === 'totalPrice'
+          ? { total: orderDir }
+          : sortField === 'financialStatus'
+            ? { status: orderDir }
+            : { dateCreated: orderDir }
+
+    const [orders, total] = await Promise.all([
+      prisma.woocommerceOrder.findMany({
+        where,
+        orderBy,
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        select: {
+          id: true,
+          orderNumber: true,
+          customerEmail: true,
+          total: true,
+          currency: true,
+          status: true,
+          dateCreated: true,
+        },
+      }),
+      prisma.woocommerceOrder.count({ where }),
+    ])
+
+    return NextResponse.json({
+      data: orders.map((o) => ({
+        id: o.id,
+        orderNumber: o.orderNumber ?? String(o.id),
+        name: o.orderNumber ?? `Order #${o.id}`,
+        email: o.customerEmail,
+        totalPrice: String(o.total ?? 0),
+        currency: o.currency ?? '',
+        financialStatus: o.status ?? '',
+        fulfillmentStatus: null,
+        processedAt: o.dateCreated?.toISOString() ?? new Date(0).toISOString(),
+        cancelledAt: null,
+      })),
+      total,
+      page,
+      pageSize,
+      totalPages: Math.ceil(total / pageSize),
+    })
+  }
 
   const where: Prisma.ShopifyOrderWhereInput = { connectionId }
 

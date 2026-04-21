@@ -105,9 +105,22 @@ type Festival = {
   isActive: boolean
 }
 
-function fmtMoney(v: number | null, sym: string) {
+function fmtMoney(v: number | null, currency: string) {
   if (v == null) return '—'
-  return `${sym}${v.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
+  const code = (currency || 'USD').trim().toUpperCase()
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: code,
+      maximumFractionDigits: 0,
+    }).format(v)
+  } catch {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      maximumFractionDigits: 0,
+    }).format(v)
+  }
 }
 
 function fmtRatio(v: number | null) {
@@ -159,8 +172,6 @@ export function CalendarReportContent({ workspaceSlug }: { workspaceSlug: string
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [festivalsInMonth, setFestivalsInMonth] = useState<Festival[]>([])
-
-  const sym = currency === 'INR' ? '₹' : '$'
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -485,15 +496,19 @@ export function CalendarReportContent({ workspaceSlug }: { workspaceSlug: string
                       <MetricCol
                         label="Revenue"
                         cell={r.revenue}
-                        fmt={(v) => fmtMoney(v, sym)}
+                        fmt={(v) => fmtMoney(v, currency)}
                       />
-                      <MetricCol label="CM3" cell={r.cm3} fmt={(v) => fmtMoney(v, sym)} />
+                      <MetricCol
+                        label="CM3"
+                        cell={r.cm3}
+                        fmt={(v) => fmtMoney(v, currency)}
+                      />
                       <div className="min-w-[88px]">
                         <p className="text-[9px] uppercase text-muted-foreground mb-0.5">
                           Tot spend
                         </p>
                         <div className="text-sm font-semibold tabular-nums py-1.5">
-                          {fmtMoney(r.totalSpend, sym)}
+                          {fmtMoney(r.totalSpend, currency)}
                         </div>
                       </div>
                       <MetricCol label="MER" cell={r.mer} fmt={fmtRatio} />
@@ -506,9 +521,13 @@ export function CalendarReportContent({ workspaceSlug }: { workspaceSlug: string
                       <MetricCol
                         label="CAC"
                         cell={r.cac}
-                        fmt={(v) => fmtMoney(v, sym)}
+                        fmt={(v) => fmtMoney(v, currency)}
                       />
-                      <MetricCol label="AOV" cell={r.aov} fmt={(v) => fmtMoney(v, sym)} />
+                      <MetricCol
+                        label="AOV"
+                        cell={r.aov}
+                        fmt={(v) => fmtMoney(v, currency)}
+                      />
                     </div>
                   </TableCell>
                 </TableRow>

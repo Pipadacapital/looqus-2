@@ -29,11 +29,16 @@ export async function GET(
 
   const workspace = await prisma.workspace.findUnique({
     where: { slug },
-    include: {
+    select: {
+      id: true,
+      platform: true,
       shopifyConnections: {
         where: { status: 'CONNECTED' },
         select: { id: true },
         take: 1,
+      },
+      woocommerceConnection: {
+        select: { id: true, status: true },
       },
     },
   })
@@ -55,7 +60,12 @@ export async function GET(
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
-  const connectionId = workspace.shopifyConnections[0]?.id
+  const isWoocommerce = workspace.platform === 'WOOCOMMERCE'
+  const connectionId = isWoocommerce
+    ? workspace.woocommerceConnection?.status === 'CONNECTED'
+      ? workspace.woocommerceConnection.id
+      : null
+    : workspace.shopifyConnections[0]?.id
   if (!connectionId) {
     return NextResponse.json({
       data: [],
@@ -66,10 +76,104 @@ export async function GET(
     })
   }
 
-  const sortField = SORT_FIELDS.includes(sort as (typeof SORT_FIELDS)[number])
-    ? sort
-    : 'firstName'
+  const sortField = SORT_FIELDS.includes(sort as (typeof SORT_FIELDS)[number]) ? sort : 'firstName'
   const orderDir = ORDER_VALUES.includes(order) ? order : 'asc'
+
+  if (isWoocommerce) {
+    const orders = await prisma.woocommerceOrder.findMany({
+      where: {
+        connectionId,
+        ...(search
+          ? {
+              OR: [
+                { customerEmail: { contains: search, mode: 'insensitive' } },
+                { customerPhone: { contains: search, mode: 'insensitive' } },
+              ],
+            }
+          : {}),
+      },
+      select: {
+        customerEmail: true,
+        total: true,
+        currency: true,
+        dateCreated: true,
+      },
+    })
+
+    const grouped = new Map<
+      string,
+      {
+        email: string | null
+        ordersCount: number
+        totalSpent: number
+        currency: string | null
+        createdAt: Date | null
+      }
+    >()
+
+    for (const order of orders) {
+      const key = order.customerEmail?.toLowerCase() ?? '__unknown__'
+      const current =
+        grouped.get(key) ??
+        {
+          email: order.customerEmail ?? null,
+          ordersCount: 0,
+          totalSpent: 0,
+          currency: order.currency ?? null,
+          createdAt: order.dateCreated ?? null,
+        }
+      current.ordersCount += 1
+      current.totalSpent += Number(order.total ?? 0)
+      if (!current.createdAt || (order.dateCreated && order.dateCreated < current.createdAt)) {
+        current.createdAt = order.dateCreated
+      }
+      grouped.set(key, current)
+    }
+
+    const rows = Array.from(grouped.entries()).map(([key, value]) => ({
+      id: `wc-${key}`,
+      email: value.email,
+      firstName: null,
+      lastName: null,
+      ordersCount: value.ordersCount,
+      totalSpent: value.totalSpent,
+      currency: value.currency,
+      state: null,
+      shopifyCreatedAt: value.createdAt?.toISOString() ?? null,
+      createdAt: value.createdAt?.toISOString() ?? new Date(0).toISOString(),
+    }))
+
+    const direction = orderDir === 'asc' ? 1 : -1
+    rows.sort((a, b) => {
+      if (sortField === 'email' || sortField === 'firstName') {
+        return (a.email ?? '').localeCompare(b.email ?? '') * direction
+      }
+      if (sortField === 'ordersCount') {
+        return (a.ordersCount - b.ordersCount) * direction
+      }
+      if (sortField === 'totalSpent') {
+        return (a.totalSpent - b.totalSpent) * direction
+      }
+      return (
+        (new Date(a.shopifyCreatedAt ?? 0).getTime() -
+          new Date(b.shopifyCreatedAt ?? 0).getTime()) * direction
+      )
+    })
+
+    const total = rows.length
+    const paged = rows.slice((page - 1) * pageSize, page * pageSize)
+
+    return NextResponse.json({
+      data: paged.map((c) => ({
+        ...c,
+        totalSpent: String(c.totalSpent),
+      })),
+      total,
+      page,
+      pageSize,
+      totalPages: Math.ceil(total / pageSize),
+    })
+  }
 
   const where: Prisma.ShopifyCustomerWhereInput = { connectionId }
 

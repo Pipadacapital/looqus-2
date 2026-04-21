@@ -135,12 +135,14 @@ type MetricsResponse = {
     summary: GoogleFunnelRow
     note: string
   }
+  currency?: string
 }
 
-function formatCurrency(value: number) {
-  return new Intl.NumberFormat('en-IN', {
+function formatCurrency(value: number, currencyCode: string) {
+  const currency = currencyCode?.trim() || 'USD'
+  return new Intl.NumberFormat(undefined, {
     style: 'currency',
-    currency: 'INR',
+    currency,
     maximumFractionDigits: 0,
     minimumFractionDigits: 0,
   }).format(value)
@@ -245,6 +247,7 @@ export function GoogleAdsContent({
 
   const customerIds = data?.customerIds ?? []
   const activeCustomerId = data?.activeCustomerId ?? null
+  const currencyCode = data?.currency?.trim() || 'USD'
 
   const handleSelectCustomer = async (selectedCustomerId: string) => {
     if (selectedCustomerId === activeCustomerId) return
@@ -310,7 +313,7 @@ export function GoogleAdsContent({
         header: () => <div className="text-right">Spend</div>,
         cell: ({ row }) => (
           <div className="text-right font-medium tabular-nums">
-            {formatCurrency(row.original.spend)}
+            {formatCurrency(row.original.spend, currencyCode)}
           </div>
         ),
       },
@@ -362,7 +365,7 @@ export function GoogleAdsContent({
         header: () => <div className="text-right">Conv. value</div>,
         cell: ({ row }) => (
           <div className="text-right font-medium tabular-nums">
-            {formatCurrency(row.original.conversionValue)}
+            {formatCurrency(row.original.conversionValue, currencyCode)}
           </div>
         ),
       },
@@ -396,7 +399,7 @@ export function GoogleAdsContent({
         ),
       },
     ],
-    []
+    [currencyCode]
   )
 
   const dailyColumns = useMemo<ColumnDef<GoogleAdsDailyRow>[]>(
@@ -427,7 +430,7 @@ export function GoogleAdsContent({
         header: () => <div className="text-right">Spend</div>,
         cell: ({ row }) => (
           <div className="text-right font-medium tabular-nums">
-            {formatCurrency(row.original.spend)}
+            {formatCurrency(row.original.spend, currencyCode)}
           </div>
         ),
       },
@@ -479,7 +482,7 @@ export function GoogleAdsContent({
         header: () => <div className="text-right">Conv. value</div>,
         cell: ({ row }) => (
           <div className="text-right font-medium tabular-nums">
-            {formatCurrency(row.original.conversionValue)}
+            {formatCurrency(row.original.conversionValue, currencyCode)}
           </div>
         ),
       },
@@ -493,7 +496,7 @@ export function GoogleAdsContent({
         ),
       },
     ],
-    []
+    [currencyCode]
   )
 
   type TableRow = GoogleAdsCampaignRow | GoogleAdsDailyRow
@@ -618,7 +621,7 @@ export function GoogleAdsContent({
               const s = data.funnel.summary
               const full = s.coverage === 'google_full'
               const cells: [string, ReactNode][] = [
-                ['Spend', formatCurrency(s.spend)],
+                ['Spend', formatCurrency(s.spend, currencyCode)],
                 ['Impressions', formatNumber(s.impressions)],
                 ['Clicks', formatNumber(s.clicks)],
                 ['CTR', `${s.ctrPct.toFixed(2)}%`],
@@ -667,11 +670,11 @@ export function GoogleAdsContent({
                 ['ROAS', `${s.roas.toFixed(2)}x`],
               ]
               if (full && s.costPerAtc != null) {
-                cells.push(['Cost/ATC', formatCurrency(s.costPerAtc)])
+                cells.push(['Cost/ATC', formatCurrency(s.costPerAtc, currencyCode)])
                 if (s.costPerCheckout != null)
-                  cells.push(['Cost/CI', formatCurrency(s.costPerCheckout)])
+                  cells.push(['Cost/CI', formatCurrency(s.costPerCheckout, currencyCode)])
                 if (s.costPerPurchase != null)
-                  cells.push(['Cost/Purch', formatCurrency(s.costPerPurchase)])
+                  cells.push(['Cost/Purch', formatCurrency(s.costPerPurchase, currencyCode)])
               }
               return cells.map(([label, val], i) => (
                 <div key={`${label}-${i}`} className="rounded-lg border bg-muted/20 px-3 py-2">
@@ -691,7 +694,7 @@ export function GoogleAdsContent({
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div className="rounded-xl border bg-card p-4 shadow-sm">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Spend</p>
-              <p className="mt-1 text-xl font-semibold tabular-nums">{formatCurrency(summary.spend)}</p>
+              <p className="mt-1 text-xl font-semibold tabular-nums">{formatCurrency(summary.spend, currencyCode)}</p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 {summary.from} – {summary.to}
               </p>
@@ -708,7 +711,7 @@ export function GoogleAdsContent({
             <div className="rounded-xl border bg-card p-4 shadow-sm">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Conversion value</p>
               <p className="mt-1 text-xl font-semibold tabular-nums">
-                {formatCurrency(summary.conversionValue)}
+                {formatCurrency(summary.conversionValue, currencyCode)}
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 {summary.from} – {summary.to}
@@ -724,7 +727,7 @@ export function GoogleAdsContent({
                 <KpiGoalLine
                   metricId="google_roas"
                   evaluation={data.summary.goalEvaluations.google_roas}
-                  currency="INR"
+                  currency={currencyCode}
                 />
               ) : null}
             </div>
@@ -771,7 +774,7 @@ export function GoogleAdsContent({
                     >
                       <p className="text-xs font-medium text-muted-foreground">{intentLabel(k)}</p>
                       <p className="text-lg font-semibold tabular-nums mt-1">
-                        {formatCurrency(b.spend)}
+                        {formatCurrency(b.spend, currencyCode)}
                       </p>
                       <p className="text-xs text-muted-foreground">
                         {formatPercent(pct)} of spend · {b.campaignCount} campaign
@@ -897,7 +900,7 @@ export function GoogleAdsContent({
                           <TableCell className="max-w-[220px] truncate font-medium" title={label}>
                             {label}
                           </TableCell>
-                          <TableCell className="text-right tabular-nums">{formatCurrency(f.spend)}</TableCell>
+                          <TableCell className="text-right tabular-nums">{formatCurrency(f.spend, currencyCode)}</TableCell>
                           <TableCell className="text-right tabular-nums">{formatNumber(f.impressions)}</TableCell>
                           <TableCell className="text-right tabular-nums">{formatNumber(f.clicks)}</TableCell>
                           <TableCell className="text-right tabular-nums">{f.ctrPct.toFixed(2)}%</TableCell>

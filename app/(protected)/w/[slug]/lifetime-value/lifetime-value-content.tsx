@@ -131,14 +131,24 @@ export function LifetimeValueContent({
   const dimensionLabel = DIMENSION_OPTIONS.find((d) => d.value === dimension)?.label ?? dimension
 
   const isRepeatRate = metric === 'repeat_rate'
+  const currencyCode = data?.currency?.trim() || 'INR'
+
+  const formatMoney = (v: number) => {
+    try {
+      return new Intl.NumberFormat(undefined, {
+        style: 'currency',
+        currency: currencyCode,
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0,
+      }).format(Math.round(v))
+    } catch {
+      return `${currencyCode} ${Math.round(v)}`
+    }
+  }
 
   const formatValue = (v: number) => {
     if (isRepeatRate) return (v * 100).toFixed(1) + '%'
-    return new Intl.NumberFormat('en-IN', {
-      style: 'decimal',
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    }).format(Math.round(v))
+    return formatMoney(v)
   }
 
   const mCols = ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 'm9', 'm10', 'm11', 'm12'] as const
@@ -270,7 +280,7 @@ export function LifetimeValueContent({
             </CardHeader>
             <CardContent>
               <span className="text-xl font-semibold">
-                {isRepeatRate ? '100%' : `₹${formatValue(summary.firstOrderR)}`}
+                {isRepeatRate ? '100%' : formatValue(summary.firstOrderR)}
               </span>
             </CardContent>
           </Card>
@@ -280,7 +290,7 @@ export function LifetimeValueContent({
             </CardHeader>
             <CardContent>
               <span className="text-xl font-semibold">
-                {isRepeatRate ? '100%' : `₹${formatValue(summary.firstOrder)}`}
+                {isRepeatRate ? '100%' : formatValue(summary.firstOrder)}
               </span>
             </CardContent>
           </Card>
@@ -290,7 +300,7 @@ export function LifetimeValueContent({
             </CardHeader>
             <CardContent>
               <span className="text-xl font-semibold">
-                {isRepeatRate ? `${(summary.month1 * 100).toFixed(1)}%` : `₹${formatValue(summary.month1)}`}
+                {isRepeatRate ? `${(summary.month1 * 100).toFixed(1)}%` : formatValue(summary.month1)}
               </span>
             </CardContent>
           </Card>
@@ -300,7 +310,7 @@ export function LifetimeValueContent({
             </CardHeader>
             <CardContent>
               <span className="text-xl font-semibold">
-                {isRepeatRate ? `${(summary.month3 * 100).toFixed(1)}%` : `₹${formatValue(summary.month3)}`}
+                {isRepeatRate ? `${(summary.month3 * 100).toFixed(1)}%` : formatValue(summary.month3)}
               </span>
             </CardContent>
           </Card>
@@ -310,7 +320,7 @@ export function LifetimeValueContent({
             </CardHeader>
             <CardContent>
               <span className="text-xl font-semibold">
-                {isRepeatRate ? `${(summary.month6 * 100).toFixed(1)}%` : `₹${formatValue(summary.month6)}`}
+                {isRepeatRate ? `${(summary.month6 * 100).toFixed(1)}%` : formatValue(summary.month6)}
               </span>
             </CardContent>
           </Card>
@@ -320,7 +330,7 @@ export function LifetimeValueContent({
             </CardHeader>
             <CardContent>
               <span className="text-xl font-semibold">
-                {isRepeatRate ? `${(summary.month12 * 100).toFixed(1)}%` : `₹${formatValue(summary.month12)}`}
+                {isRepeatRate ? `${(summary.month12 * 100).toFixed(1)}%` : formatValue(summary.month12)}
               </span>
             </CardContent>
           </Card>
@@ -372,10 +382,10 @@ export function LifetimeValueContent({
                   </TableCell>
                   <TableCell>{r.ordersCount}</TableCell>
                   <TableCell>
-                    {isRepeatRate ? (r.firstOrderR * 100).toFixed(1) + '%' : `₹${formatValue(r.firstOrderR)}`}
+                    {isRepeatRate ? (r.firstOrderR * 100).toFixed(1) + '%' : formatValue(r.firstOrderR)}
                   </TableCell>
                   <TableCell>
-                    {isRepeatRate ? (r.firstOrder * 100).toFixed(1) + '%' : `₹${formatValue(r.firstOrder)}`}
+                    {isRepeatRate ? (r.firstOrder * 100).toFixed(1) + '%' : formatValue(r.firstOrder)}
                   </TableCell>
                   {mCols.map((k) => (
                     <TableCell
@@ -383,7 +393,7 @@ export function LifetimeValueContent({
                       className="text-center tabular-nums"
                       style={heatmapStyle(r[k])}
                     >
-                      {isRepeatRate ? (r[k] * 100).toFixed(1) + '%' : `₹${formatValue(r[k])}`}
+                      {isRepeatRate ? (r[k] * 100).toFixed(1) + '%' : formatValue(r[k])}
                     </TableCell>
                   ))}
                 </TableRow>

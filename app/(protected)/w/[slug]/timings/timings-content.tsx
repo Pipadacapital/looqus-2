@@ -51,6 +51,7 @@ type ShopifyConnectionInfo = {
 interface TimingsContentProps {
   workspaceSlug: string
   workspaceName: string
+  hasStoreConnection: boolean
   shopifyConnection: ShopifyConnectionInfo | null
 }
 
@@ -89,6 +90,7 @@ function formatDays(value: number | null, approximate = false): string {
 export function TimingsContent({
   workspaceSlug,
   workspaceName,
+  hasStoreConnection,
   shopifyConnection,
 }: TimingsContentProps) {
   const router = useRouter()
@@ -152,7 +154,7 @@ export function TimingsContent({
   }, [fromParam, toParam, metricParam, groupByParam, groupIdParam])
 
   useEffect(() => {
-    if (!shopifyConnection?.id || !workspaceSlug || !from || !to) return
+    if (!hasStoreConnection || !workspaceSlug || !from || !to) return
     setLoading(true)
     setError(null)
     const url = `/api/workspaces/${workspaceSlug}/timings?from=${from}&to=${to}&metric=${metric}&groupBy=${groupBy}${groupFilter ? `&groupId=${groupFilter}` : ''}`
@@ -175,7 +177,7 @@ export function TimingsContent({
         setData(null)
       })
       .finally(() => setLoading(false))
-  }, [workspaceSlug, shopifyConnection?.id, from, to, metric, groupBy, groupFilter])
+  }, [workspaceSlug, hasStoreConnection, from, to, metric, groupBy, groupFilter])
 
   const handleFromChange = (v: string) => {
     setFrom(v)
@@ -340,11 +342,11 @@ export function TimingsContent({
         <p className="text-sm text-muted-foreground mt-0.5">{workspaceName}</p>
       </div>
 
-      {!shopifyConnection ? (
+      {!hasStoreConnection ? (
         <div className="rounded-xl border bg-card shadow-sm p-8 text-center">
           <p className="text-sm font-medium mb-1">No store connected</p>
           <p className="text-xs text-muted-foreground mb-4">
-            Connect your Shopify store from the dashboard to view timings.
+            Connect your store from the dashboard to view timings.
           </p>
           <Button asChild>
             <Link href={`/w/${workspaceSlug}/dashboard`}>
@@ -609,14 +611,14 @@ export function TimingsContent({
 
               {data?.groups.length === 0 && !loading && (
                 <p className="text-sm text-muted-foreground py-6 text-center">
-                  No data for this date range. Sync your Shopify store and ensure
+                  No data for this date range. Sync your store and ensure
                   you have orders with customer data.
                 </p>
               )}
             </>
           ) : (
             <p className="text-sm text-muted-foreground py-4">
-              No timings data yet. Sync your Shopify store from the dashboard.
+              No timings data yet. Sync your store from the dashboard.
             </p>
           )}
         </div>

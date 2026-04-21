@@ -31,9 +31,7 @@ export function InviteMemberEmail({
   return (
     <Html>
       <Head />
-      <Preview>
-        {inviterName} invited you to join {workspaceName} on Shopify Analytics
-      </Preview>
+      <Preview>{inviterName} invited you to join {workspaceName} on Brain</Preview>
       <Body style={body}>
         <Container style={container}>
           <Section style={logoSection}>
@@ -47,7 +45,7 @@ export function InviteMemberEmail({
           <Text style={paragraph}>
             <strong>{inviterName}</strong> has invited you to join{' '}
             <strong>{workspaceName}</strong> as a <strong>{role}</strong> on
-            Shopify Analytics.
+            Brain.
           </Text>
 
           <Section style={buttonSection}>
@@ -70,7 +68,7 @@ export function InviteMemberEmail({
           </Text>
 
           <Text style={footerText}>
-            Shopify Analytics &mdash; E-commerce intelligence for growing brands
+            Brain &mdash; E-commerce intelligence for growing brands
           </Text>
         </Container>
       </Body>
