@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
 import { useWorkspace } from '@/hooks/use-workspace'
+import { can } from '@/lib/features'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -67,6 +68,7 @@ function getSupportedTimeZones() {
 export function WorkspaceSettingsContent() {
   const { current } = useWorkspace()
   const slug = current.slug
+  const canChange = can.changeSettings(current.userRole)
   const queryClient = useQueryClient()
 
   const [timezone, setTimezone] = useState('UTC')
@@ -152,7 +154,7 @@ export function WorkspaceSettingsContent() {
           <Field>
             <FieldLabel>Timezone</FieldLabel>
             <FieldContent>
-              <Select value={timezone} onValueChange={setTimezone}>
+              <Select value={timezone} onValueChange={setTimezone} disabled={!canChange}>
                 <SelectTrigger className="w-full">
                   <SelectValue placeholder="Select a timezone" />
                 </SelectTrigger>
@@ -181,6 +183,7 @@ export function WorkspaceSettingsContent() {
                 max="100"
                 value={taxPercent}
                 onChange={(e) => setTaxPercent(e.target.value)}
+                disabled={!canChange}
                 className="max-w-[140px]"
                 aria-label="Workspace tax percentage"
               />
@@ -192,7 +195,7 @@ export function WorkspaceSettingsContent() {
           </Field>
 
           <div className="pt-2">
-            <Button onClick={handleSave} disabled={mutation.isPending}>
+            <Button onClick={handleSave} disabled={!canChange || mutation.isPending}>
               {mutation.isPending ? 'Saving…' : 'Save changes'}
             </Button>
           </div>

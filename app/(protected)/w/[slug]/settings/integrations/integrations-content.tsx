@@ -31,6 +31,8 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { formatDistanceToNow } from 'date-fns'
+import { useWorkspace } from '@/hooks/use-workspace'
+import { can } from '@/lib/features'
 
 type ShopifyConnectionInfo = {
   id: string
@@ -133,6 +135,9 @@ export function IntegrationsContent({
   klaviyoConnection,
   woocommerceConnection,
 }: IntegrationsContentProps) {
+  const { current } = useWorkspace()
+  const canManage = can.manageIntegrations(current.userRole)
+  const canChangeAdAccounts = can.changeAdAccounts(current.userRole)
   const [storeHandle, setStoreHandle] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [connecting, setConnecting] = useState(false)
@@ -794,7 +799,7 @@ export function IntegrationsContent({
                   variant="outline"
                   size="sm"
                   onClick={handleShopifySync}
-                  disabled={shopifySyncing}
+                  disabled={!canManage || shopifySyncing}
                 >
                   {shopifySyncing ? (
                     <>
@@ -824,6 +829,7 @@ export function IntegrationsContent({
                   Connect your Shopify store to pull in orders, products, and customer data for analytics.
                 </p>
               </div>
+              {canManage && (
               <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
                 <DialogTrigger asChild>
                   <Button>
@@ -860,6 +866,7 @@ export function IntegrationsContent({
                   </DialogFooter>
                 </DialogContent>
               </Dialog>
+              )}
             </div>
           )}
         </div>
@@ -912,7 +919,7 @@ export function IntegrationsContent({
                         >
                           <Checkbox
                             checked={selected}
-                            disabled={selectingAccount}
+                            disabled={!canChangeAdAccounts || selectingAccount}
                             onCheckedChange={(checked) =>
                               handleToggleMetaAccount(id, !!checked)
                             }
@@ -943,7 +950,7 @@ export function IntegrationsContent({
                     variant="outline"
                     size="sm"
                     onClick={() => handleSync('meta')}
-                    disabled={syncing === 'meta' || (metaConnection.adAccountIds.length > 1 && getEffectiveMetaSelection().length === 0)}
+                    disabled={!canManage || syncing === 'meta' || (metaConnection.adAccountIds.length > 1 && getEffectiveMetaSelection().length === 0)}
                   >
                     {syncing === 'meta' ? (
                       <IconLoader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
@@ -956,7 +963,7 @@ export function IntegrationsContent({
                     variant="outline"
                     size="sm"
                     onClick={() => handleDisconnect('meta')}
-                    disabled={disconnecting === 'meta'}
+                    disabled={!canManage || disconnecting === 'meta'}
                   >
                     <IconUnlink className="mr-1.5 h-3.5 w-3.5" />
                     Disconnect
@@ -972,12 +979,14 @@ export function IntegrationsContent({
                   Connect your Meta (Facebook) Ads account to pull in campaign performance data.
                 </p>
               </div>
+              {canManage && (
               <Button asChild>
                 <a href={`/api/integrations/meta/start?workspaceId=${workspaceId}`}>
                   <IconBrandMeta className="mr-1.5 h-4 w-4" />
                   Connect Meta Ads
                 </a>
               </Button>
+              )}
             </div>
           )}
         </div>
@@ -1029,7 +1038,7 @@ export function IntegrationsContent({
                         >
                           <Checkbox
                             checked={selected}
-                            disabled={selectingAccount}
+                            disabled={!canChangeAdAccounts || selectingAccount}
                             onCheckedChange={(checked) =>
                               handleToggleGoogleCustomer(id, !!checked)
                             }
@@ -1051,7 +1060,7 @@ export function IntegrationsContent({
                     variant="outline"
                     size="sm"
                     onClick={handleRefreshGoogleAccounts}
-                    disabled={refreshingAccounts}
+                    disabled={!canChangeAdAccounts || refreshingAccounts}
                     className="shrink-0"
                   >
                     {refreshingAccounts ? (
@@ -1084,7 +1093,7 @@ export function IntegrationsContent({
                     variant="outline"
                     size="sm"
                     onClick={() => handleSync('google')}
-                    disabled={syncing === 'google' || googleConnection.customerIds.length === 0 || (googleConnection.customerIds.length > 1 && getEffectiveGoogleSelection().length === 0)}
+                    disabled={!canManage || syncing === 'google' || googleConnection.customerIds.length === 0 || (googleConnection.customerIds.length > 1 && getEffectiveGoogleSelection().length === 0)}
                   >
                     {syncing === 'google' ? (
                       <IconLoader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
@@ -1097,7 +1106,7 @@ export function IntegrationsContent({
                     variant="outline"
                     size="sm"
                     onClick={() => handleDisconnect('google')}
-                    disabled={disconnecting === 'google'}
+                    disabled={!canManage || disconnecting === 'google'}
                   >
                     <IconUnlink className="mr-1.5 h-3.5 w-3.5" />
                     Disconnect
@@ -1121,12 +1130,14 @@ export function IntegrationsContent({
                   Connect your Google Ads account to pull in campaign performance data.
                 </p>
               </div>
+              {canManage && (
               <Button asChild>
                 <a href={`/api/integrations/google/start?workspaceId=${workspaceId}`}>
                   <IconBrandGoogle className="mr-1.5 h-4 w-4" />
                   Connect Google Ads
                 </a>
               </Button>
+              )}
             </div>
           )}
         </div>
@@ -1178,7 +1189,7 @@ export function IntegrationsContent({
                     variant="outline"
                     size="sm"
                     onClick={handleShiprocketSync}
-                    disabled={syncing === 'shiprocket'}
+                    disabled={!canManage || syncing === 'shiprocket'}
                   >
                     {syncing === 'shiprocket' ? (
                       <IconLoader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
@@ -1191,7 +1202,7 @@ export function IntegrationsContent({
                     variant="outline"
                     size="sm"
                     onClick={handleShiprocketDisconnect}
-                    disabled={disconnecting === 'shiprocket'}
+                    disabled={!canManage || disconnecting === 'shiprocket'}
                   >
                     <IconUnlink className="mr-1.5 h-3.5 w-3.5" />
                     Disconnect
@@ -1233,6 +1244,7 @@ export function IntegrationsContent({
                     placeholder="api-user@example.com"
                     value={srApiUserEmail}
                     onChange={(e) => setSrApiUserEmail(e.target.value)}
+                    disabled={!canManage}
                   />
                 </div>
                 <div className="grid gap-2">
@@ -1243,6 +1255,7 @@ export function IntegrationsContent({
                     placeholder="API User password"
                     value={srApiUserPassword}
                     onChange={(e) => setSrApiUserPassword(e.target.value)}
+                    disabled={!canManage}
                   />
                 </div>
                 <p className="text-xs text-muted-foreground">
@@ -1253,7 +1266,7 @@ export function IntegrationsContent({
                   variant="outline"
                   size="sm"
                   onClick={handleShiprocketApiUserSave}
-                  disabled={srApiUserSaving || !srApiUserEmail.trim() || !srApiUserPassword.trim()}
+                  disabled={!canManage || srApiUserSaving || !srApiUserEmail.trim() || !srApiUserPassword.trim()}
                 >
                   {srApiUserSaving ? (
                     <>
@@ -1274,6 +1287,7 @@ export function IntegrationsContent({
                   Connect your Shiprocket account to pull in shipment, order, and delivery data.
                 </p>
               </div>
+              {canManage && (
               <Dialog open={srDialogOpen} onOpenChange={setSrDialogOpen}>
                 <DialogTrigger asChild>
                   <Button>
@@ -1329,6 +1343,7 @@ export function IntegrationsContent({
                   </DialogFooter>
                 </DialogContent>
               </Dialog>
+              )}
             </div>
           )}
         </div>
@@ -1410,7 +1425,7 @@ export function IntegrationsContent({
                     variant="outline"
                     size="sm"
                     onClick={handleUnicommerceSync}
-                    disabled={ucSyncing}
+                    disabled={!canManage || ucSyncing}
                   >
                     {ucSyncing ? (
                       <IconLoader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
@@ -1423,7 +1438,7 @@ export function IntegrationsContent({
                     variant="outline"
                     size="sm"
                     onClick={handleUnicommerceDisconnect}
-                    disabled={ucDisconnecting}
+                    disabled={!canManage || ucDisconnecting}
                   >
                     <IconUnlink className="mr-1.5 h-3.5 w-3.5" />
                     Disconnect
@@ -1441,6 +1456,7 @@ export function IntegrationsContent({
                     name="product-data-source"
                     value="SHOPIFY"
                     checked={selectedProductDataSource === 'SHOPIFY'}
+                    disabled={!canManage}
                     onChange={() => setSelectedProductDataSource('SHOPIFY')}
                   />
                   <span>Shopify — Use Shopify as your product catalog (default)</span>
@@ -1451,6 +1467,7 @@ export function IntegrationsContent({
                     name="product-data-source"
                     value="UNICOMMERCE"
                     checked={selectedProductDataSource === 'UNICOMMERCE'}
+                    disabled={!canManage}
                     onChange={() => setSelectedProductDataSource('UNICOMMERCE')}
                   />
                   <span>Unicommerce — Use Unicommerce as your product catalog</span>
@@ -1465,6 +1482,7 @@ export function IntegrationsContent({
                   size="sm"
                   onClick={handleSaveProductDataSource}
                   disabled={
+                    !canManage ||
                     savingProductDataSource ||
                     selectedProductDataSource === productDataSource
                   }
@@ -1490,6 +1508,7 @@ export function IntegrationsContent({
                   Syncs products active in the last 24 hours per run. Run daily to build your full catalog.
                 </p>
               </div>
+              {canManage && (
               <Dialog open={ucDialogOpen} onOpenChange={setUcDialogOpen}>
                 <DialogTrigger asChild>
                   <Button>
@@ -1573,6 +1592,7 @@ export function IntegrationsContent({
                   </DialogFooter>
                 </DialogContent>
               </Dialog>
+              )}
             </div>
           )}
         </div>
@@ -1627,7 +1647,7 @@ export function IntegrationsContent({
                   variant="outline"
                   size="sm"
                   onClick={handleKlaviyoSync}
-                  disabled={syncing === 'klaviyo'}
+                  disabled={!canManage || syncing === 'klaviyo'}
                 >
                   {syncing === 'klaviyo' ? (
                     <IconLoader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
@@ -1640,7 +1660,7 @@ export function IntegrationsContent({
                   variant="outline"
                   size="sm"
                   onClick={handleKlaviyoDisconnect}
-                  disabled={disconnecting === 'klaviyo'}
+                  disabled={!canManage || disconnecting === 'klaviyo'}
                 >
                   <IconUnlink className="mr-1.5 h-3.5 w-3.5" />
                   Disconnect
@@ -1653,6 +1673,7 @@ export function IntegrationsContent({
                 Create a Private API key in Klaviyo (Settings → API keys) with campaigns, flows, and
                 metrics read access.
               </p>
+              {canManage && (
               <Dialog open={kvDialogOpen} onOpenChange={setKvDialogOpen}>
                 <DialogTrigger asChild>
                   <Button>
@@ -1698,6 +1719,7 @@ export function IntegrationsContent({
                   </DialogFooter>
                 </DialogContent>
               </Dialog>
+              )}
             </div>
           )}
         </div>
@@ -1752,7 +1774,7 @@ export function IntegrationsContent({
                     variant="outline"
                     size="sm"
                     onClick={handleWoocommerceSync}
-                    disabled={wcSyncing}
+                    disabled={!canManage || wcSyncing}
                   >
                     {wcSyncing ? (
                       <IconLoader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
@@ -1765,7 +1787,7 @@ export function IntegrationsContent({
                     variant="outline"
                     size="sm"
                     onClick={handleWoocommerceDisconnect}
-                    disabled={wcDisconnecting}
+                    disabled={!canManage || wcDisconnecting}
                   >
                     <IconUnlink className="mr-1.5 h-3.5 w-3.5" />
                     Disconnect
@@ -1788,6 +1810,7 @@ export function IntegrationsContent({
                   Connect your WordPress / WooCommerce store using REST API keys to pull in orders and products.
                 </p>
               </div>
+              {canManage && (
               <Dialog open={wcDialogOpen} onOpenChange={setWcDialogOpen}>
                 <DialogTrigger asChild>
                   <Button>
@@ -1856,6 +1879,7 @@ export function IntegrationsContent({
                   </DialogFooter>
                 </DialogContent>
               </Dialog>
+              )}
             </div>
           )}
         </div>

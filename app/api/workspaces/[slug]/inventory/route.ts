@@ -3,6 +3,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
+import { featureGuard } from '@/lib/features'
 import { Prisma } from '@prisma/client'
 import {
   classifyInventoryStatus,
@@ -142,6 +143,9 @@ export async function GET(
   if (!membership) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
+
+  const guard = featureGuard(workspace.features as any, 'inventory')
+  if (guard) return guard
 
   const connectionId = workspace.shopifyConnections[0]?.id
   const useUnicommerce = await isUnicommerceActive(workspace.id)

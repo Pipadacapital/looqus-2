@@ -48,6 +48,7 @@ model Workspace {
   id                         String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name                       String
   slug                       String                     @unique
+  features                   Json                       @default("{}") @map("features")
   logoUrl                    String?                    @map("logo_url")
   industry                   String?                    @map("industry")
   monthlyRevenue             String?                    @map("monthly_revenue")

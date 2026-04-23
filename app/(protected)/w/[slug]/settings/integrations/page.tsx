@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { redirect } from 'next/navigation'
 import { getCurrentUserRole } from '@/lib/require-superadmin'
 import { IntegrationsContent } from './integrations-content'
+import { hasRole, type WorkspaceRole } from '@/lib/features'
 
 export default async function IntegrationsPage({
   params,
@@ -108,6 +109,15 @@ export default async function IntegrationsPage({
   })
 
   if (!workspace) redirect('/')
+
+  const membership = await prisma.workspaceMember.findFirst({
+    where: { workspaceId: workspace.id, userId: user.id },
+    select: { role: true },
+  })
+  if (!membership) redirect('/')
+  if (!hasRole(membership.role as WorkspaceRole, 'MANAGER')) {
+    redirect(`/w/${slug}/settings`)
+  }
 
   const role = await getCurrentUserRole()
   const isSuperadmin = role === 'SUPERADMIN'

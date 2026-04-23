@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { ChevronDownIcon, XIcon } from 'lucide-react'
 
 import { useWorkspace } from '@/hooks/use-workspace'
+import { can } from '@/lib/features'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -37,6 +38,7 @@ type FiltersSettings = {
 export function FiltersSettingsContent() {
   const { current } = useWorkspace()
   const slug = current.slug
+  const canChange = can.changeSettings(current.userRole)
   const queryClient = useQueryClient()
 
   const [skippedTags, setSkippedTags] = useState<string[]>([])
@@ -145,6 +147,7 @@ export function FiltersSettingsContent() {
                     variant="outline"
                     className="min-h-9 w-full justify-between gap-2 font-normal text-muted-foreground"
                     aria-label="Select tags to skip"
+                    disabled={!canChange}
                   >
                     <span className="truncate">
                       {skippedTags.length === 0
@@ -160,6 +163,7 @@ export function FiltersSettingsContent() {
                       placeholder="Search tags..."
                       value={tagSearch}
                       onChange={(e) => setTagSearch(e.target.value)}
+                      disabled={!canChange}
                       className="h-8"
                       autoFocus
                     />
@@ -182,6 +186,7 @@ export function FiltersSettingsContent() {
                             >
                               <Checkbox
                                 checked={skippedTags.includes(tag)}
+                                disabled={!canChange}
                                 onCheckedChange={() => toggleTag(tag)}
                               />
                               <span>{tag}</span>
@@ -204,6 +209,7 @@ export function FiltersSettingsContent() {
                       <button
                         type="button"
                         onClick={() => setSkippedTags((p) => p.filter((t) => t !== tag))}
+                        disabled={!canChange}
                         className="rounded p-0.5 opacity-50 hover:opacity-100"
                         aria-label={`Remove ${tag}`}
                       >
@@ -225,6 +231,7 @@ export function FiltersSettingsContent() {
               <label className="flex cursor-pointer items-center gap-2">
                 <Checkbox
                   checked={skipZeroSales}
+                  disabled={!canChange}
                   onCheckedChange={(c) => setSkipZeroSales(Boolean(c))}
                 />
                 <span className="text-sm font-medium">
@@ -238,7 +245,7 @@ export function FiltersSettingsContent() {
           </Field>
 
           <div className="pt-2">
-            <Button onClick={handleSave} disabled={mutation.isPending}>
+            <Button onClick={handleSave} disabled={!canChange || mutation.isPending}>
               {mutation.isPending ? 'Saving…' : 'Save changes'}
             </Button>
           </div>

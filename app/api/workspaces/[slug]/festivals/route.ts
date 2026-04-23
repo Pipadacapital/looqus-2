@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
+import { hasRole, type WorkspaceRole } from '@/lib/features'
 import { seedFestivalsForWorkspace } from '@/lib/festivals/seed-festivals'
 
 async function getWorkspaceAndMembership(slug: string, userId: string) {
@@ -16,7 +17,7 @@ async function getWorkspaceAndMembership(slug: string, userId: string) {
     select: { role: true },
   })
   if (!membership) return { error: NextResponse.json({ error: 'Forbidden' }, { status: 403 }) }
-  return { workspace }
+  return { workspace, membership }
 }
 
 export async function GET(
@@ -61,6 +62,12 @@ export async function POST(
   const { slug } = await context.params
   const gate = await getWorkspaceAndMembership(slug, user.id)
   if ('error' in gate) return gate.error
+  if (!hasRole(gate.membership.role as WorkspaceRole, 'ADMIN')) {
+    return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 })
+  }
+  if (!hasRole(gate.membership.role as WorkspaceRole, 'ADMIN')) {
+    return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 })
+  }
 
   const body = await request.json().catch(() => null)
   if (body?.resetDefaults === true) {
@@ -99,6 +106,9 @@ export async function PATCH(
   const { slug } = await context.params
   const gate = await getWorkspaceAndMembership(slug, user.id)
   if ('error' in gate) return gate.error
+  if (!hasRole(gate.membership.role as WorkspaceRole, 'ADMIN')) {
+    return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 })
+  }
 
   const id = request.nextUrl.searchParams.get('id')
   if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 })

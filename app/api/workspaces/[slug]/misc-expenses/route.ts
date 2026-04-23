@@ -3,6 +3,7 @@ export const runtime = 'nodejs'
 import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
+import { hasRole, type WorkspaceRole } from '@/lib/features'
 import { z } from 'zod'
 
 async function getWorkspaceAndRole(slug: string) {
@@ -64,8 +65,8 @@ export async function POST(
   const result = await getWorkspaceAndRole(slug)
   if ('error' in result) return result.error
 
-  if (result.role !== 'OWNER') {
-    return NextResponse.json({ error: 'Only owners can manage misc expenses.' }, { status: 403 })
+  if (!hasRole(result.role as WorkspaceRole, 'ADMIN')) {
+    return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 })
   }
 
   try {
@@ -99,8 +100,8 @@ export async function PATCH(
   const result = await getWorkspaceAndRole(slug)
   if ('error' in result) return result.error
 
-  if (result.role !== 'OWNER') {
-    return NextResponse.json({ error: 'Only owners can manage misc expenses.' }, { status: 403 })
+  if (!hasRole(result.role as WorkspaceRole, 'ADMIN')) {
+    return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 })
   }
 
   try {
@@ -142,8 +143,8 @@ export async function DELETE(
   const result = await getWorkspaceAndRole(slug)
   if ('error' in result) return result.error
 
-  if (result.role !== 'OWNER') {
-    return NextResponse.json({ error: 'Only owners can manage misc expenses.' }, { status: 403 })
+  if (!hasRole(result.role as WorkspaceRole, 'ADMIN')) {
+    return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 })
   }
 
   const { id } = (await request.json()) as { id: string }

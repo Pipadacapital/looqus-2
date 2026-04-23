@@ -6,6 +6,7 @@ import { AppSidebar } from '@/components/app-sidebar'
 import { SiteHeader } from '@/components/site-header'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import React from 'react'
+import type { WorkspaceRole } from '@/lib/features'
 
 export default async function WorkspaceLayout({
   children,
@@ -69,6 +70,8 @@ export default async function WorkspaceLayout({
       slug: workspace.slug,
       logoUrl: workspace.logoUrl,
       plan: workspace.plan,
+      features: (workspace.features as Record<string, boolean> | null) ?? null,
+      userRole: (membership.role as WorkspaceRole) ?? null,
     },
     role: membership.role,
     all: allMemberships.map((m) => ({
@@ -79,6 +82,7 @@ export default async function WorkspaceLayout({
         slug: m.workspace.slug,
         logoUrl: m.workspace.logoUrl,
         plan: m.workspace.plan,
+        userRole: (m.role as WorkspaceRole) ?? null,
       },
     })),
   }

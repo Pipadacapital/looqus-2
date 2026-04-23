@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
+import { featureGuard } from '@/lib/features'
 import { computeProducts, computeWoocommerceProducts } from '@/lib/products/compute'
 import type { ProductsGroupBy, ProductsSortColumn } from '@/lib/products/types'
 
@@ -110,6 +111,9 @@ export async function GET(
   if (!membership) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
+
+  const guard = featureGuard(workspace.features as any, 'products')
+  if (guard) return guard
 
   const isWoocommerce = workspace.platform === 'WOOCOMMERCE'
   const connectionId = workspace.shopifyConnections?.[0]?.id ?? null

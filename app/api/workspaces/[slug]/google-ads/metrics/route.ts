@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
+import { featureGuard } from '@/lib/features'
 import { loadCampaignIntentMap, resolveCampaignIntent } from '@/lib/metrics/campaign-classification'
 import {
   addMetricToIntentBuckets,
@@ -75,6 +76,7 @@ export async function GET(
     where: { slug },
     select: {
       id: true,
+      features: true,
       google_ads_connections: {
         where: { status: 'CONNECTED' },
         select: {
@@ -103,6 +105,9 @@ export async function GET(
   if (!membership) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
+
+  const guard = featureGuard(workspace.features as any, 'google_ads')
+  if (guard) return guard
 
   const connection = workspace.google_ads_connections
   if (!connection) {

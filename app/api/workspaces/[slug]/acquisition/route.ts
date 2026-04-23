@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
+import { featureGuard } from '@/lib/features'
 import { startOfYear, endOfDay, format, eachDayOfInterval, subDays } from 'date-fns'
 import { computeAcquisition, computeAcquisitionTrend, computeAcquisitionComposition } from '@/lib/acquisition/compute'
 import { fetchGoalRowsMap, buildGoalEvaluations } from '@/lib/metrics/goals'
@@ -64,6 +65,9 @@ export async function GET(
   if (!membership) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
+
+  const guard = featureGuard((workspace as any).features as any, 'acquisition')
+  if (guard) return guard
 
   const now = new Date()
   const defaultFrom = format(startOfYear(now), 'yyyy-MM-dd')

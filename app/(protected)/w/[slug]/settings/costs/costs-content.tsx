@@ -55,6 +55,8 @@ import {
 } from '@/components/ui/popover'
 import { toast } from 'sonner'
 import { Label } from "@/components/ui/label"
+import { useWorkspace } from '@/hooks/use-workspace'
+import { can } from '@/lib/features'
 
 // ─── Costs form schema ──────────────────────────────────────────────────────
 
@@ -119,6 +121,9 @@ const CURRENCY_OPTIONS = [
 // ─── Component ──────────────────────────────────────────────────────────────
 
 export function CostsContent({ slug, isOwner }: { slug: string; isOwner: boolean }) {
+  const { current } = useWorkspace()
+  const canChange = can.changeSettings(current.userRole)
+  const showFounderSalary = can.viewFounderSalary(current.userRole)
   const [costs, setCosts] = useState<Cost[]>([])
   const [miscExpenses, setMiscExpenses] = useState<MiscExpense[]>([])
   const [loading, setLoading] = useState(true)
@@ -354,7 +359,7 @@ export function CostsContent({ slug, isOwner }: { slug: string; isOwner: boolean
               Manage your shipping, packaging, and other operational costs.
             </p>
           </div>
-          {isOwner && (
+          {canChange && (
             <Dialog open={costDialogOpen} onOpenChange={setCostDialogOpen}>
               <DialogTrigger asChild>
                 <Button>
@@ -550,20 +555,20 @@ export function CostsContent({ slug, isOwner }: { slug: string; isOwner: boolean
                 <TableHead>Amount</TableHead>
                 <TableHead>Effective From</TableHead>
                 <TableHead>Effective To</TableHead>
-                {isOwner && <TableHead className="w-12" />}
+                {canChange && <TableHead className="w-12" />}
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={isOwner ? 6 : 5} className="h-24 text-center">
+                  <TableCell colSpan={canChange ? 6 : 5} className="h-24 text-center">
                     Loading...
                   </TableCell>
                 </TableRow>
               ) : costs.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={isOwner ? 6 : 5} className="h-24 text-center">
-                    No costs found. {isOwner ? 'Add one to get started.' : ''}
+                  <TableCell colSpan={canChange ? 6 : 5} className="h-24 text-center">
+                    No costs found. {canChange ? 'Add one to get started.' : ''}
                   </TableCell>
                 </TableRow>
               ) : (
@@ -594,7 +599,7 @@ export function CostsContent({ slug, isOwner }: { slug: string; isOwner: boolean
                         ? format(new Date(cost.effectiveTo), 'PPP')
                         : 'Present'}
                     </TableCell>
-                    {isOwner && (
+                    {canChange && (
                       <TableCell>
                         <Button
                           variant="ghost"
@@ -623,7 +628,7 @@ export function CostsContent({ slug, isOwner }: { slug: string; isOwner: boolean
               Add recurring business expenses (salaries, rent, tools, etc.) to calculate CM3.
             </p>
           </div>
-          {isOwner && (
+          {canChange && (
             <Dialog open={miscDialogOpen} onOpenChange={setMiscDialogOpen}>
               <DialogTrigger asChild>
                 <Button>
@@ -743,20 +748,20 @@ export function CostsContent({ slug, isOwner }: { slug: string; isOwner: boolean
                 <TableHead>Name</TableHead>
                 <TableHead>Amount</TableHead>
                 <TableHead>Effective From</TableHead>
-                {isOwner && <TableHead className="w-12" />}
+                {canChange && <TableHead className="w-12" />}
               </TableRow>
             </TableHeader>
             <TableBody>
               {miscLoading ? (
                 <TableRow>
-                  <TableCell colSpan={isOwner ? 4 : 3} className="h-24 text-center">
+                  <TableCell colSpan={canChange ? 4 : 3} className="h-24 text-center">
                     Loading...
                   </TableCell>
                 </TableRow>
               ) : miscExpenses.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={isOwner ? 4 : 3} className="h-24 text-center">
-                    No miscellaneous expenses. {isOwner ? 'Add one to include in CM3.' : ''}
+                  <TableCell colSpan={canChange ? 4 : 3} className="h-24 text-center">
+                    No miscellaneous expenses. {canChange ? 'Add one to include in CM3.' : ''}
                   </TableCell>
                 </TableRow>
               ) : (
@@ -770,7 +775,7 @@ export function CostsContent({ slug, isOwner }: { slug: string; isOwner: boolean
                       }).format(exp.amount)}
                     </TableCell>
                     <TableCell>{format(new Date(exp.effectiveStartDate), 'PPP')}</TableCell>
-                    {isOwner && (
+                    {canChange && (
                       <TableCell>
                         <Button
                           variant="ghost"
@@ -791,6 +796,7 @@ export function CostsContent({ slug, isOwner }: { slug: string; isOwner: boolean
       </div>
 
       {/* ═══ Founder's salary (used in P&L Net Profit) ═══ */}
+      {showFounderSalary && (
       <div className="space-y-6">
         <div>
           <h2 className="text-2xl font-bold tracking-tight">Founder&apos;s salary</h2>
@@ -803,8 +809,6 @@ export function CostsContent({ slug, isOwner }: { slug: string; isOwner: boolean
             <p className="text-sm text-muted-foreground">Loading...</p>
           ) : (
             <div className="flex flex-wrap items-center gap-3">
-              {isOwner ? (
-                <>
                   <div className="flex items-center gap-2">
                     <Label htmlFor="founder-salary-amount" className="text-sm">Monthly amount</Label>
                     <Input
@@ -839,22 +843,15 @@ export function CostsContent({ slug, isOwner }: { slug: string; isOwner: boolean
                   </div>
                   <Button
                     onClick={onSaveFounderSalary}
-                    disabled={founderSalarySaving}
+                    disabled={!canChange || founderSalarySaving}
                   >
                     {founderSalarySaving ? 'Saving...' : 'Save'}
                   </Button>
-                </>
-              ) : (
-                <p className="text-sm">
-                  {founderSalary.monthlyAmount != null
-                    ? new Intl.NumberFormat('en-US', { style: 'currency', currency: founderSalary.currency }).format(founderSalary.monthlyAmount) + ' / month'
-                    : 'Not set'}
-                </p>
-              )}
             </div>
           )}
         </div>
       </div>
+      )}
     </div>
   )
 }

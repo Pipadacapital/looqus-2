@@ -1,6 +1,7 @@
 'use client'
 
 import { createContext, useContext } from 'react'
+import type { WorkspaceRole } from '@/lib/features'
 
 export type WorkspaceData = {
   id: string
@@ -8,6 +9,8 @@ export type WorkspaceData = {
   slug: string
   logoUrl: string | null
   plan: string
+  features?: Record<string, boolean> | null
+  userRole: WorkspaceRole | null
 }
 
 export type WorkspaceMembership = {

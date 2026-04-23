@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
+import { hasRole, type WorkspaceRole } from '@/lib/features'
 import { WorkspaceCostType } from '@prisma/client'
 import { z } from 'zod'
 
@@ -77,9 +78,9 @@ export async function POST(
     return NextResponse.json({ error: 'Workspace not found' }, { status: 404 })
   }
 
-  const role = workspace.members[0].role
-  if (role !== 'OWNER') {
-    return NextResponse.json({ error: 'Only owners can manage costs.' }, { status: 403 })
+  const role = workspace.members[0].role as WorkspaceRole
+  if (!hasRole(role, 'ADMIN')) {
+    return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 })
   }
 
   try {
@@ -150,8 +151,8 @@ export async function DELETE(
     return NextResponse.json({ error: 'Workspace not found' }, { status: 404 })
   }
 
-  if (workspace.members[0].role !== 'OWNER') {
-    return NextResponse.json({ error: 'Only owners can delete costs.' }, { status: 403 })
+  if (!hasRole(workspace.members[0].role as WorkspaceRole, 'ADMIN')) {
+    return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 })
   }
 
   const { id } = await request.json() as { id: string }

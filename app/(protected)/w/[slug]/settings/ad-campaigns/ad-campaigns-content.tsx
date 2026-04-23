@@ -12,6 +12,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { useWorkspace } from '@/hooks/use-workspace'
+import { can } from '@/lib/features'
 import { format, subDays, endOfDay } from 'date-fns'
 
 const INTENTS = [
@@ -44,6 +46,8 @@ export function AdCampaignsContent({
   slug: string
   isOwner: boolean
 }) {
+  const { current } = useWorkspace()
+  const canChange = can.changeSettings(current.userRole)
   const [rows, setRows] = useState<Row[]>([])
   const [intentSummary, setIntentSummary] = useState<IntentSummary | null>(null)
   const [loading, setLoading] = useState(true)
@@ -95,7 +99,7 @@ export function AdCampaignsContent({
   }, [rows, search, platformFilter])
 
   const updateIntent = async (row: Row, intent: string) => {
-    if (!isOwner) return
+    if (!canChange) return
     const key = `${row.platform}:${row.campaignId}`
     setSaving(key)
     try {
@@ -143,7 +147,7 @@ export function AdCampaignsContent({
         </p>
       </div>
 
-      {!isOwner && (
+      {!canChange && (
         <p className="text-sm text-muted-foreground">Only workspace owners can edit classifications.</p>
       )}
 
@@ -242,7 +246,7 @@ export function AdCampaignsContent({
                     <td className="p-3">
                       <Select
                         value={row.intent}
-                        disabled={!isOwner || saving === key}
+                        disabled={!canChange || saving === key}
                         onValueChange={(v) => updateIntent(row, v)}
                       >
                         <SelectTrigger className="h-8">

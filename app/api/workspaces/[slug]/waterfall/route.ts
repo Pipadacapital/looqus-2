@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
+import { featureGuard } from '@/lib/features'
 import { Decimal } from '@prisma/client/runtime/library'
 import { getDaysInMonth, differenceInDays } from 'date-fns'
 import {
@@ -131,6 +132,9 @@ export async function GET(
   if (!membership) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
+
+  const guard = featureGuard(workspace.features as any, 'waterfall')
+  if (guard) return guard
 
   const isWoocommerce = workspace.platform === 'WOOCOMMERCE'
 

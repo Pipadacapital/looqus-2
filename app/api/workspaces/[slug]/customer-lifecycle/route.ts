@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { format } from 'date-fns'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
+import { featureGuard } from '@/lib/features'
 import { normalizeOrderFilterSettings } from '@/lib/order-filters'
 import { computeCustomerLifecycleReport } from '@/lib/metrics/customer-lifecycle-report'
 import {
@@ -96,6 +97,9 @@ export async function GET(
   if (!membership) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
+
+  const guard = featureGuard(workspace.features as any, 'customer_lifecycle')
+  if (guard) return guard
 
   const isWoocommerce = workspace.platform === 'WOOCOMMERCE'
   if (isWoocommerce) {

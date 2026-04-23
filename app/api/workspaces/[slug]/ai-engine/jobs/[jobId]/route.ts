@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
+import { featureGuard } from '@/lib/features'
 
 /** Strip markdown code fences and parse JSON from AI response content */
 function parseContentJson(raw: string): any {
@@ -36,7 +37,7 @@ export async function GET(
 
   const workspace = await prisma.workspace.findUnique({
     where: { slug },
-    select: { id: true },
+    select: { id: true, features: true },
   })
 
   if (!workspace) {
@@ -55,6 +56,9 @@ export async function GET(
   if (!membership) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
+
+  const guard = featureGuard(workspace.features as any, 'ai_insights')
+  if (guard) return guard
 
   // Look up the latest row by filtersHash (the pipeline's saveInsight replaces rows by hash)
   const job = await prisma.aiInsight.findFirst({

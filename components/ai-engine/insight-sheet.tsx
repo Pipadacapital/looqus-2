@@ -21,6 +21,8 @@ import {
 } from '@/components/ui/sheet'
 import { cn } from '@/lib/utils'
 import { InsightCardList, type InsightItem } from '@/components/ai-engine/insight-cards'
+import { useWorkspace } from '@/hooks/use-workspace'
+import { isFeatureEnabled } from '@/lib/features'
 
 const PAGE_TITLES: Record<string, string> = {
   analytics: 'Analytics Insights',
@@ -94,6 +96,13 @@ export function InsightSheet({
   onGenerate,
   pageLoading,
 }: InsightSheetProps) {
+  const { current } = useWorkspace()
+  const aiInsightsEnabled = isFeatureEnabled(
+    current?.features as any,
+    'ai_insights'
+  )
+  if (!aiInsightsEnabled) return null
+
   const title = PAGE_TITLES[page] ?? `${page} Insights`
   const description = PAGE_DESCRIPTIONS[page] ?? 'Run AI analysis on your data.'
   const dataThroughDate = dataThrough ? new Date(`${dataThrough}T00:00:00`) : null

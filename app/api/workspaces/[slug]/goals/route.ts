@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
+import { hasRole, type WorkspaceRole } from '@/lib/features'
 import { goalPeriodAnchor } from '@/lib/metrics/goals'
 import { GOAL_METRIC_IDS, isGoalMetricId } from '@/lib/metrics/goal-metrics-registry'
 import type { WorkspaceGoalPeriodType, WorkspaceGoalValueType } from '@prisma/client'
@@ -71,6 +72,12 @@ export async function POST(
     },
   })
   if (!membership) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  if (!hasRole(membership.role as WorkspaceRole, 'ADMIN')) {
+    return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 })
+  }
+  if (!hasRole(membership.role as WorkspaceRole, 'ADMIN')) {
+    return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 })
+  }
 
   let body: {
     metricName?: string

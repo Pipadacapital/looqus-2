@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { IconLoader2, IconTarget, IconTrash } from '@tabler/icons-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { useWorkspace } from '@/hooks/use-workspace'
+import { can } from '@/lib/features'
 import {
   Select,
   SelectContent,
@@ -38,6 +40,8 @@ const PERIODS: GoalRow['periodType'][] = ['DAILY', 'WEEKLY', 'MONTHLY']
 const GOAL_TYPES: GoalRow['goalType'][] = ['TARGET', 'MINIMUM', 'MAXIMUM']
 
 export function GoalsSettingsContent({ workspaceSlug }: { workspaceSlug: string }) {
+  const { current } = useWorkspace()
+  const canChange = can.changeSettings(current.userRole)
   const [goals, setGoals] = useState<GoalRow[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -148,6 +152,7 @@ export function GoalsSettingsContent({ workspaceSlug }: { workspaceSlug: string 
             <Select
               value={metricName}
               onValueChange={(v) => setMetricName(v as GoalMetricId)}
+              disabled={!canChange}
             >
               <SelectTrigger>
                 <SelectValue />
@@ -169,6 +174,7 @@ export function GoalsSettingsContent({ workspaceSlug }: { workspaceSlug: string 
             <Select
               value={periodType}
               onValueChange={(v) => setPeriodType(v as GoalRow['periodType'])}
+              disabled={!canChange}
             >
               <SelectTrigger>
                 <SelectValue />
@@ -188,6 +194,7 @@ export function GoalsSettingsContent({ workspaceSlug }: { workspaceSlug: string 
               type="date"
               value={periodStart}
               onChange={(e) => setPeriodStart(e.target.value)}
+              disabled={!canChange}
               required
             />
           </div>
@@ -199,6 +206,7 @@ export function GoalsSettingsContent({ workspaceSlug }: { workspaceSlug: string 
               placeholder="e.g. 4.5 for MER"
               value={goalValue}
               onChange={(e) => setGoalValue(e.target.value)}
+              disabled={!canChange}
               required
             />
           </div>
@@ -207,6 +215,7 @@ export function GoalsSettingsContent({ workspaceSlug }: { workspaceSlug: string 
             <Select
               value={goalType}
               onValueChange={(v) => setGoalType(v as GoalRow['goalType'])}
+              disabled={!canChange}
             >
               <SelectTrigger>
                 <SelectValue />
@@ -219,7 +228,7 @@ export function GoalsSettingsContent({ workspaceSlug }: { workspaceSlug: string 
             </Select>
           </div>
         </div>
-        <Button type="submit" disabled={saving}>
+        <Button type="submit" disabled={!canChange || saving}>
           {saving ? 'Saving…' : 'Save goal'}
         </Button>
       </form>
@@ -265,6 +274,7 @@ export function GoalsSettingsContent({ workspaceSlug }: { workspaceSlug: string 
                       variant="ghost"
                       size="icon"
                       className="size-8 text-muted-foreground hover:text-destructive"
+                      disabled={!canChange}
                       onClick={() => handleDelete(g.id)}
                       aria-label="Delete goal"
                     >

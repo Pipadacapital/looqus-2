@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
+import { featureGuard } from '@/lib/features'
 import { computeCacheKey, getCachedInsight, saveInsight } from '@/module/ai-engine/cache/insight-cache'
 import { generatePageInsight } from '@/module/ai-engine'
 
@@ -57,7 +58,7 @@ export async function POST(
 
   const workspace = await prisma.workspace.findUnique({
     where: { slug },
-    select: { id: true },
+    select: { id: true, features: true },
   })
 
   if (!workspace) {
@@ -76,6 +77,9 @@ export async function POST(
   if (!membership) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
+
+  const guard = featureGuard(workspace.features as any, 'ai_insights')
+  if (guard) return guard
 
   const fromDate = new Date(`${fromParam}T00:00:00.000Z`)
   const toDate = new Date(`${toParam}T23:59:59.999Z`)

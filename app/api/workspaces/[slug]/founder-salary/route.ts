@@ -3,6 +3,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
+import { hasRole, type WorkspaceRole } from '@/lib/features'
 import { z } from 'zod'
 
 const updateSchema = z.object({
@@ -40,10 +41,11 @@ export async function GET(
 
   const monthly = result.workspace.founderSalaryMonthly
   const currency = result.workspace.founderSalaryCurrency
+  const isOwner = (result.role as WorkspaceRole) === 'OWNER'
 
   return NextResponse.json({
-    monthlyAmount: monthly != null ? Number(monthly) : null,
-    currency: currency ?? 'INR',
+    monthlyAmount: isOwner && monthly != null ? Number(monthly) : null,
+    currency: isOwner ? (currency ?? 'INR') : null,
   })
 }
 
@@ -55,8 +57,8 @@ export async function PATCH(
   const result = await getWorkspaceAndRole(slug)
   if ('error' in result) return result.error
 
-  if (result.role !== 'OWNER') {
-    return NextResponse.json({ error: 'Only owners can edit founder salary.' }, { status: 403 })
+  if (!hasRole(result.role as WorkspaceRole, 'OWNER')) {
+    return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 })
   }
 
   try {

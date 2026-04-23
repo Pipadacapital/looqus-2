@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
 import { useWorkspace } from '@/hooks/use-workspace'
+import { can } from '@/lib/features'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -39,6 +40,7 @@ function parsePercent(str: string): number {
 export function CogsSettingsContent() {
   const { current } = useWorkspace()
   const slug = current.slug
+  const canChange = can.changeSettings(current.userRole)
   const queryClient = useQueryClient()
 
   const [overrideAll, setOverrideAll] = useState('0.00')
@@ -127,6 +129,7 @@ export function CogsSettingsContent() {
                 max="100"
                 value={overrideAll}
                 onChange={(e) => setOverrideAll(e.target.value)}
+                disabled={!canChange}
                 className="max-w-[140px]"
                 aria-label="Override all COGS percentage"
               />
@@ -148,6 +151,7 @@ export function CogsSettingsContent() {
                 max="100"
                 value={markup}
                 onChange={(e) => setMarkup(e.target.value)}
+                disabled={!canChange}
                 className="max-w-[140px]"
                 aria-label="COGS markup percentage"
               />
@@ -168,6 +172,7 @@ export function CogsSettingsContent() {
                 max="100"
                 value={fallback}
                 onChange={(e) => setFallback(e.target.value)}
+                disabled={!canChange}
                 className="max-w-[140px]"
                 aria-label="Fallback COGS percentage"
               />
@@ -182,7 +187,7 @@ export function CogsSettingsContent() {
           <div className="pt-2">
             <Button
               onClick={handleSave}
-              disabled={mutation.isPending}
+              disabled={!canChange || mutation.isPending}
             >
               {mutation.isPending ? 'Saving…' : 'Save changes'}
             </Button>

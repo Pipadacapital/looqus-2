@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { useWorkspace } from '@/hooks/use-workspace'
+import { can } from '@/lib/features'
 
 type Festival = {
   id: string
@@ -27,6 +29,8 @@ export function FestivalsContent({
   workspaceSlug: string
   workspaceName: string
 }) {
+  const { current } = useWorkspace()
+  const canChange = can.changeSettings(current.userRole)
   const [year, setYear] = useState<number>(2025)
   const [festivals, setFestivals] = useState<Festival[]>([])
   const [loading, setLoading] = useState(false)
@@ -118,8 +122,8 @@ export function FestivalsContent({
           <p className="text-sm text-muted-foreground">{workspaceName}</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={addFestival}>+ Add Festival</Button>
-          <Button variant="outline" onClick={resetDefaults}>Reset to defaults</Button>
+          <Button variant="outline" onClick={addFestival} disabled={!canChange}>+ Add Festival</Button>
+          <Button variant="outline" onClick={resetDefaults} disabled={!canChange}>Reset to defaults</Button>
         </div>
       </div>
 
@@ -153,11 +157,12 @@ export function FestivalsContent({
                     <span className="text-muted-foreground">{f.regions.length ? f.regions.join(', ') : 'All India'}</span>
                   </div>
                   <div className="flex gap-2">
-                    <Button size="sm" variant="outline" onClick={() => { setEditId(f.id); setDraft({ ...f }) }}>Edit</Button>
+                    <Button size="sm" variant="outline" disabled={!canChange} onClick={() => { setEditId(f.id); setDraft({ ...f }) }}>Edit</Button>
                     {f.isTemplate ? (
                       <Button
                         size="sm"
                         variant="outline"
+                        disabled={!canChange}
                         onClick={async () => {
                           await fetch(`/api/workspaces/${workspaceSlug}/festivals?id=${f.id}`, {
                             method: 'PATCH',
@@ -173,6 +178,7 @@ export function FestivalsContent({
                       <Button
                         size="sm"
                         variant="outline"
+                        disabled={!canChange}
                         onClick={async () => {
                           await fetch(`/api/workspaces/${workspaceSlug}/festivals?id=${f.id}`, { method: 'DELETE' })
                           await load()
@@ -185,15 +191,16 @@ export function FestivalsContent({
                 </div>
                 {isEditing && (
                   <div className="grid grid-cols-1 md:grid-cols-6 gap-2">
-                    <Input value={String(draft.name ?? '')} onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))} placeholder="Name" />
-                    <Input type="date" value={String(draft.startDate ?? '').slice(0, 10)} onChange={(e) => setDraft((d) => ({ ...d, startDate: e.target.value }))} />
-                    <Input type="date" value={String(draft.endDate ?? '').slice(0, 10)} onChange={(e) => setDraft((d) => ({ ...d, endDate: e.target.value }))} />
+                    <Input value={String(draft.name ?? '')} disabled={!canChange} onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))} placeholder="Name" />
+                    <Input type="date" disabled={!canChange} value={String(draft.startDate ?? '').slice(0, 10)} onChange={(e) => setDraft((d) => ({ ...d, startDate: e.target.value }))} />
+                    <Input type="date" disabled={!canChange} value={String(draft.endDate ?? '').slice(0, 10)} onChange={(e) => setDraft((d) => ({ ...d, endDate: e.target.value }))} />
                     <div className="flex gap-1 items-center">
                       {COLORS.map((c) => (
                         <button
                           key={c}
                           className="h-6 w-6 rounded border"
                           style={{ backgroundColor: c }}
+                          disabled={!canChange}
                           onClick={() => setDraft((d) => ({ ...d, color: c }))}
                           type="button"
                         />
@@ -204,21 +211,24 @@ export function FestivalsContent({
                       min={0.5}
                       max={6}
                       step={0.1}
+                      disabled={!canChange}
                       value={String(draft.expectedMultiplier ?? 1.5)}
                       onChange={(e) => setDraft((d) => ({ ...d, expectedMultiplier: Number(e.target.value) }))}
                     />
                     <div className="flex gap-2">
-                      <Button size="sm" onClick={() => saveEdit(f.id)}>Save</Button>
+                      <Button size="sm" disabled={!canChange} onClick={() => saveEdit(f.id)}>Save</Button>
                       <Button size="sm" variant="outline" onClick={() => { setEditId(null); setDraft({}) }}>Cancel</Button>
                     </div>
                     <Input
                       className="md:col-span-3"
+                      disabled={!canChange}
                       placeholder="Regions (comma-separated)"
                       value={Array.isArray(draft.regions) ? draft.regions.join(', ') : ''}
                       onChange={(e) => setDraft((d) => ({ ...d, regions: e.target.value.split(',').map((x) => x.trim()).filter(Boolean) }))}
                     />
                     <Input
                       className="md:col-span-3"
+                      disabled={!canChange}
                       placeholder="Categories (comma-separated)"
                       value={Array.isArray(draft.categories) ? draft.categories.join(', ') : ''}
                       onChange={(e) => setDraft((d) => ({ ...d, categories: e.target.value.split(',').map((x) => x.trim()).filter(Boolean) }))}

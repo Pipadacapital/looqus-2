@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
+import { hasRole, type WorkspaceRole } from '@/lib/features'
 import { z } from 'zod'
 
 const updateWorkspaceSettingsSchema = z.object({
@@ -84,10 +85,10 @@ export async function PATCH(
     return NextResponse.json({ error: 'Workspace not found' }, { status: 404 })
   }
 
-  const role = workspace.members[0].role
-  if (role !== 'OWNER') {
+  const role = workspace.members[0].role as WorkspaceRole
+  if (!hasRole(role, 'ADMIN')) {
     return NextResponse.json(
-      { error: 'Only workspace owners can update workspace settings.' },
+      { error: 'Insufficient permissions' },
       { status: 403 }
     )
   }

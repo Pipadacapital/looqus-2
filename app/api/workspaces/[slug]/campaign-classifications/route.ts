@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
+import { hasRole, type WorkspaceRole } from '@/lib/features'
 import { subDays, format, endOfDay } from 'date-fns'
 import {
   fetchCampaignsWithSpendInRange,
@@ -150,8 +151,8 @@ export async function PATCH(
   const membership = await prisma.workspaceMember.findUnique({
     where: { userId_workspaceId: { userId: user.id, workspaceId: workspace.id } },
   })
-  if (!membership || membership.role !== 'OWNER') {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  if (!membership || !hasRole(membership.role as WorkspaceRole, 'ADMIN')) {
+    return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 })
   }
 
   let body: { platform?: string; campaignId?: string; intent?: string; campaignName?: string | null }
