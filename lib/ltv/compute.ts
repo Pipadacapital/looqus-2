@@ -9,6 +9,7 @@ import { buildShiprocketDateRangeWhere } from '@/lib/shiprocket-list'
 import { RTO_STATUS_CODES } from '@/lib/workspace-metrics/constants'
 import { getEffectiveDailyAggregates } from '@/lib/effective-daily'
 import { resolveLineItemCogs, normalizeCogsSettings } from '@/lib/cogs'
+import { getShopifyStoreCurrency } from '@/lib/shopify/store-currency'
 
 const EXCHANGE_RATES: Record<string, number> = {
   USD: 1,
@@ -342,7 +343,6 @@ export async function computeLtv(
   }
 ): Promise<{ summary: LtvSummary; rows: LtvRow[]; totalRows: number; currency: string }> {
   const connectionId = workspace.shopifyConnections[0]?.id
-  const storeCurrency = 'INR'
   if (!connectionId) {
     return {
       summary: {
@@ -356,12 +356,18 @@ export async function computeLtv(
       },
       rows: [],
       totalRows: 0,
-      currency: storeCurrency,
+      currency: 'USD',
     }
   }
 
   const fromDate = new Date(params.from + 'T00:00:00.000Z')
   const toDate = new Date(params.to + 'T23:59:59.999Z')
+  const storeCurrency = await getShopifyStoreCurrency(
+    prisma,
+    connectionId,
+    { fromDate, toDate },
+    'USD'
+  )
   const toDateExtended = new Date(toDate)
   toDateExtended.setUTCDate(toDateExtended.getUTCDate() + 360)
 

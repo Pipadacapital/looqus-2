@@ -9,6 +9,7 @@ import { RTO_STATUS_CODES } from '@/lib/workspace-metrics/constants'
 import { getEffectiveDailyAggregates } from '@/lib/effective-daily'
 import { resolveLineItemCogs, normalizeCogsSettings } from '@/lib/cogs'
 import { getDailyVariableContribution } from '@/lib/workspace-costs'
+import { getShopifyStoreCurrency } from '@/lib/shopify/store-currency'
 
 const EXCHANGE_RATES: Record<string, number> = {
   USD: 1,
@@ -424,6 +425,12 @@ export async function computeCohorts(
   const toDate = new Date(params.to + 'T23:59:59.999Z')
   const toDateExtended = new Date(toDate)
   toDateExtended.setUTCDate(toDateExtended.getUTCDate() + 360)
+  const storeCurrency = await getShopifyStoreCurrency(
+    prisma,
+    connectionId,
+    { fromDate, toDate },
+    'USD'
+  )
 
   const orderFilterSettings = normalizeOrderFilterSettings({
     skippedShopifyOrderTags: workspace.skippedShopifyOrderTags ?? [],
@@ -433,7 +440,7 @@ export async function computeCohorts(
 
   const [firstOrders, dailyRates, adSpendByMonth, totalAdSpend, rtoIds, dailyReturnsAndSales, dailyAdSpend] = await Promise.all([
     fetchCustomerFirstOrdersInRange(prisma, connectionId, fromDate, toDate, orderFilterSettings),
-    buildDailyRates(prisma, workspace.id, connectionId, fromDate, toDateExtended, 'INR', orderInclusionWhere),
+    buildDailyRates(prisma, workspace.id, connectionId, fromDate, toDateExtended, storeCurrency, orderInclusionWhere),
     getAdSpendByMonth(prisma, workspace, fromDate, toDate),
     getTotalAdSpend(prisma, workspace, fromDate, toDate),
     getRtoOrderIdentifiers(prisma, workspace.id, connectionId, fromDate, toDateExtended, orderInclusionWhere),
@@ -464,7 +471,6 @@ export async function computeCohorts(
     select: { id: true, customerShopifyId: true, processedAt: true, totalPrice: true, orderNumber: true, name: true },
   })
   const orderCogsMap = await getOrderCogs(prisma, connectionId, orders.map((o) => o.id), workspace.id)
-  const storeCurrency = 'INR'
 
   const firstOrderMetrics = new Map<string, { firstOrder: number; firstOrderR: number }>()
   const repeatByCohortBucket = new Map<string, Map<number, { sum: number; customers: Set<string>; orders: number }>>()

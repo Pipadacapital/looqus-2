@@ -63,7 +63,7 @@ function applyYtdPreset(onFrom: (s: string) => void, onTo: (s: string) => void) 
 }
 
 const chartConfig = {
-  value: { label: 'Value (₹)', color: 'hsl(0 0% 9%)' },
+  value: { label: 'Value', color: 'hsl(0 0% 9%)' },
   density: { label: 'Density', color: 'hsl(0 0% 9%)' },
 }
 

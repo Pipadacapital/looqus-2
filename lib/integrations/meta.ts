@@ -113,6 +113,22 @@ export async function fetchMetaAdAccounts(
   }))
 }
 
+export async function fetchMetaAdAccountNames(
+  accessToken: string,
+  adAccountIds: string[]
+): Promise<Record<string, string>> {
+  if (adAccountIds.length === 0) return {}
+  const accounts = await fetchMetaAdAccounts(accessToken)
+  const namesById: Record<string, string> = {}
+  const wanted = new Set(adAccountIds)
+  for (const account of accounts) {
+    if (!wanted.has(account.id)) continue
+    const name = account.name?.trim()
+    if (name) namesById[account.id] = name
+  }
+  return namesById
+}
+
 export async function fetchMetaUserId(
   accessToken: string
 ): Promise<string> {

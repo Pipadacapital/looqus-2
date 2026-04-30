@@ -8,6 +8,7 @@ import { computeLineItemsCogs, normalizeCogsSettings } from '@/lib/cogs'
 import { getDailyVariableContribution } from '@/lib/workspace-costs'
 import { fetchGoalRowsMap, buildGoalEvaluations } from '@/lib/metrics/goals'
 import type { GoalMetricId } from '@/lib/metrics/goal-metrics-registry'
+import { getShopifyStoreCurrency } from '@/lib/shopify/store-currency'
 
 // MVP Exchange Rates (Fallback to standard if a live API isn't used)
 const EXCHANGE_RATES: Record<string, number> = {
@@ -504,7 +505,12 @@ export async function GET(
   const totalTax = daily.reduce((sum, d) => sum + Number(d.totalTax), 0)
   const totalDiscount = daily.reduce((sum, d) => sum + Number(d.totalDiscount), 0)
   const totalOrders = daily.reduce((sum, d) => sum + d.ordersCount, 0)
-  const storeCurrency = daily[0]?.currency ?? 'USD'
+  const storeCurrency = await getShopifyStoreCurrency(
+    prisma,
+    connectionId,
+    { fromDate, toDate },
+    'USD'
+  )
 
   // Prepaid orders %: orders with financial status "Paid" (prepaid) vs total
   const orderCounts = await prisma.shopifyOrder.groupBy({

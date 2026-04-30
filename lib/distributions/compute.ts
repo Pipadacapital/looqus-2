@@ -31,6 +31,7 @@ import {
   normalizeOrderFilterSettings,
 } from '@/lib/order-filters'
 import { getOrderCogs, getDailyRates } from '@/lib/products/compute'
+import { getShopifyStoreCurrency } from '@/lib/shopify/store-currency'
 
 const MAX_ORDER_IDS_IN_QUERY = 10_000
 
@@ -164,7 +165,16 @@ export async function computeDistributions(
 ): Promise<DistributionsResult> {
   const connections = workspace?.shopifyConnections ?? []
   const connectionId = connections[0]?.id ?? null
-  const storeCurrency = 'INR'
+  const fromDate = new Date(params.from + 'T00:00:00.000Z')
+  const toDate = new Date(params.to + 'T23:59:59.999Z')
+  const storeCurrency = connectionId
+    ? await getShopifyStoreCurrency(
+        prisma,
+        connectionId,
+        { fromDate, toDate },
+        'USD'
+      )
+    : 'USD'
   if (!connectionId || !workspace?.id) {
     return {
       rows: [],
@@ -177,8 +187,6 @@ export async function computeDistributions(
     }
   }
 
-  const fromDate = new Date(params.from + 'T00:00:00.000Z')
-  const toDate = new Date(params.to + 'T23:59:59.999Z')
   const orderFilterSettings = normalizeOrderFilterSettings(workspace as any)
   const orderInclusionWhere = getOrderInclusionWhere(orderFilterSettings)
 

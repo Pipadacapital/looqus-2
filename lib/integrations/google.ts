@@ -244,4 +244,38 @@ export async function fetchGoogleCustomerCurrency(
   return currency?.trim()?.toUpperCase() || null
 }
 
+export async function fetchGoogleCustomerNames(
+  accessToken: string,
+  customerIds: string[]
+): Promise<Record<string, string>> {
+  const namesById: Record<string, string> = {}
+  for (const customerId of customerIds) {
+    try {
+      const rows = await executeGaql(
+        accessToken,
+        customerId,
+        'SELECT customer.id, customer.descriptive_name FROM customer LIMIT 1'
+      )
+      const customer = (rows[0] as {
+        customer?: { id?: unknown; descriptiveName?: unknown; descriptive_name?: unknown }
+      } | undefined)?.customer
+      const resolvedId =
+        typeof customer?.id === 'string'
+          ? customer.id
+          : typeof customer?.id === 'number'
+            ? String(customer.id)
+            : customerId
+      const rawName =
+        (typeof customer?.descriptiveName === 'string' && customer.descriptiveName) ||
+        (typeof customer?.descriptive_name === 'string' && customer.descriptive_name) ||
+        ''
+      const name = rawName.trim()
+      if (name) namesById[resolvedId] = name
+    } catch {
+      // Best effort: keep rendering IDs if name lookup fails.
+    }
+  }
+  return namesById
+}
+
 export { GOOGLE_DEVELOPER_TOKEN, GOOGLE_LOGIN_CUSTOMER_ID }

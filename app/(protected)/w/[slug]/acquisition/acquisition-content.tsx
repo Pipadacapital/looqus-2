@@ -117,12 +117,12 @@ type AcquisitionTrendRow = {
 }
 
 type AcquisitionCompositionSummary = {
-  discountsPct: number
-  cm2Pct: number
-  adSpendPct: number
-  cogsPct: number
-  variableCostsPct: number
-  refundsPct: number
+  discountsPct: number | null
+  cm2Pct: number | null
+  adSpendPct: number | null
+  cogsPct: number | null
+  variableCostsPct: number | null
+  refundsPct: number | null
 }
 
 type AcquisitionCompositionDailyRow = {
@@ -670,6 +670,8 @@ function AcquisitionCompositionSection({
   composition: { summary: AcquisitionCompositionSummary; daily: AcquisitionCompositionDailyRow[] }
 }) {
   const { summary, daily } = composition
+  const formatPct = (value: number | null | undefined) =>
+    typeof value === 'number' ? `${value.toFixed(2)}%` : '—'
   const compConfig = {
     ncContributionMarginPct: { label: 'NC Contribution Margin', color: COMPOSITION_COLORS.ncContributionMarginPct },
     adSpendPct: { label: 'Ad Spend', color: COMPOSITION_COLORS.adSpendPct },
@@ -697,27 +699,35 @@ function AcquisitionCompositionSection({
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
           <div className="space-y-0.5">
             <p className="text-xs text-muted-foreground">Discounts %</p>
-            <p className="font-medium">{summary.discountsPct.toFixed(2)}%</p>
+            <p className="font-medium">{formatPct(summary.discountsPct)}</p>
           </div>
           <div className="space-y-0.5">
             <p className="text-xs text-muted-foreground">CM2 %</p>
-            <p className={`font-medium ${summary.cm2Pct < 0 ? 'text-blue-600' : ''}`}>{summary.cm2Pct.toFixed(2)}%</p>
+            <p
+              className={`font-medium ${
+                typeof summary.cm2Pct === 'number' && summary.cm2Pct < 0
+                  ? 'text-blue-600'
+                  : ''
+              }`}
+            >
+              {formatPct(summary.cm2Pct)}
+            </p>
           </div>
           <div className="space-y-0.5">
             <p className="text-xs text-muted-foreground">Ad Spend %</p>
-            <p className="font-medium">{summary.adSpendPct.toFixed(2)}%</p>
+            <p className="font-medium">{formatPct(summary.adSpendPct)}</p>
           </div>
           <div className="space-y-0.5">
             <p className="text-xs text-muted-foreground">COGS %</p>
-            <p className="font-medium">{summary.cogsPct.toFixed(2)}%</p>
+            <p className="font-medium">{formatPct(summary.cogsPct)}</p>
           </div>
           <div className="space-y-0.5">
             <p className="text-xs text-muted-foreground">Variable Costs %</p>
-            <p className="font-medium">{summary.variableCostsPct.toFixed(2)}%</p>
+            <p className="font-medium">{formatPct(summary.variableCostsPct)}</p>
           </div>
           <div className="space-y-0.5">
             <p className="text-xs text-muted-foreground">Refunds %</p>
-            <p className="font-medium">{summary.refundsPct.toFixed(2)}%</p>
+            <p className="font-medium">{formatPct(summary.refundsPct)}</p>
           </div>
         </div>
       </div>

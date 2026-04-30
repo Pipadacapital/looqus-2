@@ -13,6 +13,7 @@ import {
 import { computeLineItemsCogs, normalizeCogsSettings } from '@/lib/cogs'
 import { getDailyVariableContribution } from '@/lib/workspace-costs'
 import { getLogisticsSummary } from '@/lib/workspace-metrics/logistics-summary'
+import { getShopifyStoreCurrency } from '@/lib/shopify/store-currency'
 
 const EXCHANGE_RATES: Record<string, number> = {
   USD: 1,
@@ -610,11 +611,16 @@ export async function GET(
     return NextResponse.json({
       steps: [],
       table: [],
-      currency: 'INR',
+      currency: 'USD',
     })
   }
 
-  const storeCurrency = 'INR'
+  const storeCurrency = await getShopifyStoreCurrency(
+    prisma,
+    connectionId,
+    { fromDate, toDate },
+    'USD'
+  )
   const orderInclusionWhere = getOrderInclusionWhereFromWorkspace(workspace as any)
   const orderFilterSettings = normalizeOrderFilterSettings(workspace as any)
 

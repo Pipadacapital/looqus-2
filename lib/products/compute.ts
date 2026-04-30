@@ -15,6 +15,7 @@ import {
   getUnicommerceProductMap,
   isUnicommerceActive,
 } from '@/lib/unicommerce/product-resolver'
+import { getShopifyStoreCurrency } from '@/lib/shopify/store-currency'
 
 const EXCHANGE_RATES: Record<string, number> = {
   USD: 1,
@@ -184,7 +185,16 @@ export async function computeProducts(
 ): Promise<{ rows: ProductsRow[]; totalRows: number; currency: string }> {
   const connections = workspace?.shopifyConnections ?? []
   const connectionId = connections[0]?.id ?? null
-  const storeCurrency = 'INR'
+  const fromDate = new Date(params.from + 'T00:00:00.000Z')
+  const toDate = new Date(params.to + 'T23:59:59.999Z')
+  const storeCurrency = connectionId
+    ? await getShopifyStoreCurrency(
+        prisma,
+        connectionId,
+        { fromDate, toDate },
+        'USD'
+      )
+    : 'USD'
   if (!connectionId || !workspace?.id) {
     return { rows: [], totalRows: 0, currency: storeCurrency }
   }
@@ -194,8 +204,6 @@ export async function computeProducts(
     ? await getUnicommerceProductMap(workspaceId)
     : null
 
-  const fromDate = new Date(params.from + 'T00:00:00.000Z')
-  const toDate = new Date(params.to + 'T23:59:59.999Z')
   const orderFilterSettings = normalizeOrderFilterSettings(workspace as any)
   const orderInclusionWhere = getOrderInclusionWhere(orderFilterSettings)
 

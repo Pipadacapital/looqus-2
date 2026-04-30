@@ -14,6 +14,7 @@ import {
 } from '@/lib/order-filters'
 import { computeLineItemsCogs, normalizeCogsSettings } from '@/lib/cogs'
 import { getDailyVariableContribution } from '@/lib/workspace-costs'
+import { getShopifyStoreCurrency } from '@/lib/shopify/store-currency'
 
 const EXCHANGE_RATES: Record<string, number> = {
   USD: 1,
@@ -150,7 +151,7 @@ export async function GET(
     if (process.env.NODE_ENV === 'development') {
       console.log('[P&L] No store connection', { workspaceId: workspace.id, slug, platform: workspace.platform })
     }
-    return NextResponse.json({ rows: [], currency: isWoocommerce ? 'USD' : 'INR' })
+    return NextResponse.json({ rows: [], currency: 'USD' })
   }
 
   const today = new Date()
@@ -165,12 +166,12 @@ export async function GET(
 
   if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime()) || fromDate > toDate) {
     return NextResponse.json(
-      { error: 'Invalid date range', rows: [], currency: isWoocommerce ? 'USD' : 'INR' },
+      { error: 'Invalid date range', rows: [], currency: 'USD' },
       { status: 400 }
     )
   }
 
-  let storeCurrency = 'INR'
+  let storeCurrency = 'USD'
   const orderFilterSettings = normalizeOrderFilterSettings(workspace as any)
   const orderInclusionWhere = getOrderInclusionWhereFromWorkspace(workspace as any)
   const effectiveConnectionId = isWoocommerce ? woocommerceConnectionId : connectionId
@@ -330,12 +331,12 @@ export async function GET(
 
   storeCurrency = isWoocommerce
     ? (workspace.woocommerceConnection?.currency ?? 'USD')
-    : (() => {
-        const dailyWithCurrency = dailyAnalytics.find(
-          (d) => typeof d.currency === 'string' && d.currency.trim().length > 0
-        )
-        return dailyWithCurrency?.currency ?? 'INR'
-      })()
+    : await getShopifyStoreCurrency(
+        prisma,
+        effectiveConnectionId!,
+        { fromDate, toDate },
+        'USD'
+      )
 
   // Diagnostic: latest order date, latest analytics date, row counts (for debugging P&L after 2026-03-08)
   const getOrderDate = (order: any): Date | null =>

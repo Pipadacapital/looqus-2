@@ -4,14 +4,12 @@ import { prisma } from '@/lib/prisma'
 import {
   normalizeShopDomain,
   validateShopDomain,
-  generateNonce,
-  buildAuthUrl,
+  fetchShopInfo,
 } from '@/lib/shopify/client'
 
 /**
- * Accepts shopDomain + workspaceSlug, then returns the Shopify OAuth
- * authorization URL for the frontend to redirect the user to.
- * Credentials come from env (SHOPIFY_CLIENT_ID / SHOPIFY_CLIENT_SECRET).
+ * Connects a Shopify store using a per-store Admin API access token.
+ * No OAuth redirect flow is required.
  */
 export async function POST(request: NextRequest) {
   const supabase = await createClient()
@@ -26,6 +24,7 @@ export async function POST(request: NextRequest) {
   let body: {
     shopDomain: string
     workspaceSlug: string
+    accessToken: string
   }
 
   try {
@@ -36,18 +35,25 @@ export async function POST(request: NextRequest) {
 
   const { workspaceSlug } = body
 
-  if (!body.shopDomain || !workspaceSlug) {
+  if (!body.shopDomain || !workspaceSlug || !body.accessToken) {
     return NextResponse.json(
-      { error: 'Missing required fields: shopDomain, workspaceSlug' },
+      { error: 'Missing required fields: shopDomain, workspaceSlug, accessToken' },
       { status: 400 }
     )
   }
 
   const shopDomain = normalizeShopDomain(body.shopDomain)
+  const accessToken = body.accessToken.trim()
 
   if (!validateShopDomain(shopDomain)) {
     return NextResponse.json(
       { error: 'Invalid Shopify store domain' },
+      { status: 400 }
+    )
+  }
+  if (!accessToken) {
+    return NextResponse.json(
+      { error: 'Shopify Admin API access token is required' },
       { status: 400 }
     )
   }
@@ -80,25 +86,50 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  const nonce = generateNonce()
-  const authUrl = buildAuthUrl(shopDomain, nonce)
+  try {
+    const shopInfo = await fetchShopInfo(shopDomain, accessToken)
 
-  const oauthState = JSON.stringify({
-    nonce,
-    workspaceSlug,
-    userId: user.id,
-    shopDomain,
-  })
+    await prisma.shopifyConnection.upsert({
+      where: {
+        workspaceId_shopDomain: {
+          workspaceId: workspace.id,
+          shopDomain,
+        },
+      },
+      create: {
+        workspaceId: workspace.id,
+        shopDomain,
+        shopifyStoreId: shopInfo.id,
+        accessToken,
+        scopes: [],
+        status: 'CONNECTED',
+        installedAt: new Date(),
+      },
+      update: {
+        shopifyStoreId: shopInfo.id,
+        accessToken,
+        status: 'CONNECTED',
+        installedAt: new Date(),
+      },
+    })
 
-  const response = NextResponse.json({ authUrl })
+    await prisma.workspace.update({
+      where: { id: workspace.id },
+      data: { storeUrl: shopDomain },
+    })
 
-  response.cookies.set('shopify_oauth_state', oauthState, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
-    path: '/',
-    maxAge: 600,
-  })
-
-  return response
+    return NextResponse.json({
+      ok: true,
+      shopDomain,
+      shopName: shopInfo.name,
+    })
+  } catch {
+    return NextResponse.json(
+      {
+        error:
+          'Could not verify Shopify token for this store. Check shop domain and Admin API access token.',
+      },
+      { status: 400 }
+    )
+  }
 }

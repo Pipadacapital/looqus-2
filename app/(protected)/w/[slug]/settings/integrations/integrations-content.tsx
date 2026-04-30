@@ -45,6 +45,7 @@ type ShopifyConnectionInfo = {
 type MetaConnectionInfo = {
   id: string
   adAccountIds: string[]
+  adAccountNames: Record<string, string>
   selectedAdAccountId: string | null
   selectedAdAccountIds: string[]
   metaUserId: string | null
@@ -57,6 +58,7 @@ type MetaConnectionInfo = {
 type GoogleConnectionInfo = {
   id: string
   customerIds: string[]
+  customerNames: Record<string, string>
   selectedCustomerId: string | null
   selectedCustomerIds: string[]
   googleEmail: string | null
@@ -139,6 +141,7 @@ export function IntegrationsContent({
   const canManage = can.manageIntegrations(current.userRole)
   const canChangeAdAccounts = can.changeAdAccounts(current.userRole)
   const [storeHandle, setStoreHandle] = useState('')
+  const [shopifyAccessToken, setShopifyAccessToken] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [connecting, setConnecting] = useState(false)
 
@@ -199,7 +202,15 @@ export function IntegrationsContent({
   const [wcDisconnecting, setWcDisconnecting] = useState(false)
   const [wcError, setWcError] = useState<string | null>(null)
 
-  const canConnect = !!storeHandle.trim()
+  const canConnect = !!storeHandle.trim() && !!shopifyAccessToken.trim()
+  const formatMetaAccountLabel = (accountId: string) => {
+    const name = metaConnection?.adAccountNames?.[accountId]?.trim()
+    return name ? `${name} (${accountId})` : accountId
+  }
+  const formatGoogleCustomerLabel = (customerId: string) => {
+    const name = googleConnection?.customerNames?.[customerId]?.trim()
+    return name ? `${name} (${customerId})` : customerId
+  }
 
   const handleConnect = async () => {
     if (!canConnect) return
@@ -221,6 +232,7 @@ export function IntegrationsContent({
         body: JSON.stringify({
           shopDomain: cleaned,
           workspaceSlug,
+          accessToken: shopifyAccessToken.trim(),
         }),
       })
 
@@ -231,7 +243,11 @@ export function IntegrationsContent({
         return
       }
 
-      window.location.href = data.authUrl
+      setDialogOpen(false)
+      setStoreHandle('')
+      setShopifyAccessToken('')
+      toast.success(`Shopify connected: ${data.shopName || cleaned}`)
+      window.location.reload()
     } catch {
       setError('Network error. Please try again.')
     } finally {
@@ -841,7 +857,8 @@ export function IntegrationsContent({
                   <DialogHeader>
                     <DialogTitle>Connect your Shopify store</DialogTitle>
                     <DialogDescription>
-                      Enter your store URL and click Continue. You&apos;ll be redirected to Shopify to approve the connection.
+                      Enter your store URL and Admin API access token from the
+                      store&apos;s custom app.
                     </DialogDescription>
                   </DialogHeader>
                   <div className="grid gap-4 py-2">
@@ -852,15 +869,30 @@ export function IntegrationsContent({
                         <span className="flex h-9 items-center rounded-r-md border border-l-0 bg-muted px-3 text-sm text-muted-foreground">.myshopify.com</span>
                       </div>
                     </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="shopify-access-token">Admin API Access Token</Label>
+                      <Input
+                        id="shopify-access-token"
+                        type="password"
+                        placeholder="shpat_..."
+                        value={shopifyAccessToken}
+                        onChange={(e) => setShopifyAccessToken(e.target.value)}
+                        autoComplete="off"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        In Shopify Admin: Apps → your custom app → API credentials
+                        → Admin API access token.
+                      </p>
+                    </div>
                     {error && <p className="text-sm text-destructive">{error}</p>}
                   </div>
                   <DialogFooter>
                     <Button variant="ghost" onClick={() => setDialogOpen(false)} disabled={connecting}>Cancel</Button>
                     <Button onClick={handleConnect} disabled={!canConnect || connecting}>
                       {connecting ? (
-                        <><IconLoader2 className="mr-1.5 h-4 w-4 animate-spin" />Redirecting to Shopify...</>
+                        <><IconLoader2 className="mr-1.5 h-4 w-4 animate-spin" />Verifying token...</>
                       ) : (
-                        <><IconPlugConnected className="mr-1.5 h-4 w-4" />Continue to Shopify</>
+                        <><IconPlugConnected className="mr-1.5 h-4 w-4" />Connect Shopify</>
                       )}
                     </Button>
                   </DialogFooter>
@@ -925,7 +957,7 @@ export function IntegrationsContent({
                             }
                             className="h-3.5 w-3.5"
                           />
-                          {id}
+                          {formatMetaAccountLabel(id)}
                         </label>
                       )
                     })}
@@ -1044,7 +1076,7 @@ export function IntegrationsContent({
                             }
                             className="h-3.5 w-3.5"
                           />
-                          {id}
+                          {formatGoogleCustomerLabel(id)}
                         </label>
                       )
                     })}

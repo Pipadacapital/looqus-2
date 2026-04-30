@@ -168,7 +168,7 @@ export function CalendarReportContent({ workspaceSlug }: { workspaceSlug: string
   const [selectedMonth, setSelectedMonth] = useState(currentMonthYm)
   const [granularity, setGranularity] = useState<'day' | 'week' | 'month'>('day')
   const [rows, setRows] = useState<Row[]>([])
-  const [currency, setCurrency] = useState('INR')
+  const [currency, setCurrency] = useState('USD')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [festivalsInMonth, setFestivalsInMonth] = useState<Festival[]>([])
@@ -183,7 +183,7 @@ export function CalendarReportContent({ workspaceSlug }: { workspaceSlug: string
       const json = await res.json()
       if (!res.ok) throw new Error(json.error || 'Failed to load')
       setRows(json.rows ?? [])
-      setCurrency(json.currency ?? 'INR')
+      setCurrency(json.currency ?? 'USD')
 
       const y = selectedMonth.slice(0, 4)
       const festRes = await fetch(`/api/workspaces/${workspaceSlug}/festivals?year=${encodeURIComponent(y)}`)

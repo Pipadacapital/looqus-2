@@ -1,5 +1,10 @@
 import { prisma } from '@/lib/prisma'
 import { getCurrentUserRole } from '@/lib/require-superadmin'
+import { fetchMetaAdAccountNames } from '@/lib/integrations/meta'
+import {
+  fetchGoogleCustomerNames,
+  refreshGoogleAccessToken,
+} from '@/lib/integrations/google'
 import { IntegrationsContent } from './integrations-content'
 
 export async function IntegrationsLoader({ slug }: { slug: string }) {
@@ -26,6 +31,7 @@ export async function IntegrationsLoader({ slug }: { slug: string }) {
         meta_ads_connections: {
           select: {
             id: true,
+            access_token: true,
             ad_account_ids: true,
             selected_ad_account_id: true,
             selected_ad_account_ids: true,
@@ -39,6 +45,7 @@ export async function IntegrationsLoader({ slug }: { slug: string }) {
         google_ads_connections: {
           select: {
             id: true,
+            refresh_token: true,
             customer_ids: true,
             selected_customer_id: true,
             selected_customer_ids: true,
@@ -117,6 +124,33 @@ export async function IntegrationsLoader({ slug }: { slug: string }) {
   const woocommerceRaw = workspace.woocommerceConnection
   const woocommerceConnection =
     woocommerceRaw?.status === 'CONNECTED' ? woocommerceRaw : null
+  let metaAccountNames: Record<string, string> = {}
+  let googleCustomerNames: Record<string, string> = {}
+
+  if (metaConnection && metaConnection.access_token && metaConnection.ad_account_ids.length > 0) {
+    try {
+      metaAccountNames = await fetchMetaAdAccountNames(
+        metaConnection.access_token,
+        metaConnection.ad_account_ids
+      )
+    } catch {
+      metaAccountNames = {}
+    }
+  }
+
+  if (googleConnection && googleConnection.refresh_token && googleConnection.customer_ids.length > 0) {
+    try {
+      const { accessToken } = await refreshGoogleAccessToken(
+        googleConnection.refresh_token
+      )
+      googleCustomerNames = await fetchGoogleCustomerNames(
+        accessToken,
+        googleConnection.customer_ids
+      )
+    } catch {
+      googleCustomerNames = {}
+    }
+  }
 
   return (
     <IntegrationsContent
@@ -143,6 +177,7 @@ export async function IntegrationsLoader({ slug }: { slug: string }) {
               adAccountIds: metaConnection.ad_account_ids,
               selectedAdAccountId: metaConnection.selected_ad_account_id,
               selectedAdAccountIds: metaConnection.selected_ad_account_ids,
+              adAccountNames: metaAccountNames,
               metaUserId: metaConnection.meta_user_id,
               status: metaConnection.status,
               lastSyncAt: metaConnection.last_sync_at?.toISOString() ?? null,
@@ -158,6 +193,7 @@ export async function IntegrationsLoader({ slug }: { slug: string }) {
               customerIds: googleConnection.customer_ids,
               selectedCustomerId: googleConnection.selected_customer_id,
               selectedCustomerIds: googleConnection.selected_customer_ids,
+              customerNames: googleCustomerNames,
               googleEmail: googleConnection.google_email,
               status: googleConnection.status,
               lastSyncAt: googleConnection.last_sync_at?.toISOString() ?? null,

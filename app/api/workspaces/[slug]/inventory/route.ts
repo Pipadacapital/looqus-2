@@ -19,6 +19,7 @@ import {
   isUnicommerceActive,
 } from '@/lib/unicommerce/product-resolver'
 import { fetchWoocommerceProductVariations } from '@/lib/integrations/woocommerce'
+import { getShopifyStoreCurrency } from '@/lib/shopify/store-currency'
 
 const WOO_LEAD_TIME_PREFIX = 'woo:p'
 
@@ -563,9 +564,9 @@ export async function GET(
       page,
       pageSize,
       totalPages: 0,
+      currency: 'USD',
     })
   }
-
   const orderInclusionFragment = getOrderInclusionRawFragment(
     normalizeOrderFilterSettings(workspace),
     'o'
@@ -661,6 +662,15 @@ export async function GET(
 
   const l360Start = new Date(asOf + 'T00:00:00.000Z')
   l360Start.setUTCDate(l360Start.getUTCDate() - 360)
+  const shopifyCurrency = await getShopifyStoreCurrency(
+    prisma,
+    connectionId,
+    {
+      fromDate: l360Start,
+      toDate: asOfDate,
+    },
+    'USD'
+  )
 
   // N14LY: last year's +14d window
   const n14lyStart = new Date(asOf + 'T00:00:00.000Z')
@@ -687,6 +697,7 @@ export async function GET(
       productId,
       connectionId,
       workspaceId: workspace.id,
+      shopifyCurrency,
       page,
       pageSize,
       sort,
@@ -921,7 +932,7 @@ export async function GET(
     }
   })
 
-  return NextResponse.json({ data, total, page, pageSize, totalPages })
+  return NextResponse.json({ data, total, page, pageSize, totalPages, currency: shopifyCurrency })
 }
 
 // ────────────────────── Variant-level view ──────────────────────
@@ -930,6 +941,7 @@ async function handleVariantView(opts: {
   productId: string
   connectionId: string
   workspaceId: string
+  shopifyCurrency: string
   page: number
   pageSize: number
   sort: string
@@ -946,6 +958,7 @@ async function handleVariantView(opts: {
 }) {
   const {
     productId, connectionId, workspaceId,
+    shopifyCurrency,
     page, pageSize, sort, dir, search,
     asOfDate, l30Start, l90Start, l180Start, l360Start, n14lyStart, n14lyEnd,
     orderInclusionFragment,
@@ -996,6 +1009,7 @@ async function handleVariantView(opts: {
       pageSize,
       totalPages: 0,
       productTitle: product.title,
+      currency: shopifyCurrency,
     })
   }
 
@@ -1170,6 +1184,7 @@ async function handleVariantView(opts: {
     pageSize,
     totalPages,
     productTitle: product.title,
+    currency: shopifyCurrency,
   })
 }
 

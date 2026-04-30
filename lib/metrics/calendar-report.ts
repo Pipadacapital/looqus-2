@@ -18,6 +18,7 @@ import { normalizeOrderFilterSettings, type OrderFilterSettings } from '@/lib/me
 import { computeCalendarDaySlicesBatched } from '@/lib/metrics/calendar-daily-batch'
 import { goalPeriodAnchor, evaluateGoalRow, type GoalRag } from '@/lib/metrics/goals'
 import type { GoalMetricId } from '@/lib/metrics/goal-metrics-registry'
+import { getShopifyStoreCurrency } from '@/lib/shopify/store-currency'
 
 export const MARKETING_ACTION_TYPES = [
   'email_campaign',
@@ -173,7 +174,19 @@ export async function computeCalendarReport(
 ): Promise<{ rows: CalendarReportRow[]; currency: string }> {
   const fromD = parseISO(`${params.from}T00:00:00.000Z`)
   const toD = parseISO(`${params.to}T00:00:00.000Z`)
-  if (fromD > toD) return { rows: [], currency: 'INR' }
+  const connectionId = workspaceMetrics.shopifyConnections?.[0]?.id
+  const resolvedCurrency = connectionId
+    ? await getShopifyStoreCurrency(
+        prisma,
+        connectionId,
+        {
+          fromDate: new Date(`${params.from}T00:00:00.000Z`),
+          toDate: new Date(`${params.to}T23:59:59.999Z`),
+        },
+        'USD'
+      )
+    : 'USD'
+  if (fromD > toD) return { rows: [], currency: resolvedCurrency }
 
   const days = eachDayOfInterval({ start: fromD, end: toD })
   if (days.length > MAX_CALENDAR_DAYS) {
@@ -212,11 +225,10 @@ export async function computeCalendarReport(
   const acqByDate = new Map(acqResult.daily.map((d) => [d.date, d]))
 
   const daySlices: DaySlice[] = []
-  let currency = batchedDays[0]?.currency ?? 'INR'
+  const currency = resolvedCurrency
 
   for (const w of batchedDays) {
     const dateStr = w.date
-    currency = w.currency
     const acq = acqByDate.get(dateStr)
     const mer = w.totalAdSpend > 0 ? w.netSales / w.totalAdSpend : null
     const orders = w.ordersCount

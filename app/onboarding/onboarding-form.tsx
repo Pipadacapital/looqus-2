@@ -386,7 +386,7 @@ export function OnboardingForm({
                 </div>
                 <div>
                   <p className="font-semibold">Shopify</p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">Connect via OAuth</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">Connect via custom app token</p>
                 </div>
                 {platform === 'shopify' && (
                   <div className="flex h-5 w-5 items-center justify-center rounded-full bg-primary">
@@ -431,8 +431,8 @@ export function OnboardingForm({
             <div>
               <h2 className="text-lg font-semibold">Connect your Shopify store</h2>
               <p className="text-sm text-muted-foreground">
-                Enter your Shopify store URL and click Connect.
-                You&apos;ll be redirected to Shopify to approve the connection.
+                Enter your Shopify store URL now. You can connect from Integrations
+                using your custom app Admin API token after launch.
               </p>
             </div>
 
@@ -540,24 +540,11 @@ export function OnboardingForm({
               {/* Shopify: skip + connect */}
               {platform === 'shopify' && (
                 <>
-                  {storeUrl.trim() && (
-                    <Button
-                      variant="ghost"
-                      onClick={() => handleSubmit(false)}
-                      disabled={isPending}
-                    >
-                      Skip for now
-                    </Button>
-                  )}
                   <Button
-                    onClick={() => handleSubmit(!!storeUrl.trim())}
+                    onClick={() => handleSubmit(false)}
                     disabled={isPending}
                   >
-                    {isPending
-                      ? 'Setting up...'
-                      : storeUrl.trim()
-                        ? 'Connect & launch'
-                        : 'Skip & launch'}
+                    {isPending ? 'Setting up...' : 'Launch workspace'}
                     <IconArrowRight className="ml-1.5 h-4 w-4" />
                   </Button>
                 </>

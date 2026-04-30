@@ -22,6 +22,7 @@ import {
   DateRangeFilter,
   AnalyticsMetricsCards,
   type ShopifyAnalyticsSummary,
+  formatCurrency,
 } from '@/components/analytics'
 
 type ShopifyConnectionInfo = {
@@ -254,24 +255,22 @@ export function AnalyticsContent({
                           axisLine={false}
                           tickMargin={8}
                           tickFormatter={(v) =>
-                            `${
-                              shopifyAnalytics.summary?.currency === 'INR'
-                                ? '₹'
-                                : '$'
-                            }${(v / 1000).toFixed(0)}k`
+                            `${formatCurrency(
+                              Number(v) / 1000,
+                              shopifyAnalytics.summary?.currency ?? 'USD',
+                              { maximumFractionDigits: 0 }
+                            )}k`
                           }
                         />
                         <ChartTooltip
                           content={
                             <ChartTooltipContent
                               formatter={(v) => [
-                                `${
-                                  shopifyAnalytics.summary?.currency === 'INR'
-                                    ? '₹'
-                                    : '$'
-                                }${Number(v).toLocaleString('en-IN', {
-                                  maximumFractionDigits: 0,
-                                })}`,
+                                formatCurrency(
+                                  Number(v),
+                                  shopifyAnalytics.summary?.currency ?? 'USD',
+                                  { maximumFractionDigits: 0 }
+                                ),
                                 'Net sales',
                               ]}
                               labelFormatter={(_, payload) =>
