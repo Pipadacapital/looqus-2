@@ -4,6 +4,11 @@ import { prisma } from '@/lib/prisma'
 import { featureGuard } from '@/lib/features'
 import { computeDistributions } from '@/lib/distributions/compute'
 import type { DistributionsMetric, DistributionsSortColumn } from '@/lib/distributions/compute'
+import {
+  isWoocommerceOrderIncluded,
+  normalizeOrderFilterSettings,
+} from '@/lib/order-filters'
+import { ensureWooOrderTypesForOrderFilters } from '@/lib/integrations/woocommerce-sync'
 
 function parseDate(s: string | null): string | null {
   if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return null
@@ -151,6 +156,8 @@ export async function GET(
         })
       }
 
+      const orderFilterSettings = normalizeOrderFilterSettings(workspace as any)
+      await ensureWooOrderTypesForOrderFilters(wooConn.id, orderFilterSettings, { maxUpdates: 5000 })
       const orders = await prisma.woocommerceOrder.findMany({
         where: {
           connectionId: wooConn.id,
@@ -160,6 +167,9 @@ export async function GET(
         select: {
           id: true,
           currency: true,
+          total: true,
+          orderType: true,
+          rawJson: true,
           lineItems: {
             select: {
               productId: true,
@@ -173,6 +183,12 @@ export async function GET(
           },
         },
       })
+      const includedOrders = orders.filter((o) =>
+        isWoocommerceOrderIncluded(
+          { orderType: o.orderType, rawJson: o.rawJson, total: o.total },
+          orderFilterSettings
+        )
+      )
       const anyOrderWithCurrency = await prisma.woocommerceOrder.findFirst({
         where: {
           connectionId: wooConn.id,
@@ -203,7 +219,7 @@ export async function GET(
       type ProductAcc = { label: string; perOrderSales: number[]; perOrderCM1: number[] }
       const byProduct = new Map<string, ProductAcc>()
 
-      for (const order of orders) {
+      for (const order of includedOrders) {
         const perOrderProduct = new Map<string, { label: string; sales: number; cogs: number }>()
 
         for (const li of order.lineItems) {

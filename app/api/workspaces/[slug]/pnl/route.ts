@@ -10,8 +10,14 @@ import {
   getOrderInclusionWhereFromWorkspace,
   getFilteredDailyAggregates,
   hasNoOrderFilters,
+  isWoocommerceOrderIncluded,
   normalizeOrderFilterSettings,
+  resolveWoocommerceOrderType,
 } from '@/lib/order-filters'
+import {
+  ensureWooOrderTypesForOrderFilters,
+  fetchLiveWoocommerceOrderTypeMap,
+} from '@/lib/integrations/woocommerce-sync'
 import { computeLineItemsCogs, normalizeCogsSettings } from '@/lib/cogs'
 import { getDailyVariableContribution } from '@/lib/workspace-costs'
 import { getShopifyStoreCurrency } from '@/lib/shopify/store-currency'
@@ -103,7 +109,7 @@ export async function GET(
         take: 1,
       },
       woocommerceConnection: {
-        select: { id: true, status: true, currency: true },
+        select: { id: true, status: true, currency: true, storeUrl: true, consumerKey: true, consumerSecret: true },
       },
       cogsSettings: true,
       meta_ads_connections: {
@@ -175,6 +181,12 @@ export async function GET(
   const orderFilterSettings = normalizeOrderFilterSettings(workspace as any)
   const orderInclusionWhere = getOrderInclusionWhereFromWorkspace(workspace as any)
   const effectiveConnectionId = isWoocommerce ? woocommerceConnectionId : connectionId
+
+  if (isWoocommerce && woocommerceConnectionId) {
+    await ensureWooOrderTypesForOrderFilters(woocommerceConnectionId, orderFilterSettings, {
+      maxUpdates: 5000,
+    })
+  }
 
   // Load all data in parallel (orders and line items respect workspace order filters)
   const [
@@ -294,6 +306,7 @@ export async function GET(
           },
           select: {
             id: true,
+            wcOrderId: true,
             customerId: true,
             dateCreated: true,
             total: true,
@@ -304,6 +317,8 @@ export async function GET(
             shippingRefund: true,
             currency: true,
             status: true,
+            orderType: true,
+            rawJson: true,
           },
         })
       : prisma.shopifyOrder.findMany({
@@ -338,6 +353,49 @@ export async function GET(
         'USD'
       )
 
+  let effectiveOrdersInRange: any[] = allOrdersInRange as any[]
+  let effectiveLineItemsInRange: any[] = lineItemsInRange as any[]
+  if (isWoocommerce) {
+    let liveOrderTypeByWooOrderId = new Map<number, string>()
+    const needsLiveOrderTypes =
+      orderFilterSettings.skippedShopifyOrderTags.length > 0 &&
+      allOrdersInRange.some((o: any) =>
+        !resolveWoocommerceOrderType({ orderType: o.orderType, rawJson: o.rawJson })
+      )
+    if (needsLiveOrderTypes && workspace.woocommerceConnection) {
+      try {
+        liveOrderTypeByWooOrderId = await fetchLiveWoocommerceOrderTypeMap(
+          {
+            storeUrl: workspace.woocommerceConnection.storeUrl,
+            consumerKey: workspace.woocommerceConnection.consumerKey,
+            consumerSecret: workspace.woocommerceConnection.consumerSecret,
+          },
+          fromDate,
+          toDate,
+          { maxPages: 10, lookbackDays: 3 }
+        )
+      } catch {
+        // Best-effort live enrichment when DB/raw_json lack order_type.
+      }
+    }
+
+    effectiveOrdersInRange = allOrdersInRange.filter((order: any) =>
+      isWoocommerceOrderIncluded(
+        {
+          orderType: liveOrderTypeByWooOrderId.get(order.wcOrderId) ?? order.orderType,
+          rawJson: order.rawJson,
+          total: order.total,
+        },
+        orderFilterSettings
+      )
+    )
+
+    const includedOrderIds = new Set(effectiveOrdersInRange.map((order: any) => order.id))
+    effectiveLineItemsInRange = lineItemsInRange.filter((li: any) =>
+      includedOrderIds.has(li.order?.id)
+    )
+  }
+
   // Diagnostic: latest order date, latest analytics date, row counts (for debugging P&L after 2026-03-08)
   const getOrderDate = (order: any): Date | null =>
     isWoocommerce ? (order.dateCreated ?? null) : (order.processedAt ?? null)
@@ -360,8 +418,8 @@ export async function GET(
     isWoocommerce ? Number(order.shippingRefund ?? 0) : 0
 
   const latestOrderDate =
-    allOrdersInRange.length > 0
-      ? allOrdersInRange.reduce((max: Date | null, o: any) => {
+    effectiveOrdersInRange.length > 0
+      ? effectiveOrdersInRange.reduce((max: Date | null, o: any) => {
           const date = getOrderDate(o)
           if (!date) return max
           if (!max) return date
@@ -378,8 +436,8 @@ export async function GET(
       slug,
       connectionId,
       dailyAnalyticsRows: dailyAnalytics.length,
-      ordersInRange: allOrdersInRange.length,
-      lineItemsInRange: lineItemsInRange.length,
+      ordersInRange: effectiveOrdersInRange.length,
+      lineItemsInRange: effectiveLineItemsInRange.length,
       latestShopifyOrderDate: latestOrderDate?.toISOString().slice(0, 10) ?? null,
       latestShopifyAnalyticsDailyDate: latestAnalyticsDate?.toISOString().slice(0, 10) ?? null,
     })
@@ -398,7 +456,7 @@ export async function GET(
       shipping_returns: number
     }
   >()
-  for (const o of allOrdersInRange) {
+  for (const o of effectiveOrdersInRange) {
     const orderDate = getOrderDate(o)
     if (!orderDate) continue
     const dateStr = orderDate.toISOString().slice(0, 10)
@@ -455,7 +513,7 @@ export async function GET(
       .map((p: any) => [isWoocommerce ? String(p.wcProductId) : p.shopifyId, Number(p.coq)])
   )
   const cogsSettings = normalizeCogsSettings(workspace.cogsSettings)
-  const lineItemsWithDate = lineItemsInRange
+  const lineItemsWithDate = effectiveLineItemsInRange
     .map((li: any) => {
       const orderProcessedAt = isWoocommerce
         ? (li.order?.dateCreated ?? null)
@@ -515,7 +573,7 @@ export async function GET(
 
   // First order per customer (from filtered orders in range) for NC/EC
   const firstAtMap = new Map<string, Date>()
-  for (const order of allOrdersInRange) {
+  for (const order of effectiveOrdersInRange) {
     const cid = getOrderCustomerId(order)
     if (!cid || cid === '') continue
     const existing = firstAtMap.get(cid)
@@ -537,7 +595,7 @@ export async function GET(
   const buckets = getBuckets(fromDate, toDate, granularity)
   const bucketByKey = new Map(buckets.map((b) => [b.key, b]))
 
-  for (const order of allOrdersInRange) {
+  for (const order of effectiveOrdersInRange) {
     const orderDate = getOrderDate(order)
     if (!orderDate) continue
     const rev = getOrderGross(order) - getOrderTax(order)

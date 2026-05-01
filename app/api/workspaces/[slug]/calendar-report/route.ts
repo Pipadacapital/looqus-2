@@ -10,7 +10,11 @@ import {
 } from 'date-fns'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
-import { normalizeOrderFilterSettings } from '@/lib/order-filters'
+import {
+  isWoocommerceOrderIncluded,
+  normalizeOrderFilterSettings,
+} from '@/lib/order-filters'
+import { ensureWooOrderTypesForOrderFilters } from '@/lib/integrations/woocommerce-sync'
 import {
   computeCalendarReport,
   MAX_CALENDAR_DAYS,
@@ -123,7 +127,9 @@ export async function GET(
       })
     }
 
-    const [orders, products, actions, klaviyoSends] = await Promise.all([
+    const orderFilterSettings = normalizeOrderFilterSettings(workspace as any)
+    await ensureWooOrderTypesForOrderFilters(wooConn.id, orderFilterSettings, { maxUpdates: 5000 })
+    const [allOrders, products, actions, klaviyoSends] = await Promise.all([
       prisma.woocommerceOrder.findMany({
         where: {
           connectionId: wooConn.id,
@@ -141,6 +147,8 @@ export async function GET(
           total: true,
           totalTax: true,
           totalRefund: true,
+          orderType: true,
+          rawJson: true,
           lineItems: { select: { sku: true, quantity: true } },
         },
         orderBy: { dateCreated: 'asc' },
@@ -175,6 +183,12 @@ export async function GET(
         },
       }),
     ])
+    const orders = allOrders.filter((o) =>
+      isWoocommerceOrderIncluded(
+        { orderType: o.orderType, rawJson: o.rawJson, total: o.total },
+        orderFilterSettings
+      )
+    )
 
     const meta = workspace.meta_ads_connections
     const google = workspace.google_ads_connections

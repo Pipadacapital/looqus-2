@@ -463,6 +463,126 @@ export async function fetchAdAccountAdInsights(
   throw new Error('Meta ad insights: exceeded field fallback retries')
 }
 
+/** Parse AdCreative / object_story_spec for a displayable image URL and Facebook video id. */
+export function extractMetaCreativePreview(creative: unknown): {
+  imageUrl: string | null
+  videoId: string | null
+} {
+  if (!creative || typeof creative !== 'object') return { imageUrl: null, videoId: null }
+  const c = creative as Record<string, unknown>
+  const thumb = typeof c.thumbnail_url === 'string' ? c.thumbnail_url.trim() : ''
+  const img = typeof c.image_url === 'string' ? c.image_url.trim() : ''
+  let videoId = c.video_id != null ? String(c.video_id).trim() : ''
+  let imageUrl = (thumb || img || '').trim() || null
+
+  const oss = c.object_story_spec
+  if (oss && typeof oss === 'object') {
+    const spec = oss as Record<string, unknown>
+    const linkData = spec.link_data
+    if (linkData && typeof linkData === 'object') {
+      const pic = (linkData as Record<string, unknown>).picture
+      if (!imageUrl && typeof pic === 'string' && pic.trim()) imageUrl = pic.trim()
+    }
+    const videoData = spec.video_data
+    if (videoData && typeof videoData === 'object') {
+      const vd = videoData as Record<string, unknown>
+      const vi = vd.video_id
+      if (!videoId && vi != null) videoId = String(vi).trim()
+      const viu = vd.image_url
+      if (!imageUrl && typeof viu === 'string' && viu.trim()) imageUrl = viu.trim()
+    }
+  }
+
+  return {
+    imageUrl: imageUrl || null,
+    videoId: videoId || null,
+  }
+}
+
+export type MetaAdCreativePreview = {
+  previewImageUrl: string | null
+  previewVideoId: string | null
+}
+
+const META_AD_CREATIVE_PREVIEW_CHUNK = 45
+
+/**
+ * Batch-read Ad nodes with creative fields (Graph `?ids=ad1,ad2`).
+ * Falls back to narrower field sets if Meta rejects nested `object_story_spec`.
+ */
+export async function fetchMetaAdCreativePreviews(
+  accessToken: string,
+  adIds: string[]
+): Promise<Map<string, MetaAdCreativePreview>> {
+  const out = new Map<string, MetaAdCreativePreview>()
+  const unique = [...new Set(adIds.map((id) => String(id).trim()).filter(Boolean))]
+  if (unique.length === 0) return out
+
+  const proof = appsecretProof(accessToken)
+  const fieldAttempts = [
+    'creative{thumbnail_url,image_url,video_id,object_story_spec}',
+    'creative{thumbnail_url,image_url,video_id}',
+    'creative{thumbnail_url,video_id}',
+  ]
+
+  for (let i = 0; i < unique.length; i += META_AD_CREATIVE_PREVIEW_CHUNK) {
+    const slice = unique.slice(i, i + META_AD_CREATIVE_PREVIEW_CHUNK)
+    const idsParam = slice.join(',')
+
+    let gotChunk = false
+    for (const creativeFields of fieldAttempts) {
+      const url =
+        `https://graph.facebook.com/${META_API_VERSION}/?` +
+        new URLSearchParams({
+          ids: idsParam,
+          fields: `id,${creativeFields}`,
+          access_token: accessToken,
+          appsecret_proof: proof,
+        }).toString()
+
+      let res: Response
+      try {
+        res = await fetch(url)
+      } catch {
+        continue
+      }
+      if (!res.ok) continue
+
+      let data: Record<string, unknown>
+      try {
+        data = (await res.json()) as Record<string, unknown>
+      } catch {
+        continue
+      }
+      if (data.error) continue
+
+      for (const adId of slice) {
+        const node = data[adId]
+        if (!node || typeof node !== 'object') {
+          out.set(adId, { previewImageUrl: null, previewVideoId: null })
+          continue
+        }
+        const cr = (node as Record<string, unknown>).creative
+        const { imageUrl, videoId } = extractMetaCreativePreview(cr)
+        out.set(adId, {
+          previewImageUrl: imageUrl,
+          previewVideoId: videoId || null,
+        })
+      }
+      gotChunk = true
+      break
+    }
+
+    if (!gotChunk) {
+      for (const adId of slice) {
+        out.set(adId, { previewImageUrl: null, previewVideoId: null })
+      }
+    }
+  }
+
+  return out
+}
+
 export type MetaInsightRow = {
   campaignId: string
   campaignName: string

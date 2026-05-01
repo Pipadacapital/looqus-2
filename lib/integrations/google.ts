@@ -2,7 +2,7 @@ const GOOGLE_CLIENT_ID = process.env.GOOGLE_ADS_CLIENT_ID!
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_ADS_CLIENT_SECRET!
 const GOOGLE_REDIRECT_URI = process.env.GOOGLE_ADS_REDIRECT_URI!
 const GOOGLE_DEVELOPER_TOKEN = process.env.GOOGLE_ADS_DEVELOPER_TOKEN!
-const GOOGLE_API_VERSION = process.env.GOOGLE_ADS_API_VERSION || 'v18'
+const GOOGLE_API_VERSION = process.env.GOOGLE_ADS_API_VERSION || 'v23'
 const GOOGLE_LOGIN_CUSTOMER_ID = process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID || ''
 
 const GOOGLE_SCOPES = 'https://www.googleapis.com/auth/adwords'

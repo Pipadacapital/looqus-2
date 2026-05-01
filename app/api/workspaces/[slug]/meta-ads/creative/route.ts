@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
+import { featureGuard } from '@/lib/features'
+import { fetchMetaAdCreativePreviews } from '@/lib/integrations/meta'
 import { loadCampaignIntentMap, resolveCampaignIntent } from '@/lib/metrics/campaign-classification'
 import { matchesIntentFilter } from '@/lib/metrics/ad-intent-split'
 import {
@@ -56,10 +58,12 @@ export async function GET(
     where: { slug },
     select: {
       id: true,
+      features: true,
       meta_ads_connections: {
         where: { status: 'CONNECTED' },
         select: {
           id: true,
+          access_token: true,
           selected_ad_account_id: true,
           ad_account_ids: true,
         },
@@ -83,6 +87,9 @@ export async function GET(
   if (!membership) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
+
+  const guard = featureGuard(workspace.features as any, 'meta_ads')
+  if (guard) return guard
 
   const connection = workspace.meta_ads_connections
   if (!connection) {
@@ -173,7 +180,7 @@ export async function GET(
     e.campaignId = r.campaign_id
   }
 
-  const ads = Array.from(byAd.values())
+  const adsBase = Array.from(byAd.values())
     .map((e) =>
       aggregatesToVideoCreativeMetrics(
         {
@@ -191,36 +198,52 @@ export async function GET(
       matchesIntentFilter(resolveCampaignIntent(intentMap, 'meta', m.campaignId), intentFilter)
     )
     .sort((a, b) => b.spend - a.spend)
-    .map((m) => {
-      const intent = resolveCampaignIntent(intentMap, 'meta', m.campaignId)
-      return {
-        adId: m.adId,
-        adName: m.adName,
-        campaignId: m.campaignId,
-        campaignName: m.campaignName,
-        adsetId: m.adsetId,
-        adsetName: m.adsetName,
-        intent,
-        impressions: m.impressions,
-        clicks: m.clicks,
-        spend: m.spend,
-        isVideo: m.isVideo,
-        hookRatePct: m.hookRatePct,
-        holdRatePct: m.holdRatePct,
-        p25RatePct: m.p25RatePct,
-        p50RatePct: m.p50RatePct,
-        p75RatePct: m.p75RatePct,
-        p95RatePct: m.p95RatePct,
-        avgWatchSec: m.avgWatchSec,
-        ctrPct: m.ctrPct,
-        roas: m.roas,
-        conversions: m.conversions,
-        diagnostics: m.diagnostics,
-        diagnosticLabels: m.diagnostics.map((d: MetaVideoCreativeDiagnostic) =>
-          diagnosticLabel(d)
-        ),
-      }
-    })
+
+  let previewByAd = new Map<string, { previewImageUrl: string | null; previewVideoId: string | null }>()
+  if (adsBase.length > 0) {
+    try {
+      previewByAd = await fetchMetaAdCreativePreviews(
+        connection.access_token,
+        adsBase.map((m) => m.adId)
+      )
+    } catch {
+      previewByAd = new Map()
+    }
+  }
+
+  const ads = adsBase.map((m) => {
+    const intent = resolveCampaignIntent(intentMap, 'meta', m.campaignId)
+    const p = previewByAd.get(m.adId) ?? { previewImageUrl: null, previewVideoId: null }
+    return {
+      adId: m.adId,
+      adName: m.adName,
+      campaignId: m.campaignId,
+      campaignName: m.campaignName,
+      adsetId: m.adsetId,
+      adsetName: m.adsetName,
+      intent,
+      impressions: m.impressions,
+      clicks: m.clicks,
+      spend: m.spend,
+      isVideo: m.isVideo,
+      hookRatePct: m.hookRatePct,
+      holdRatePct: m.holdRatePct,
+      p25RatePct: m.p25RatePct,
+      p50RatePct: m.p50RatePct,
+      p75RatePct: m.p75RatePct,
+      p95RatePct: m.p95RatePct,
+      avgWatchSec: m.avgWatchSec,
+      ctrPct: m.ctrPct,
+      roas: m.roas,
+      conversions: m.conversions,
+      diagnostics: m.diagnostics,
+      diagnosticLabels: m.diagnostics.map((d: MetaVideoCreativeDiagnostic) =>
+        diagnosticLabel(d)
+      ),
+      previewImageUrl: p.previewImageUrl,
+      previewVideoId: p.previewVideoId,
+    }
+  })
 
   let note: string | undefined
   if (rows.length === 0) {

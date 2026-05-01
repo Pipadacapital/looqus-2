@@ -10,8 +10,10 @@ import { syncGoogleAdsForConnection } from '@/lib/integrations/google-sync'
 
 /**
  * POST: Run 730-day (configurable) backfill for Meta Ads + Google Ads for a workspace.
- * Query: workspaceId (required). Admin/Owner of the workspace only.
- * After backfill, UI date ranges (e.g. Dec 2025) can be computed from daily metrics.
+ * Query:
+ * - workspaceId (required)
+ * - provider (optional): omit or `all` — Meta then Google (legacy). `meta` — Meta only. `google` — Google only.
+ * Admin/Owner of the workspace only.
  */
 export async function POST(request: NextRequest) {
   const workspaceId = request.nextUrl.searchParams.get('workspaceId')
@@ -21,6 +23,10 @@ export async function POST(request: NextRequest) {
       { status: 400 }
     )
   }
+
+  const providerRaw = request.nextUrl.searchParams.get('provider')
+  const provider =
+    providerRaw === 'meta' || providerRaw === 'google' ? providerRaw : 'all'
 
   const auth = await requireWorkspaceAdmin(workspaceId)
   if ('error' in auth) return auth.error
@@ -34,9 +40,39 @@ export async function POST(request: NextRequest) {
     select: { id: true, status: true },
   })
 
+  if (provider === 'meta') {
+    if (!metaConn || metaConn.status !== 'CONNECTED') {
+      return NextResponse.json(
+        { error: 'No connected Meta Ads account for this workspace.' },
+        { status: 404 }
+      )
+    }
+  } else if (provider === 'google') {
+    if (!googleConn || googleConn.status !== 'CONNECTED') {
+      return NextResponse.json(
+        { error: 'No connected Google Ads account for this workspace.' },
+        { status: 404 }
+      )
+    }
+  } else if (!metaConn && !googleConn) {
+    return NextResponse.json(
+      { error: 'No Meta or Google Ads connection for this workspace' },
+      { status: 404 }
+    )
+  }
+
   const results: { meta?: { rowsSynced: number }; google?: { rowsSynced: number }; error?: string } = {}
 
-  if (metaConn?.status === 'CONNECTED') {
+  const runMeta =
+    provider === 'all' || provider === 'meta'
+      ? metaConn?.status === 'CONNECTED'
+      : false
+  const runGoogle =
+    provider === 'all' || provider === 'google'
+      ? googleConn?.status === 'CONNECTED'
+      : false
+
+  if (runMeta && metaConn) {
     try {
       const metaResult = await syncMetaAdsForConnection(metaConn.id, { backfill: true })
       results.meta = { rowsSynced: metaResult.rowsSynced }
@@ -52,7 +88,7 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  if (googleConn?.status === 'CONNECTED') {
+  if (runGoogle && googleConn) {
     try {
       const googleResult = await syncGoogleAdsForConnection(googleConn.id, { backfill: true })
       results.google = { rowsSynced: googleResult.rowsSynced }
@@ -68,16 +104,10 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  if (!metaConn && !googleConn) {
-    return NextResponse.json(
-      { error: 'No Meta or Google Ads connection for this workspace' },
-      { status: 404 }
-    )
-  }
-
   return NextResponse.json({
     success: !results.error,
     workspaceId,
+    provider,
     ...results,
   })
 }

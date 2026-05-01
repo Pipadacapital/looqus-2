@@ -32,7 +32,10 @@ export function mapGoogleConversionActionToStage(
   ) {
     return 'checkout_initiated'
   }
-  if (c === 'ADD_TO_CART' || /add\s*to\s*cart|add_to_cart/.test(n)) {
+  if (
+    c === 'ADD_TO_CART' ||
+    /add\s*to\s*(cart|basket)|add_to_cart|\baddtocart\b|\batc\b/.test(n)
+  ) {
     return 'add_to_cart'
   }
   return null

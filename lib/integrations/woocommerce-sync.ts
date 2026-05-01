@@ -1,15 +1,128 @@
 import { prisma } from '@/lib/prisma'
 import {
+  extractWoocommerceOrderType,
+  hasNoOrderFilters,
+  type OrderFilterSettings,
+} from '@/lib/order-filters'
+import {
   fetchWoocommerceOrders,
   fetchWoocommerceOrderRefunds,
   fetchWoocommerceProducts,
   fetchWoocommerceProductVariations,
 } from './woocommerce'
 
+const ORDER_TYPE_BACKFILL_MAX = 5000
+
+/**
+ * Fills `order_type` from `raw_json` for rows still missing it (e.g. synced before column existed).
+ */
+export async function backfillWoocommerceOrderTypesFromRawJson(
+  connectionId: string,
+  options?: { maxUpdates?: number }
+): Promise<{ updated: number }> {
+  const maxUpdates = options?.maxUpdates ?? ORDER_TYPE_BACKFILL_MAX
+  let updated = 0
+  const batchSize = 400
+  /** When a batch has no extractable order_type, advance past it to avoid an infinite loop. */
+  let skip = 0
+
+  while (updated < maxUpdates) {
+    const rows = await prisma.woocommerceOrder.findMany({
+      where: { connectionId, orderType: null },
+      select: { id: true, rawJson: true },
+      take: batchSize,
+      skip,
+      orderBy: { id: 'asc' },
+    })
+    if (rows.length === 0) break
+
+    const toWrite: { id: string; orderType: string }[] = []
+    for (const row of rows) {
+      const t = extractWoocommerceOrderType(row.rawJson)
+      if (t) toWrite.push({ id: row.id, orderType: t })
+    }
+
+    if (toWrite.length === 0) {
+      skip += rows.length
+      if (rows.length < batchSize) break
+      continue
+    }
+
+    skip = 0
+    const room = maxUpdates - updated
+    const slice = toWrite.slice(0, room)
+    await prisma.$transaction(
+      slice.map((row) =>
+        prisma.woocommerceOrder.update({
+          where: { id: row.id },
+          data: { orderType: row.orderType },
+        })
+      )
+    )
+    updated += slice.length
+
+    if (rows.length < batchSize) break
+  }
+
+  return { updated }
+}
+
+/** When workspace order filters are active, backfill `order_type` from `raw_json` so inclusion checks are reliable. */
+export async function ensureWooOrderTypesForOrderFilters(
+  connectionId: string,
+  settings: OrderFilterSettings,
+  options?: { maxUpdates?: number }
+): Promise<void> {
+  if (hasNoOrderFilters(settings)) return
+  await backfillWoocommerceOrderTypesFromRawJson(connectionId, options)
+}
+
+/**
+ * Best-effort live lookup of Woo order_type values from Woo API.
+ * Useful when DB rows were synced before order_type capture existed.
+ */
+export async function fetchLiveWoocommerceOrderTypeMap(
+  connection: { storeUrl: string; consumerKey: string; consumerSecret: string },
+  fromDate: Date,
+  toDate: Date,
+  options?: { maxPages?: number; lookbackDays?: number }
+): Promise<Map<number, string>> {
+  const maxPages = options?.maxPages ?? 10
+  const lookbackDays = options?.lookbackDays ?? 3
+  const out = new Map<number, string>()
+  const recentAfter = new Date(fromDate)
+  recentAfter.setUTCDate(recentAfter.getUTCDate() - lookbackDays)
+
+  let page = 1
+  let totalPages = 1
+  do {
+    const result = await fetchWoocommerceOrders(
+      connection.storeUrl,
+      connection.consumerKey,
+      connection.consumerSecret,
+      recentAfter,
+      page
+    )
+    totalPages = result.totalPages
+    for (const order of result.orders) {
+      const createdAt = order?.date_created ? new Date(order.date_created) : null
+      if (!createdAt || createdAt < fromDate || createdAt > toDate) continue
+      const rawId = order?.id
+      if (typeof rawId !== 'number') continue
+      const typeVal = extractWoocommerceOrderType(order)
+      if (typeVal) out.set(rawId, typeVal)
+    }
+    page += 1
+  } while (page <= totalPages && page <= maxPages)
+
+  return out
+}
+
 export async function syncWoocommerceForConnection(connectionId: string): Promise<{
   ordersUpserted: number
   lineItemsUpserted: number
   errors: number
+  orderTypesBackfilled: number
 }> {
   const connection = await prisma.woocommerceConnection.findUnique({
     where: { id: connectionId },
@@ -111,6 +224,7 @@ export async function syncWoocommerceForConnection(connectionId: string): Promis
           shippingState: order.shipping?.state ?? null,
           dateCreated: order.date_created ? new Date(order.date_created) : null,
           datePaid: order.date_paid ? new Date(order.date_paid) : null,
+          orderType: extractWoocommerceOrderType(order),
           rawJson: order,
           syncedAt: new Date(),
         }
@@ -268,5 +382,15 @@ export async function syncWoocommerceForConnection(connectionId: string): Promis
     data: { lastSyncAt: new Date(), lastSyncError: errors > 0 ? `${errors} errors during sync` : null },
   })
 
-  return { ordersUpserted, lineItemsUpserted, errors }
+  let orderTypesBackfilled = 0
+  try {
+    const bf = await backfillWoocommerceOrderTypesFromRawJson(connectionId, {
+      maxUpdates: ORDER_TYPE_BACKFILL_MAX,
+    })
+    orderTypesBackfilled = bf.updated
+  } catch {
+    // Non-fatal: rows will get order_type on next successful sync/backfill.
+  }
+
+  return { ordersUpserted, lineItemsUpserted, errors, orderTypesBackfilled }
 }

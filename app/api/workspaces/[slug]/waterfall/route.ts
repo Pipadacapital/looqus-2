@@ -8,12 +8,18 @@ import {
   getOrderInclusionWhereFromWorkspace,
   getFilteredDailyAggregates,
   hasNoOrderFilters,
+  isWoocommerceOrderIncluded,
   normalizeOrderFilterSettings,
+  resolveWoocommerceOrderType,
 } from '@/lib/order-filters'
 import { computeLineItemsCogs, normalizeCogsSettings } from '@/lib/cogs'
 import { getDailyVariableContribution } from '@/lib/workspace-costs'
 import { getLogisticsSummary } from '@/lib/workspace-metrics/logistics-summary'
 import { getShopifyStoreCurrency } from '@/lib/shopify/store-currency'
+import {
+  ensureWooOrderTypesForOrderFilters,
+  fetchLiveWoocommerceOrderTypeMap,
+} from '@/lib/integrations/woocommerce-sync'
 
 const EXCHANGE_RATES: Record<string, number> = {
   USD: 1,
@@ -164,7 +170,14 @@ export async function GET(
   if (isWoocommerce) {
     const wooConn = await prisma.woocommerceConnection.findUnique({
       where: { workspaceId: workspace.id },
-      select: { id: true, currency: true, status: true },
+      select: {
+        id: true,
+        currency: true,
+        status: true,
+        storeUrl: true,
+        consumerKey: true,
+        consumerSecret: true,
+      },
     })
     if (!wooConn || wooConn.status !== 'CONNECTED') {
       return NextResponse.json({ error: 'No WooCommerce connection' }, { status: 404 })
@@ -172,13 +185,15 @@ export async function GET(
 
     const storeCurrency = wooConn.currency ?? 'USD'
     const dateStrings = getDateStringsInRange(fromDate, toDate)
+    const orderFilterSettingsWoo = normalizeOrderFilterSettings(workspace as any)
+    await ensureWooOrderTypesForOrderFilters(wooConn.id, orderFilterSettingsWoo, { maxUpdates: 5000 })
 
     const [
       workspaceCostsWoo,
       miscExpensesWoo,
       productsWoo,
-      priorEmailRows,
-      orders,
+      priorEmailRowsRaw,
+      allOrders,
       metaAdDailyWoo,
       googleAdDailyWoo,
     ] = await Promise.all([
@@ -198,8 +213,7 @@ export async function GET(
           dateCreated: { lt: fromDate },
           customerEmail: { not: null },
         },
-        select: { customerEmail: true },
-        distinct: ['customerEmail'],
+        select: { wcOrderId: true, customerEmail: true, total: true, orderType: true, rawJson: true },
       }),
       prisma.woocommerceOrder.findMany({
         where: {
@@ -238,6 +252,51 @@ export async function GET(
           })
         : Promise.resolve([]),
     ])
+    let liveOrderTypeByWooOrderId = new Map<number, string>()
+    const needsLiveOrderTypes =
+      orderFilterSettingsWoo.skippedShopifyOrderTags.length > 0 &&
+      (priorEmailRowsRaw.some(
+        (o) => !resolveWoocommerceOrderType({ orderType: o.orderType, rawJson: o.rawJson })
+      ) ||
+        allOrders.some(
+          (o) => !resolveWoocommerceOrderType({ orderType: o.orderType, rawJson: o.rawJson })
+        ))
+    if (needsLiveOrderTypes) {
+      try {
+        liveOrderTypeByWooOrderId = await fetchLiveWoocommerceOrderTypeMap(
+          {
+            storeUrl: wooConn.storeUrl,
+            consumerKey: wooConn.consumerKey,
+            consumerSecret: wooConn.consumerSecret,
+          },
+          fromDate,
+          toDate,
+          { maxPages: 10, lookbackDays: 3 }
+        )
+      } catch {
+        // Best-effort live enrichment when DB/raw_json lack order_type.
+      }
+    }
+    const priorEmailRows = priorEmailRowsRaw.filter((o) =>
+      isWoocommerceOrderIncluded(
+        {
+          orderType: liveOrderTypeByWooOrderId.get(o.wcOrderId) ?? o.orderType,
+          rawJson: o.rawJson,
+          total: o.total,
+        },
+        orderFilterSettingsWoo
+      )
+    )
+    const orders = allOrders.filter((o) =>
+      isWoocommerceOrderIncluded(
+        {
+          orderType: liveOrderTypeByWooOrderId.get(o.wcOrderId) ?? o.orderType,
+          rawJson: o.rawJson,
+          total: o.total,
+        },
+        orderFilterSettingsWoo
+      )
+    )
 
     const existingCustomerEmails = new Set(
       priorEmailRows

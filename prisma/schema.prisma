@@ -1017,6 +1017,8 @@ model WoocommerceOrder {
   shippingState    String?               @map("shipping_state")
   dateCreated      DateTime?             @map("date_created")
   datePaid         DateTime?             @map("date_paid")
+  /// WooCommerce order_type (from API meta_data key order_type or top-level); denormalized for analytics filters.
+  orderType        String?               @map("order_type")
   rawJson          Json?                 @map("raw_json")
   syncedAt         DateTime              @default(now()) @map("synced_at")
   connection       WoocommerceConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)

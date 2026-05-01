@@ -76,81 +76,87 @@ export async function StoreLoader({ slug }: { slug: string }) {
     const pageSize = 10
     const orderDir = 'desc' as const
 
-    const [orders, total] = isWoocommerce
-      ? await Promise.all([
-          prisma.woocommerceOrder.findMany({
-            where: { connectionId },
-            orderBy: { dateCreated: orderDir },
-            skip: 0,
-            take: pageSize,
-            select: {
-              id: true,
-              orderNumber: true,
-              customerEmail: true,
-              total: true,
-              currency: true,
-              status: true,
-              dateCreated: true,
-            },
-          }),
-          prisma.woocommerceOrder.count({
-            where: { connectionId },
-          }),
-        ])
-      : await Promise.all([
-          prisma.shopifyOrder.findMany({
-            where: { connectionId },
-            orderBy: { processedAt: orderDir },
-            skip: 0,
-            take: pageSize,
-            select: {
-              id: true,
-              orderNumber: true,
-              name: true,
-              email: true,
-              totalPrice: true,
-              currency: true,
-              financialStatus: true,
-              fulfillmentStatus: true,
-              processedAt: true,
-              cancelledAt: true,
-            },
-          }),
-          prisma.shopifyOrder.count({
-            where: { connectionId },
-          }),
-        ])
-
-    initialOrders = {
-      data: isWoocommerce
-        ? orders.map((o) => ({
-            id: o.id,
-            orderNumber: o.orderNumber ?? String(o.id),
-            name: o.orderNumber ?? `Order #${o.id}`,
-            email: o.customerEmail,
-            totalPrice: String(o.total ?? 0),
-            currency: o.currency ?? '',
-            financialStatus: o.status ?? '',
-            fulfillmentStatus: null,
-            processedAt: o.dateCreated?.toISOString() ?? new Date(0).toISOString(),
-            cancelledAt: null,
-          }))
-        : orders.map((o) => ({
-            id: o.id,
-            orderNumber: o.orderNumber,
-            name: o.name,
-            email: o.email,
-            totalPrice: String(o.totalPrice),
-            currency: o.currency,
-            financialStatus: o.financialStatus,
-            fulfillmentStatus: o.fulfillmentStatus,
-            processedAt: o.processedAt.toISOString(),
-            cancelledAt: o.cancelledAt?.toISOString() ?? null,
-          })),
-      total,
-      page,
-      pageSize,
-      totalPages: Math.ceil(total / pageSize),
+    if (isWoocommerce) {
+      const [wooOrders, total] = await Promise.all([
+        prisma.woocommerceOrder.findMany({
+          where: { connectionId },
+          orderBy: { dateCreated: orderDir },
+          skip: 0,
+          take: pageSize,
+          select: {
+            id: true,
+            orderNumber: true,
+            customerEmail: true,
+            total: true,
+            currency: true,
+            status: true,
+            dateCreated: true,
+          },
+        }),
+        prisma.woocommerceOrder.count({
+          where: { connectionId },
+        }),
+      ])
+      initialOrders = {
+        data: wooOrders.map((o) => ({
+          id: o.id,
+          orderNumber: o.orderNumber ?? String(o.id),
+          name: o.orderNumber ?? `Order #${o.id}`,
+          email: o.customerEmail,
+          totalPrice: String(o.total ?? 0),
+          currency: o.currency ?? '',
+          financialStatus: o.status ?? '',
+          fulfillmentStatus: null,
+          processedAt: o.dateCreated?.toISOString() ?? new Date(0).toISOString(),
+          cancelledAt: null,
+        })),
+        total,
+        page,
+        pageSize,
+        totalPages: Math.ceil(total / pageSize),
+      }
+    } else {
+      const [shopifyOrders, total] = await Promise.all([
+        prisma.shopifyOrder.findMany({
+          where: { connectionId },
+          orderBy: { processedAt: orderDir },
+          skip: 0,
+          take: pageSize,
+          select: {
+            id: true,
+            orderNumber: true,
+            name: true,
+            email: true,
+            totalPrice: true,
+            currency: true,
+            financialStatus: true,
+            fulfillmentStatus: true,
+            processedAt: true,
+            cancelledAt: true,
+          },
+        }),
+        prisma.shopifyOrder.count({
+          where: { connectionId },
+        }),
+      ])
+      initialOrders = {
+        data: shopifyOrders.map((o) => ({
+          id: o.id,
+          orderNumber: o.orderNumber ?? String(o.id),
+          name: String(o.name ?? ''),
+          email: o.email,
+          totalPrice: String(o.totalPrice),
+          currency: o.currency ?? '',
+          financialStatus: String(o.financialStatus ?? ''),
+          fulfillmentStatus: o.fulfillmentStatus,
+          processedAt: o.processedAt.toISOString(),
+          cancelledAt: o.cancelledAt?.toISOString() ?? null,
+        })),
+        total,
+        page,
+        pageSize,
+        totalPages: Math.ceil(total / pageSize),
+      }
     }
   }
 

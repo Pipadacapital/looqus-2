@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState, type ReactNode } from 'react'
+import { Fragment, useMemo, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
 import { format, subDays } from 'date-fns'
@@ -18,6 +18,8 @@ import {
   IconArrowDown,
   IconArrowsSort,
   IconBrandGoogle,
+  IconChevronDown,
+  IconChevronRight,
 } from '@tabler/icons-react'
 import { useWorkspace } from '@/hooks/use-workspace'
 import { Button } from '@/components/ui/button'
@@ -90,6 +92,31 @@ export type GoogleAdsCampaignRow = {
 }
 
 export type GoogleAdsDailyRow = GoogleAdsCampaignRow & { date: string }
+
+export type GoogleCreativeAdRow = {
+  adId: string
+  adName: string
+  adType: string
+  previewText: string | null
+  /** Image URL from image ads or resolved image assets (Display, Demand Gen, etc.) */
+  previewImageUrl: string | null
+  /** YouTube video id when the creative uses a video asset */
+  previewYoutubeId: string | null
+  landingUrl: string | null
+  campaignId: string
+  campaignName: string
+  channelType: string
+  adGroupId: string
+  adGroupName: string
+  intent: CampaignIntent
+  impressions: number
+  clicks: number
+  spend: number
+  conversions: number
+  conversionValue: number
+  ctrPct: number
+  roas: number
+}
 
 type IntentSplit = {
   byIntent: Record<
@@ -210,6 +237,497 @@ function IntentBadge({ intent }: { intent: CampaignIntent }) {
   )
 }
 
+function channelTypeLabel(t: string) {
+  return t.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+type CreativeRollup = {
+  impressions: number
+  clicks: number
+  spend: number
+  conversions: number
+  conversionValue: number
+  ctrPct: number
+  roas: number
+}
+
+function rollupFromCreativeRows(rows: GoogleCreativeAdRow[]): CreativeRollup {
+  const impressions = rows.reduce((s, r) => s + r.impressions, 0)
+  const clicks = rows.reduce((s, r) => s + r.clicks, 0)
+  const spend = rows.reduce((s, r) => s + r.spend, 0)
+  const conversions = rows.reduce((s, r) => s + r.conversions, 0)
+  const conversionValue = rows.reduce((s, r) => s + r.conversionValue, 0)
+  const ctrPct = impressions > 0 ? (clicks / impressions) * 100 : 0
+  const roas = spend > 0 ? conversionValue / spend : 0
+  return {
+    impressions,
+    clicks,
+    spend,
+    conversions,
+    conversionValue,
+    ctrPct,
+    roas,
+  }
+}
+
+type CreativeGroupTree = {
+  adGroupId: string
+  adGroupName: string
+  ads: GoogleCreativeAdRow[]
+} & CreativeRollup
+
+type CreativeCampaignTree = {
+  campaignId: string
+  campaignName: string
+  intent: CampaignIntent
+  channelType: string
+  groups: CreativeGroupTree[]
+  creativeCount: number
+} & CreativeRollup
+
+function buildCreativeTree(rows: GoogleCreativeAdRow[]): CreativeCampaignTree[] {
+  const byCampaign = new Map<string, GoogleCreativeAdRow[]>()
+  for (const r of rows) {
+    const list = byCampaign.get(r.campaignId) ?? []
+    list.push(r)
+    byCampaign.set(r.campaignId, list)
+  }
+
+  const campaigns: CreativeCampaignTree[] = []
+
+  for (const [, campaignRows] of byCampaign) {
+    if (campaignRows.length === 0) continue
+    const byGroup = new Map<string, GoogleCreativeAdRow[]>()
+    for (const r of campaignRows) {
+      const list = byGroup.get(r.adGroupId) ?? []
+      list.push(r)
+      byGroup.set(r.adGroupId, list)
+    }
+
+    const groups: CreativeGroupTree[] = []
+    for (const [adGroupId, ads] of byGroup) {
+      const sorted = [...ads].sort((a, b) => b.spend - a.spend)
+      groups.push({
+        adGroupId,
+        adGroupName: sorted[0]?.adGroupName?.trim() || adGroupId,
+        ads: sorted,
+        ...rollupFromCreativeRows(sorted),
+      })
+    }
+    groups.sort((a, b) => b.spend - a.spend)
+
+    const creativeCount = campaignRows.length
+    const first = campaignRows[0]!
+    campaigns.push({
+      campaignId: first.campaignId,
+      campaignName: first.campaignName || first.campaignId,
+      intent: first.intent,
+      channelType: first.channelType,
+      groups,
+      creativeCount,
+      ...rollupFromCreativeRows(campaignRows),
+    })
+  }
+
+  campaigns.sort((a, b) => b.spend - a.spend)
+  return campaigns
+}
+
+function CreativePreviewForAd({ r }: { r: GoogleCreativeAdRow }) {
+  return (
+    <>
+      <p className="text-xs text-muted-foreground">{channelTypeLabel(r.adType)}</p>
+      {r.previewImageUrl ? (
+        <div className="mt-1 space-y-1">
+          <a
+            href={r.previewImageUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="text-xs text-primary underline font-medium"
+          >
+            Open image
+          </a>
+          <a
+            href={r.previewImageUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="block"
+            title="Open image"
+          >
+            <img
+              src={r.previewImageUrl}
+              alt=""
+              className="max-h-24 max-w-[220px] rounded-md border object-contain bg-muted/40"
+              loading="lazy"
+              referrerPolicy="no-referrer-when-downgrade"
+            />
+          </a>
+        </div>
+      ) : null}
+      {r.previewYoutubeId ? (
+        <div className="mt-1 space-y-1">
+          <a
+            href={`https://www.youtube.com/watch?v=${encodeURIComponent(r.previewYoutubeId)}`}
+            target="_blank"
+            rel="noreferrer"
+            className="text-xs text-primary underline font-medium"
+          >
+            Watch on YouTube
+          </a>
+          <a
+            href={`https://www.youtube.com/watch?v=${encodeURIComponent(r.previewYoutubeId)}`}
+            target="_blank"
+            rel="noreferrer"
+            className="block"
+            title="Watch on YouTube"
+          >
+            <img
+              src={`https://img.youtube.com/vi/${encodeURIComponent(r.previewYoutubeId)}/hqdefault.jpg`}
+              alt=""
+              className="max-h-24 max-w-[220px] rounded-md border object-cover bg-muted/40"
+              loading="lazy"
+              referrerPolicy="no-referrer-when-downgrade"
+            />
+          </a>
+        </div>
+      ) : null}
+      {r.previewText ? (
+        <p className="text-sm font-medium line-clamp-3 mt-0.5" title={r.previewText}>
+          {r.previewText}
+        </p>
+      ) : null}
+      {r.landingUrl ? (
+        <a
+          href={r.landingUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="text-xs text-primary underline truncate block mt-1 max-w-[220px]"
+          title={r.landingUrl}
+        >
+          Landing page
+        </a>
+      ) : null}
+    </>
+  )
+}
+
+function RollupMetricCells({
+  m,
+  currencyCode,
+}: {
+  m: CreativeRollup
+  currencyCode: string
+}) {
+  return (
+    <>
+      <TableCell className="text-right tabular-nums font-medium align-top">
+        {formatCurrency(m.spend, currencyCode)}
+      </TableCell>
+      <TableCell className="text-right tabular-nums text-muted-foreground align-top">
+        {formatNumber(m.impressions)}
+      </TableCell>
+      <TableCell className="text-right tabular-nums text-muted-foreground align-top">
+        {formatNumber(m.clicks)}
+      </TableCell>
+      <TableCell className="text-right tabular-nums align-top">{formatPercent(m.ctrPct)}</TableCell>
+      <TableCell className="text-right tabular-nums align-top">{formatNumber(m.conversions, 2)}</TableCell>
+      <TableCell className="text-right tabular-nums align-top">
+        {formatCurrency(m.conversionValue, currencyCode)}
+      </TableCell>
+      <TableCell className="text-right font-medium tabular-nums align-top">{m.roas.toFixed(2)}x</TableCell>
+    </>
+  )
+}
+
+function GoogleCreativeTable({
+  rows,
+  search,
+  note,
+  hint,
+  rawRowCount,
+  currencyCode,
+}: {
+  rows: GoogleCreativeAdRow[]
+  search: string
+  note?: string
+  hint?: string
+  rawRowCount: number
+  currencyCode: string
+}) {
+  const filtered = useMemo(() => {
+    if (!search.trim()) return rows
+    const q = search.trim().toLowerCase()
+    return rows.filter(
+      (r) =>
+        (r.adName || '').toLowerCase().includes(q) ||
+        r.adId.toLowerCase().includes(q) ||
+        r.campaignName.toLowerCase().includes(q) ||
+        r.campaignId.toLowerCase().includes(q) ||
+        (r.adGroupName || '').toLowerCase().includes(q) ||
+        r.adType.toLowerCase().includes(q)
+    )
+  }, [rows, search])
+
+  const tree = useMemo(() => buildCreativeTree(filtered), [filtered])
+
+  const [openCampaigns, setOpenCampaigns] = useState<Set<string>>(() => new Set())
+  const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set())
+
+  const toggleCampaign = (campaignId: string) => {
+    setOpenCampaigns((prev) => {
+      const next = new Set(prev)
+      if (next.has(campaignId)) next.delete(campaignId)
+      else next.add(campaignId)
+      return next
+    })
+  }
+
+  const toggleGroup = (campaignId: string, adGroupId: string) => {
+    const key = `${campaignId}|${adGroupId}`
+    setOpenGroups((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  const isPmaxChannel = (channel: string) => channel.toUpperCase().includes('PERFORMANCE_MAX')
+
+  return (
+    <div className="overflow-x-auto">
+      {hint ? (
+        <p className="text-xs text-muted-foreground border-b px-4 py-2 bg-muted/20">{hint}</p>
+      ) : null}
+      {note ? (
+        <p className="text-sm text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-950/40 border-b px-4 py-2">
+          {note}
+        </p>
+      ) : null}
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="min-w-[200px]">Creative preview</TableHead>
+            <TableHead className="min-w-[120px]">Ad</TableHead>
+            <TableHead className="min-w-[120px]">Campaign</TableHead>
+            <TableHead>Channel</TableHead>
+            <TableHead>Intent</TableHead>
+            <TableHead className="text-right">Spend</TableHead>
+            <TableHead className="text-right">Impr</TableHead>
+            <TableHead className="text-right">Clicks</TableHead>
+            <TableHead className="text-right">CTR</TableHead>
+            <TableHead className="text-right">Conv</TableHead>
+            <TableHead className="text-right">Conv. value</TableHead>
+            <TableHead className="text-right">ROAS</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {tree.length === 0 ? (
+            <TableRow>
+              <TableCell colSpan={12} className="h-24 text-center text-muted-foreground">
+                {search.trim()
+                  ? 'No ads match your search.'
+                  : 'No ad-level creative rows in this range.'}
+              </TableCell>
+            </TableRow>
+          ) : (
+            <>
+              {tree.map((c) => {
+                const campOpen = openCampaigns.has(c.campaignId)
+                const groupLabel = isPmaxChannel(c.channelType) ? 'asset groups' : 'ad groups'
+                return (
+                  <Fragment key={c.campaignId}>
+                    <TableRow className="bg-muted/30">
+                      <TableCell
+                        className="align-top max-w-[260px] cursor-pointer hover:bg-muted/50"
+                        onClick={() => toggleCampaign(c.campaignId)}
+                      >
+                        <div className="flex items-start gap-1">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="size-7 shrink-0 text-muted-foreground"
+                            aria-expanded={campOpen}
+                            aria-label={campOpen ? 'Collapse campaign' : 'Expand campaign'}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              toggleCampaign(c.campaignId)
+                            }}
+                          >
+                            {campOpen ? (
+                              <IconChevronDown className="size-4" />
+                            ) : (
+                              <IconChevronRight className="size-4" />
+                            )}
+                          </Button>
+                          <div className="min-w-0 pt-0.5">
+                            <p className="text-sm font-semibold">Campaign total</p>
+                            <p className="text-xs text-muted-foreground">
+                              {c.groups.length} {groupLabel} · {c.creativeCount} creatives — click row to{' '}
+                              {campOpen ? 'collapse' : 'expand'}
+                            </p>
+                          </div>
+                        </div>
+                      </TableCell>
+                      <TableCell className="align-top text-muted-foreground text-sm">—</TableCell>
+                      <TableCell
+                        className="align-top cursor-pointer hover:bg-muted/50"
+                        onClick={() => toggleCampaign(c.campaignId)}
+                      >
+                        <div className="max-w-[200px] truncate text-sm font-medium" title={c.campaignName}>
+                          {c.campaignName || c.campaignId}
+                        </div>
+                        <div className="text-xs text-muted-foreground truncate max-w-[200px]">{c.campaignId}</div>
+                      </TableCell>
+                      <TableCell className="align-top text-xs text-muted-foreground whitespace-nowrap">
+                        {channelTypeLabel(c.channelType)}
+                      </TableCell>
+                      <TableCell className="align-top">
+                        <IntentBadge intent={c.intent} />
+                      </TableCell>
+                      <RollupMetricCells m={c} currencyCode={currencyCode} />
+                    </TableRow>
+                    {campOpen
+                      ? c.groups.map((g) => {
+                          const gKey = `${c.campaignId}|${g.adGroupId}`
+                          const grpOpen = openGroups.has(gKey)
+                          const subgroupLabel = isPmaxChannel(c.channelType) ? 'assets' : 'ads'
+                          return (
+                            <Fragment key={gKey}>
+                              <TableRow className="bg-muted/15">
+                                <TableCell
+                                  className="align-top max-w-[260px] pl-10 cursor-pointer hover:bg-muted/40"
+                                  onClick={() => toggleGroup(c.campaignId, g.adGroupId)}
+                                >
+                                  <div className="flex items-start gap-1">
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon"
+                                      className="size-7 shrink-0 text-muted-foreground"
+                                      aria-expanded={grpOpen}
+                                      aria-label={grpOpen ? 'Collapse group' : 'Expand group'}
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        toggleGroup(c.campaignId, g.adGroupId)
+                                      }}
+                                    >
+                                      {grpOpen ? (
+                                        <IconChevronDown className="size-4" />
+                                      ) : (
+                                        <IconChevronRight className="size-4" />
+                                      )}
+                                    </Button>
+                                    <div className="min-w-0 pt-0.5">
+                                      <p className="text-sm font-medium">
+                                        {isPmaxChannel(c.channelType) ? 'Asset group' : 'Ad group'}
+                                      </p>
+                                      <p className="text-xs text-muted-foreground">
+                                        {g.ads.length} {subgroupLabel}
+                                      </p>
+                                    </div>
+                                  </div>
+                                </TableCell>
+                                <TableCell
+                                  className="align-top cursor-pointer hover:bg-muted/40"
+                                  onClick={() => toggleGroup(c.campaignId, g.adGroupId)}
+                                >
+                                  <div
+                                    className="max-w-[180px] truncate text-sm font-medium"
+                                    title={g.adGroupName}
+                                  >
+                                    {g.adGroupName}
+                                  </div>
+                                  <div className="text-xs text-muted-foreground truncate max-w-[180px]">
+                                    {g.adGroupId}
+                                  </div>
+                                </TableCell>
+                                <TableCell className="align-top text-muted-foreground text-xs">—</TableCell>
+                                <TableCell className="align-top text-xs text-muted-foreground whitespace-nowrap">
+                                  {channelTypeLabel(c.channelType)}
+                                </TableCell>
+                                <TableCell className="align-top">
+                                  <IntentBadge intent={c.intent} />
+                                </TableCell>
+                                <RollupMetricCells m={g} currencyCode={currencyCode} />
+                              </TableRow>
+                              {grpOpen
+                                ? g.ads.map((r) => (
+                                    <TableRow key={`${r.campaignId}-${r.adGroupId}-${r.adId}`}>
+                                      <TableCell className="align-top max-w-[240px] pl-14">
+                                        <CreativePreviewForAd r={r} />
+                                      </TableCell>
+                                      <TableCell className="align-top">
+                                        <div
+                                          className="max-w-[160px] truncate font-medium text-sm"
+                                          title={r.adName || r.adId}
+                                        >
+                                          {r.adName || r.adId}
+                                        </div>
+                                        <div className="text-xs text-muted-foreground truncate max-w-[160px]">
+                                          {r.adId}
+                                        </div>
+                                      </TableCell>
+                                      <TableCell className="align-top text-muted-foreground text-xs">—</TableCell>
+                                      <TableCell className="align-top text-xs text-muted-foreground whitespace-nowrap">
+                                        {channelTypeLabel(r.channelType)}
+                                      </TableCell>
+                                      <TableCell className="align-top">
+                                        <IntentBadge intent={r.intent} />
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums font-medium align-top">
+                                        {formatCurrency(r.spend, currencyCode)}
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums text-muted-foreground align-top">
+                                        {formatNumber(r.impressions)}
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums text-muted-foreground align-top">
+                                        {formatNumber(r.clicks)}
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums align-top">
+                                        {formatPercent(r.ctrPct)}
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums align-top">
+                                        {formatNumber(r.conversions, 2)}
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums align-top">
+                                        {formatCurrency(r.conversionValue, currencyCode)}
+                                      </TableCell>
+                                      <TableCell className="text-right font-medium tabular-nums align-top">
+                                        {r.roas.toFixed(2)}x
+                                      </TableCell>
+                                    </TableRow>
+                                  ))
+                                : null}
+                            </Fragment>
+                          )
+                        })
+                      : null}
+                  </Fragment>
+                )
+              })}
+            </>
+          )}
+        </TableBody>
+      </Table>
+      {filtered.length > 0 && (
+        <div className="border-t px-4 py-2 text-xs text-muted-foreground">
+          {tree.length} campaign{tree.length !== 1 ? 's' : ''} · {filtered.length} creative
+          {filtered.length !== 1 ? 's' : ''}
+          {rawRowCount > 0 && (
+            <>
+              {' '}
+              · {rawRowCount} ad-day row{rawRowCount !== 1 ? 's' : ''} from Google
+            </>
+          )}
+          {search.trim() && rows.length !== filtered.length && <> · filtered from {rows.length}</>}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function GoogleAdsContent({
   hasConnection,
   workspaceId,
@@ -228,7 +746,7 @@ export function GoogleAdsContent({
     { id: 'spend', desc: true },
   ])
   const [intentFilter, setIntentFilter] = useState('all')
-  const [adsView, setAdsView] = useState<'performance' | 'funnel'>('performance')
+  const [adsView, setAdsView] = useState<'performance' | 'funnel' | 'creative'>('performance')
 
   const insightProps = usePageInsights(slug, 'google-ads', dateFrom, dateTo)
 
@@ -249,6 +767,33 @@ export function GoogleAdsContent({
   const activeCustomerId = data?.activeCustomerId ?? null
   const currencyCode = data?.currency?.trim() || 'USD'
 
+  type CreativeResponse = {
+    ads: GoogleCreativeAdRow[]
+    note?: string
+    hint?: string
+    rawRowCount?: number
+    currency?: string
+  }
+
+  const {
+    data: creativeData,
+    isLoading: creativeLoading,
+    isError: creativeIsError,
+    error: creativeError,
+    refetch: refetchCreative,
+  } = useQuery<CreativeResponse>({
+    queryKey: ['google-ads', 'creative', slug, dateFrom, dateTo, intentFilter, activeCustomerId ?? ''],
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/workspaces/${slug}/google-ads/creative?from=${dateFrom}&to=${dateTo}&intent=${encodeURIComponent(intentFilter)}`
+      )
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || 'Failed to load creative metrics')
+      return json
+    },
+    enabled: hasConnection && adsView === 'creative',
+  })
+
   const handleSelectCustomer = async (selectedCustomerId: string) => {
     if (selectedCustomerId === activeCustomerId) return
     setSelectingCustomer(true)
@@ -263,6 +808,7 @@ export function GoogleAdsContent({
         throw new Error(err.error || 'Failed to switch account')
       }
       await refetch()
+      await refetchCreative()
     } finally {
       setSelectingCustomer(false)
     }
@@ -582,16 +1128,24 @@ export function GoogleAdsContent({
           insufficientData={insightProps.insufficientData}
           isDone={insightProps.isDone}
           onGenerate={insightProps.generate}
-          pageLoading={isLoading}
+          pageLoading={isLoading || (adsView === 'creative' && creativeLoading)}
         />
       </div>
 
-      <Tabs value={adsView} onValueChange={(v) => setAdsView(v as 'performance' | 'funnel')}>
+      <Tabs value={adsView} onValueChange={(v) => setAdsView(v as 'performance' | 'funnel' | 'creative')}>
         <TabsList>
           <TabsTrigger value="performance">Performance</TabsTrigger>
           <TabsTrigger value="funnel">Funnel</TabsTrigger>
+          <TabsTrigger value="creative">Creative</TabsTrigger>
         </TabsList>
       </Tabs>
+
+      {adsView === 'creative' && (
+        <p className="text-sm text-muted-foreground">
+          Ad-level spend and copy snippets from Google Ads (live API). Use the same date range and intent filters
+          as Performance. Switching accounts refetches creatives.
+        </p>
+      )}
 
       {hasError && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/50 px-4 py-3 text-sm text-amber-800 dark:text-amber-200">
@@ -607,15 +1161,17 @@ export function GoogleAdsContent({
               : 'border-amber-200/50 bg-amber-50/30 dark:bg-amber-950/20'
           }`}
         >
-          <p
-            className={
-              data.funnel.coverage === 'google_full'
-                ? 'text-muted-foreground text-sm'
-                : 'text-sm text-amber-900 dark:text-amber-200'
-            }
-          >
-            {data.funnel.note}
-          </p>
+          {data.funnel.note ? (
+            <p
+              className={
+                data.funnel.coverage === 'google_full'
+                  ? 'text-muted-foreground text-sm'
+                  : 'text-sm text-amber-900 dark:text-amber-200'
+              }
+            >
+              {data.funnel.note}
+            </p>
+          ) : null}
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 text-sm">
             {(() => {
               const s = data.funnel.summary
@@ -808,7 +1364,7 @@ export function GoogleAdsContent({
         </>
       )}
 
-      {summary && (
+      {hasConnection && (summary || adsView === 'creative') && (
         <>
           <div className="flex flex-wrap items-center gap-3">
             <DateRangeFilter
@@ -851,17 +1407,25 @@ export function GoogleAdsContent({
                 </SelectContent>
               </Select>
             )}
-            <Select value={view} onValueChange={(v) => setView(v as 'campaigns' | 'daily')}>
-              <SelectTrigger className="w-[180px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="campaigns">Campaign totals</SelectItem>
-                <SelectItem value="daily">Daily breakdown (all rows)</SelectItem>
-              </SelectContent>
-            </Select>
+            {adsView !== 'creative' && (
+              <Select value={view} onValueChange={(v) => setView(v as 'campaigns' | 'daily')}>
+                <SelectTrigger className="w-[180px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="campaigns">Campaign totals</SelectItem>
+                  <SelectItem value="daily">Daily breakdown (all rows)</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
             <Input
-              placeholder={view === 'daily' ? 'Search campaigns or date...' : 'Search campaigns...'}
+              placeholder={
+                adsView === 'creative'
+                  ? 'Search ads, campaigns, ad groups...'
+                  : view === 'daily'
+                    ? 'Search campaigns or date...'
+                    : 'Search campaigns...'
+              }
               className="max-w-xs"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -869,10 +1433,29 @@ export function GoogleAdsContent({
           </div>
 
           <div className="rounded-lg border bg-card overflow-hidden">
-            {isLoading ? (
+            {isLoading && adsView !== 'creative' ? (
               <div className="flex items-center justify-center py-16">
                 <IconLoader2 className="size-8 animate-spin text-muted-foreground" />
               </div>
+            ) : adsView === 'creative' ? (
+              creativeIsError ? (
+                <div className="p-6 text-center text-destructive text-sm">
+                  {creativeError instanceof Error ? creativeError.message : 'Failed to load creatives'}
+                </div>
+              ) : creativeLoading ? (
+                <div className="flex items-center justify-center py-16">
+                  <IconLoader2 className="size-8 animate-spin text-muted-foreground" />
+                </div>
+              ) : (
+                <GoogleCreativeTable
+                  rows={creativeData?.ads ?? []}
+                  search={search}
+                  note={creativeData?.note}
+                  hint={creativeData?.hint}
+                  rawRowCount={creativeData?.rawRowCount ?? 0}
+                  currencyCode={creativeData?.currency?.trim() || currencyCode}
+                />
+              )
             ) : adsView === 'funnel' && data?.funnel ? (
               <div className="overflow-x-auto p-1">
                 <Table>
@@ -1042,7 +1625,7 @@ export function GoogleAdsContent({
         </>
       )}
 
-      {!isLoading && !summary && !hasError && hasConnection && (
+      {!isLoading && !summary && !hasError && hasConnection && adsView !== 'creative' && (
         <div className="rounded-lg border bg-muted/30 p-8 text-center text-muted-foreground">
           <p>No metrics yet. Select a Google Ads customer on the Dashboard and run a sync.</p>
         </div>

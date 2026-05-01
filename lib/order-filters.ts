@@ -15,14 +15,26 @@ const DEFAULT_SETTINGS: OrderFilterSettings = {
   skipZeroSalesOrders: false,
 }
 
+type OrderFilterSettingsInput = Partial<OrderFilterSettings> & {
+  skipped_shopify_order_tags?: string[] | null
+  skip_zero_sales_orders?: boolean | null
+}
+
 export function normalizeOrderFilterSettings(
-  raw: Partial<OrderFilterSettings> | null | undefined
+  raw: OrderFilterSettingsInput | null | undefined
 ): OrderFilterSettings {
   if (!raw) return DEFAULT_SETTINGS
-  const tags = Array.isArray(raw.skippedShopifyOrderTags)
-    ? raw.skippedShopifyOrderTags.filter((t): t is string => typeof t === 'string')
-    : []
-  const skipZero = Boolean(raw.skipZeroSalesOrders)
+  const fromCamel = raw.skippedShopifyOrderTags
+  const fromSnake = raw.skipped_shopify_order_tags
+  const tagSource = Array.isArray(fromCamel)
+    ? fromCamel
+    : Array.isArray(fromSnake)
+      ? fromSnake
+      : []
+  const tags = tagSource.filter((t): t is string => typeof t === 'string')
+  const skipZero = Boolean(
+    raw.skipZeroSalesOrders ?? raw.skip_zero_sales_orders
+  )
   return { skippedShopifyOrderTags: tags, skipZeroSalesOrders: skipZero }
 }
 
@@ -68,16 +80,96 @@ export function getOrderInclusionWhere(
  * Merge workspace slug fetch with order filter settings for use in APIs.
  * Use this to extend an existing workspace where clause when you need to filter orders.
  */
-export function getOrderInclusionWhereFromWorkspace(workspace: {
-  skippedShopifyOrderTags?: string[] | null
-  skipZeroSalesOrders?: boolean | null
-}): Prisma.ShopifyOrderWhereInput {
-  return getOrderInclusionWhere(
-    normalizeOrderFilterSettings({
-      skippedShopifyOrderTags: workspace.skippedShopifyOrderTags ?? [],
-      skipZeroSalesOrders: workspace.skipZeroSalesOrders ?? false,
-    })
+export function getOrderInclusionWhereFromWorkspace(
+  workspace: OrderFilterSettingsInput
+): Prisma.ShopifyOrderWhereInput {
+  return getOrderInclusionWhere(normalizeOrderFilterSettings(workspace))
+}
+
+/**
+ * Extract WooCommerce `order_type` from order payload.
+ * Source of truth:
+ * - top-level `order_type` / `orderType`
+ * - `meta_data[].key === "order_type"`
+ */
+export function extractWoocommerceOrderType(rawJson: unknown): string | null {
+  if (!rawJson || typeof rawJson !== 'object') return null
+  const obj = rawJson as Record<string, unknown>
+
+  const normalizeValue = (value: unknown): string | null => {
+    if (typeof value === 'string' && value.trim().length > 0) return value.trim()
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const v = normalizeValue(item)
+        if (v) return v
+      }
+      return null
+    }
+    if (value && typeof value === 'object') {
+      const rec = value as Record<string, unknown>
+      for (const key of ['value', 'name', 'label', 'slug', 'title']) {
+        const v = normalizeValue(rec[key])
+        if (v) return v
+      }
+    }
+    return null
+  }
+
+  // 1) Top-level key.
+  for (const key of ['order_type', 'orderType']) {
+    const value = obj[key]
+    const normalized = normalizeValue(value)
+    if (normalized) return normalized
+  }
+
+  // 2) Meta key in Woo order payload.
+  const metaData = obj.meta_data
+  if (Array.isArray(metaData)) {
+    for (const item of metaData) {
+      if (!item || typeof item !== 'object') continue
+      const entry = item as Record<string, unknown>
+      const key = typeof entry.key === 'string' ? entry.key.trim().toLowerCase() : ''
+      if (key === 'order_type') {
+        const normalized = normalizeValue(entry.value)
+        if (normalized) return normalized
+      }
+    }
+  }
+  return null
+}
+
+/** Resolved display value for Woo order type: DB column first, then raw_json. */
+export function resolveWoocommerceOrderType(order: {
+  orderType?: string | null
+  rawJson?: unknown
+}): string | null {
+  const col =
+    typeof order.orderType === 'string' ? order.orderType.trim() : ''
+  if (col.length > 0) return col
+  return extractWoocommerceOrderType(order.rawJson ?? null)
+}
+
+/**
+ * Whether a WooCommerce order should be included in analytics for this workspace.
+ * Skipped "tags" list holds order_type values for Woo (same setting as Shopify tags).
+ */
+export function isWoocommerceOrderIncluded(
+  order: { orderType?: string | null; rawJson?: unknown; total?: unknown },
+  settings: OrderFilterSettings
+): boolean {
+  const totalNum = Number(order.total ?? 0)
+  if (settings.skipZeroSalesOrders && totalNum <= 0) return false
+  if (settings.skippedShopifyOrderTags.length === 0) return true
+  const resolved = resolveWoocommerceOrderType({
+    orderType: order.orderType,
+    rawJson: order.rawJson,
+  })
+  if (!resolved) return true
+  const skip = new Set(
+    settings.skippedShopifyOrderTags.map((t) => t.trim().toLowerCase())
   )
+  return !skip.has(resolved.trim().toLowerCase())
 }
 
 export type FilteredDailyRow = { grossSales: number; ordersCount: number }

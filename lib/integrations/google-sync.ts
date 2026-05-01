@@ -223,24 +223,243 @@ type GoogleGaqlRow = {
     averageCpc?: string
     allConversions?: string
   }
-  segments?: { date?: string }
-  conversionAction?: { category?: string | number; name?: string }
+  segments?: {
+    date?: string
+    conversionAction?: string
+    conversionActionCategory?: string | number
+    conversionActionName?: string
+  }
 }
 
-/** Numeric enum → name for conversion_action.category (subset). */
+/**
+ * conversion_action_category enum ints → name (google.ads.googleads.v23.enums.ConversionActionCategory).
+ * Prior mapping was off by several ordinals, so numeric categories never matched ADD_TO_CART / PURCHASE.
+ */
 const CONV_CAT_NUM: Record<number, string> = {
-  9: 'ADD_TO_CART',
-  10: 'BEGIN_CHECKOUT',
-  12: 'PURCHASE',
+  4: 'PURCHASE',
+  8: 'ADD_TO_CART',
+  9: 'BEGIN_CHECKOUT',
 }
 
 function normalizeConversionCategory(cat: unknown): string {
-  if (typeof cat === 'string') return cat.toUpperCase().replace(/ /g, '_')
-  if (typeof cat === 'number') return CONV_CAT_NUM[cat] ?? ''
+  if (typeof cat === 'number' && Number.isFinite(cat)) {
+    return CONV_CAT_NUM[cat] ?? ''
+  }
+  if (typeof cat === 'string') {
+    const t = cat.trim()
+    if (/^\d+$/.test(t)) {
+      const n = parseInt(t, 10)
+      return CONV_CAT_NUM[n] ?? ''
+    }
+    let u = t.toUpperCase().replace(/ /g, '_')
+    const dot = u.lastIndexOf('.')
+    if (dot >= 0) u = u.slice(dot + 1)
+    const prefix = 'CONVERSION_ACTION_CATEGORY_'
+    if (u.startsWith(prefix)) u = u.slice(prefix.length)
+    return u
+  }
   return ''
 }
 
+function gaqlEscapeSingleQuoted(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+}
+
+type ConversionActionMeta = { category: unknown; name: string }
+
+/** Authoritative category + name; campaign segment fields are sometimes wrong/empty for ATC. */
+async function fetchConversionActionMetaMap(
+  accessToken: string,
+  customerId: string,
+  resourceNames: string[]
+): Promise<Map<string, ConversionActionMeta>> {
+  const map = new Map<string, ConversionActionMeta>()
+  const unique = [...new Set(resourceNames)].filter(Boolean)
+  const CHUNK = 80
+  for (let i = 0; i < unique.length; i += CHUNK) {
+    const slice = unique.slice(i, i + CHUNK)
+    const inList = slice.map((r) => `'${gaqlEscapeSingleQuoted(r)}'`).join(', ')
+    const q = `
+      SELECT
+        conversion_action.resource_name,
+        conversion_action.category,
+        conversion_action.name
+      FROM conversion_action
+      WHERE conversion_action.resource_name IN (${inList})
+    `
+    try {
+      const caRows = await executeGaql(accessToken, customerId, q)
+      for (const raw of caRows) {
+        const row = raw as {
+          conversionAction?: {
+            resourceName?: string
+            resource_name?: string
+            category?: unknown
+            name?: string
+          }
+        }
+        const ca = row.conversionAction
+        const rn =
+          (typeof ca?.resourceName === 'string' && ca.resourceName) ||
+          (typeof ca?.resource_name === 'string' && ca.resource_name) ||
+          ''
+        if (!rn) continue
+        map.set(rn, {
+          category: ca?.category,
+          name: typeof ca?.name === 'string' ? ca.name : '',
+        })
+      }
+    } catch {
+      // Chunk failed; rely on segment fields for those actions
+    }
+  }
+  return map
+}
+
+function readCampaignConversionRow(row: unknown): {
+  campaignId: string
+  date?: string
+  conversionActionRn?: string
+  segmentCategory?: string | number
+  segmentName: string
+  conversions: string | undefined
+  allConversions: string | undefined
+  conversionsValue: string | undefined
+} {
+  const r = row as Record<string, unknown>
+  const camp = r.campaign as Record<string, unknown> | undefined
+  const campaignId = camp?.id != null ? String(camp.id) : ''
+  const seg = (r.segments as Record<string, unknown> | undefined) ?? {}
+  const met = (r.metrics as Record<string, unknown> | undefined) ?? {}
+
+  const rnRaw =
+    (seg.conversionAction as string | undefined) ??
+    (seg.conversion_action as string | undefined)
+  const conversionActionRn = typeof rnRaw === 'string' ? rnRaw.trim() : undefined
+
+  const segmentCategory =
+    (seg.conversionActionCategory as string | number | undefined) ??
+    (seg.conversion_action_category as string | number | undefined)
+
+  const segmentName = String(
+    seg.conversionActionName ?? seg.conversion_action_name ?? ''
+  )
+
+  const allConv =
+    met.allConversions != null
+      ? String(met.allConversions)
+      : met.all_conversions != null
+        ? String(met.all_conversions)
+        : undefined
+
+  return {
+    campaignId,
+    date: seg.date as string | undefined,
+    conversionActionRn,
+    segmentCategory,
+    segmentName,
+    conversions: met.conversions != null ? String(met.conversions) : undefined,
+    allConversions: allConv,
+    conversionsValue:
+      met.conversionsValue != null
+        ? String(met.conversionsValue)
+        : met.conversions_value != null
+          ? String(met.conversions_value)
+          : undefined,
+  }
+}
+
 type FunnelAcc = { atc: number; ci: number; purch: number; purchVal: number }
+
+/**
+ * Sum all conversions in Google's ADD_TO_CART category per campaign × day.
+ * Per–conversion-action rows often omit or mis-segment ATC; category roll-up matches UI totals.
+ */
+async function fetchAddToCartTotalsByCategory(
+  accessToken: string,
+  customerId: string,
+  sinceStr: string,
+  untilStr: string
+): Promise<Map<string, number>> {
+  const q = `
+    SELECT
+      campaign.id,
+      segments.date,
+      segments.conversion_action_category,
+      metrics.all_conversions,
+      metrics.conversions
+    FROM campaign
+    WHERE ${buildGaqlDateRange(sinceStr, untilStr)}
+      AND campaign.status != 'REMOVED'
+      AND segments.conversion_action_category = 'ADD_TO_CART'
+  `
+  try {
+    const resultRows = await executeGaql(accessToken, customerId, q)
+    const map = new Map<string, number>()
+    for (const row of resultRows) {
+      const p = readCampaignConversionRow(row)
+      if (!p.campaignId || !p.date) continue
+      const conv = parseFloat(String(p.conversions ?? '0')) || 0
+      const allConv = parseFloat(String(p.allConversions ?? '0')) || 0
+      const v = allConv > 0 ? allConv : conv
+      const key = `${customerId}|${p.campaignId}|${p.date}`
+      map.set(key, (map.get(key) ?? 0) + v)
+    }
+    return map
+  } catch {
+    return new Map()
+  }
+}
+
+/** When category-segment query returns nothing, sum metrics for actions whose definition is ADD_TO_CART. */
+async function fetchAddToCartResourceNames(
+  accessToken: string,
+  customerId: string
+): Promise<Set<string>> {
+  const q = `
+    SELECT conversion_action.resource_name
+    FROM conversion_action
+    WHERE conversion_action.category = 'ADD_TO_CART'
+      AND conversion_action.status != 'REMOVED'
+  `
+  try {
+    const resultRows = await executeGaql(accessToken, customerId, q)
+    const set = new Set<string>()
+    for (const raw of resultRows) {
+      const row = raw as {
+        conversionAction?: { resourceName?: string; resource_name?: string }
+      }
+      const rn =
+        (typeof row.conversionAction?.resourceName === 'string' && row.conversionAction.resourceName) ||
+        (typeof row.conversionAction?.resource_name === 'string' && row.conversionAction.resource_name) ||
+        ''
+      if (rn) set.add(rn)
+    }
+    return set
+  } catch {
+    return new Set()
+  }
+}
+
+function sumAddToCartMetricsFromRows(
+  rows: unknown[],
+  customerId: string,
+  atcRnSet: Set<string>
+): Map<string, number> {
+  const map = new Map<string, number>()
+  if (atcRnSet.size === 0) return map
+  for (const row of rows) {
+    const p = readCampaignConversionRow(row)
+    const rn = p.conversionActionRn ?? ''
+    if (!p.campaignId || !p.date || !rn || !atcRnSet.has(rn)) continue
+    const conv = parseFloat(String(p.conversions ?? '0')) || 0
+    const allConv = parseFloat(String(p.allConversions ?? '0')) || 0
+    const v = allConv > 0 ? allConv : conv
+    const key = `${customerId}|${p.campaignId}|${p.date}`
+    map.set(key, (map.get(key) ?? 0) + v)
+  }
+  return map
+}
 
 async function syncGoogleFunnelStagesForWindow(
   connectionId: string,
@@ -250,13 +469,14 @@ async function syncGoogleFunnelStagesForWindow(
   untilStr: string,
   errors: string[]
 ): Promise<void> {
+  // Use segments.* only — selecting conversion_action.* with FROM campaign is invalid (PROHIBITED_RESOURCE_TYPE_IN_SELECT_CLAUSE in v23+).
   const query = `
     SELECT
       campaign.id,
       segments.date,
       segments.conversion_action,
-      conversion_action.category,
-      conversion_action.name,
+      segments.conversion_action_category,
+      segments.conversion_action_name,
       metrics.conversions,
       metrics.all_conversions,
       metrics.conversions_value
@@ -274,6 +494,23 @@ async function syncGoogleFunnelStagesForWindow(
     return
   }
 
+  const convResourceNames: string[] = []
+  for (const row of rows) {
+    const p = readCampaignConversionRow(row)
+    if (p.conversionActionRn) convResourceNames.push(p.conversionActionRn)
+  }
+  const [actionMeta, atcByCategoryKey] = await Promise.all([
+    fetchConversionActionMetaMap(accessToken, customerId, convResourceNames),
+    fetchAddToCartTotalsByCategory(accessToken, customerId, sinceStr, untilStr),
+  ])
+
+  let atcRnSet = new Set<string>()
+  let atcByResourceNameKey = new Map<string, number>()
+  if (atcByCategoryKey.size === 0) {
+    atcRnSet = await fetchAddToCartResourceNames(accessToken, customerId)
+    atcByResourceNameKey = sumAddToCartMetricsFromRows(rows, customerId, atcRnSet)
+  }
+
   const byKey = new Map<string, FunnelAcc>()
   const getAcc = (key: string): FunnelAcc => {
     let a = byKey.get(key)
@@ -285,26 +522,39 @@ async function syncGoogleFunnelStagesForWindow(
   }
 
   for (const row of rows) {
-    const r = row as GoogleGaqlRow
-    const campId = r.campaign?.id != null ? String(r.campaign.id) : ''
-    const date = r.segments?.date
-    const ca = r.conversionAction
-    const met = r.metrics
-    if (!campId || !date || !ca) continue
+    const p = readCampaignConversionRow(row)
+    const { campaignId: campId, date } = p
+    if (!campId || !date) continue
 
-    const stage = mapGoogleConversionActionToStage(
-      normalizeConversionCategory(ca.category),
-      ca.name ?? ''
-    )
+    const rn = p.conversionActionRn ?? ''
+    const meta = rn ? actionMeta.get(rn) : undefined
+    const categoryRaw =
+      meta?.category !== undefined && meta?.category !== null
+        ? meta.category
+        : p.segmentCategory
+    const name =
+      (meta?.name && meta.name.trim()) ||
+      (p.segmentName && p.segmentName.trim()) ||
+      ''
+
+    const normCat = normalizeConversionCategory(categoryRaw)
+    const stage = mapGoogleConversionActionToStage(normCat, name)
     if (!stage) continue
 
-    const conv = parseFloat(String(met?.conversions ?? '0')) || 0
-    const allConv = parseFloat(String(met?.allConversions ?? '0')) || 0
-    const val = parseFloat(String(met?.conversionsValue ?? '0')) || 0
+    const conv = parseFloat(String(p.conversions ?? '0')) || 0
+    const allConv = parseFloat(String(p.allConversions ?? '0')) || 0
+    const val = parseFloat(String(p.conversionsValue ?? '0')) || 0
     const key = `${customerId}|${campId}|${date}`
     const acc = getAcc(key)
 
     if (stage === 'add_to_cart') {
+      const rn = p.conversionActionRn ?? ''
+      if (atcByCategoryKey.size > 0 && normCat === 'ADD_TO_CART') {
+        continue
+      }
+      if (atcRnSet.size > 0 && atcRnSet.has(rn)) {
+        continue
+      }
       acc.atc += allConv > 0 ? allConv : conv
     } else if (stage === 'checkout_initiated') {
       acc.ci += allConv > 0 ? allConv : conv
@@ -312,6 +562,17 @@ async function syncGoogleFunnelStagesForWindow(
       acc.purch += conv > 0 ? conv : allConv
       acc.purchVal += val
     }
+  }
+
+  for (const [key, v] of atcByCategoryKey) {
+    if (v <= 0) continue
+    const acc = getAcc(key)
+    acc.atc += v
+  }
+  for (const [key, v] of atcByResourceNameKey) {
+    if (v <= 0) continue
+    const acc = getAcc(key)
+    acc.atc += v
   }
 
   const sinceD = new Date(sinceStr + 'T00:00:00.000Z')

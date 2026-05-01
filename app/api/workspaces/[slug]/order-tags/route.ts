@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
+import { extractWoocommerceOrderType } from '@/lib/order-filters'
+import { fetchWoocommerceOrders } from '@/lib/integrations/woocommerce'
 
 /**
  * GET: Return distinct Shopify order tags for the workspace's orders (for Filters multiselect).
@@ -24,6 +26,15 @@ export async function GET(
     where: { slug },
     include: {
       members: { where: { userId: user.id } },
+      woocommerceConnection: {
+        select: {
+          id: true,
+          status: true,
+          storeUrl: true,
+          consumerKey: true,
+          consumerSecret: true,
+        },
+      },
       shopifyConnections: {
         where: { status: 'CONNECTED' },
         select: { id: true },
@@ -34,6 +45,58 @@ export async function GET(
 
   if (!workspace || workspace.members.length === 0) {
     return NextResponse.json({ error: 'Workspace not found' }, { status: 404 })
+  }
+
+  if (workspace.platform === 'WOOCOMMERCE') {
+    const wooConnection =
+      workspace.woocommerceConnection?.status === 'CONNECTED'
+        ? workspace.woocommerceConnection
+        : null
+
+    if (!wooConnection) {
+      return NextResponse.json({ tags: [] })
+    }
+
+    const types = new Set<string>()
+
+    // Prefer fresh Woo API payloads so newly added order_type tags show immediately.
+    try {
+      const recentAfter = new Date()
+      recentAfter.setUTCDate(recentAfter.getUTCDate() - 120)
+      let page = 1
+      let totalPages = 1
+      do {
+        const result = await fetchWoocommerceOrders(
+          wooConnection.storeUrl,
+          wooConnection.consumerKey,
+          wooConnection.consumerSecret,
+          recentAfter,
+          page
+        )
+        totalPages = result.totalPages
+        for (const order of result.orders) {
+          const value = extractWoocommerceOrderType(order)
+          if (value) types.add(value)
+        }
+        page += 1
+      } while (page <= totalPages && page <= 5)
+    } catch {
+      // Fallback to synced DB payload when API request fails.
+    }
+
+    if (types.size === 0) {
+      const orders = await prisma.woocommerceOrder.findMany({
+        where: { connectionId: wooConnection.id },
+        select: { rawJson: true },
+        take: 5000,
+      })
+      for (const order of orders) {
+        const value = extractWoocommerceOrderType(order.rawJson)
+        if (value) types.add(value)
+      }
+    }
+
+    return NextResponse.json({ tags: [...types].sort((a, b) => a.localeCompare(b)) })
   }
 
   const connectionId = workspace.shopifyConnections[0]?.id

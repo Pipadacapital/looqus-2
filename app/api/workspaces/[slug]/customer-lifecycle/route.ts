@@ -3,7 +3,11 @@ import { format } from 'date-fns'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
 import { featureGuard } from '@/lib/features'
-import { normalizeOrderFilterSettings } from '@/lib/order-filters'
+import {
+  isWoocommerceOrderIncluded,
+  normalizeOrderFilterSettings,
+} from '@/lib/order-filters'
+import { ensureWooOrderTypesForOrderFilters } from '@/lib/integrations/woocommerce-sync'
 import { computeCustomerLifecycleReport } from '@/lib/metrics/customer-lifecycle-report'
 import {
   classifyCustomerLifecycle,
@@ -115,6 +119,8 @@ export async function GET(
     }
 
     const asOfEnd = new Date(asOf + 'T23:59:59.999Z')
+    const orderFilterSettings = normalizeOrderFilterSettings(workspace as any)
+    await ensureWooOrderTypesForOrderFilters(wooConn.id, orderFilterSettings, { maxUpdates: 5000 })
     const trainFrom = new Date(asOfEnd)
     trainFrom.setUTCDate(trainFrom.getUTCDate() - trainingWindowDays)
     trainFrom.setUTCHours(0, 0, 0, 0)
@@ -123,16 +129,29 @@ export async function GET(
     revenueFrom.setUTCDate(revenueFrom.getUTCDate() - revenueWindowDays)
     revenueFrom.setUTCHours(0, 0, 0, 0)
 
-    const trainOrders = await prisma.woocommerceOrder.findMany({
+    const trainOrdersRaw = await prisma.woocommerceOrder.findMany({
       where: {
         connectionId: wooConn.id,
         customerEmail: { not: null },
         dateCreated: { gte: trainFrom, lte: asOfEnd },
         status: { notIn: ['cancelled', 'failed', 'pending'] },
       },
-      select: { customerEmail: true, dateCreated: true, wcOrderId: true },
+      select: {
+        customerEmail: true,
+        dateCreated: true,
+        wcOrderId: true,
+        total: true,
+        orderType: true,
+        rawJson: true,
+      },
       orderBy: [{ customerEmail: 'asc' }, { dateCreated: 'asc' }],
     })
+    const trainOrders = trainOrdersRaw.filter((o) =>
+      isWoocommerceOrderIncluded(
+        { orderType: o.orderType, rawJson: o.rawJson, total: o.total },
+        orderFilterSettings
+      )
+    )
 
     const gaps: number[] = []
     const trainByCustomer = new Map<string, Date[]>()
@@ -179,16 +198,28 @@ export async function GET(
       usedFallback,
     }
 
-    const lifetimeOrders = await prisma.woocommerceOrder.findMany({
+    const lifetimeOrdersRaw = await prisma.woocommerceOrder.findMany({
       where: {
         connectionId: wooConn.id,
         customerEmail: { not: null },
         dateCreated: { lte: asOfEnd },
         status: { notIn: ['cancelled', 'failed', 'pending'] },
       },
-      select: { customerEmail: true, dateCreated: true },
+      select: {
+        customerEmail: true,
+        dateCreated: true,
+        total: true,
+        orderType: true,
+        rawJson: true,
+      },
       orderBy: [{ customerEmail: 'asc' }, { dateCreated: 'asc' }],
     })
+    const lifetimeOrders = lifetimeOrdersRaw.filter((o) =>
+      isWoocommerceOrderIncluded(
+        { orderType: o.orderType, rawJson: o.rawJson, total: o.total },
+        orderFilterSettings
+      )
+    )
 
     const lifecycleByCustomer = new Map<string, LifecycleBucket>()
     const counts = emptyLifecycleCounts()
@@ -231,14 +262,20 @@ export async function GET(
       churned: 0,
     }
 
-    const revenueOrders = await prisma.woocommerceOrder.findMany({
+    const revenueOrdersRaw = await prisma.woocommerceOrder.findMany({
       where: {
         connectionId: wooConn.id,
         dateCreated: { gte: revenueFrom, lte: asOfEnd },
         status: { notIn: ['cancelled', 'failed', 'pending'] },
       },
-      select: { customerEmail: true, total: true },
+      select: { customerEmail: true, total: true, orderType: true, rawJson: true },
     })
+    const revenueOrders = revenueOrdersRaw.filter((o) =>
+      isWoocommerceOrderIncluded(
+        { orderType: o.orderType, rawJson: o.rawJson, total: o.total },
+        orderFilterSettings
+      )
+    )
 
     let unattributedRevenue = 0
     let unattributedOrderCount = 0

@@ -26,7 +26,7 @@ export function AdsBackfillClient({
   workspaceSlug,
   isOwner,
 }: AdsBackfillClientProps) {
-  const [loading, setLoading] = useState(false)
+  const [adsLoading, setAdsLoading] = useState<null | 'meta' | 'google' | 'both'>(null)
   const [returnsLoading, setReturnsLoading] = useState(false)
   const [refundLinesLoading, setRefundLinesLoading] = useState(false)
   const [rebuildLoading, setRebuildLoading] = useState(false)
@@ -50,12 +50,16 @@ export function AdsBackfillClient({
     stillMissing: number
   } | null>(null)
 
-  async function handleBackfill() {
+  async function postAdsBackfill(provider: 'meta' | 'google' | 'both') {
     if (!isOwner) return
-    setLoading(true)
+    setAdsLoading(provider)
+    const qs =
+      provider === 'both'
+        ? ''
+        : `&provider=${encodeURIComponent(provider)}`
     try {
       const res = await fetch(
-        `/api/integrations/ads/backfill?workspaceId=${encodeURIComponent(workspaceId)}`,
+        `/api/integrations/ads/backfill?workspaceId=${encodeURIComponent(workspaceId)}${qs}`,
         { method: 'POST' }
       )
       const data = await res.json()
@@ -63,15 +67,25 @@ export function AdsBackfillClient({
         toast.error(data.error || 'Backfill failed')
         return
       }
-      const metaRows = data.meta?.rowsSynced ?? 0
-      const googleRows = data.google?.rowsSynced ?? 0
-      toast.success(
-        `Backfill complete: Meta ${metaRows} rows, Google ${googleRows} rows`
-      )
+      if (!data.success && data.error) {
+        toast.error(data.error)
+        return
+      }
+      const metaRows = data.meta?.rowsSynced
+      const googleRows = data.google?.rowsSynced
+      if (provider === 'meta') {
+        toast.success(`Meta backfill complete: ${metaRows ?? 0} rows`)
+      } else if (provider === 'google') {
+        toast.success(`Google Ads backfill complete: ${googleRows ?? 0} rows`)
+      } else {
+        toast.success(
+          `Backfill complete: Meta ${metaRows ?? 0} rows, Google ${googleRows ?? 0} rows`
+        )
+      }
     } catch {
       toast.error('Backfill failed')
     } finally {
-      setLoading(false)
+      setAdsLoading(null)
     }
   }
 
@@ -242,16 +256,38 @@ export function AdsBackfillClient({
   if (!isOwner) {
     return (
       <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span>
-              <Button disabled variant="outline">
-                Backfill Meta+Google (2 years)
-              </Button>
-            </span>
-          </TooltipTrigger>
-          <TooltipContent>Owner only</TooltipContent>
-        </Tooltip>
+        <div className="flex flex-wrap gap-2">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span>
+                <Button disabled variant="outline" size="sm">
+                  Backfill Meta (2 years)
+                </Button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>Owner only</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span>
+                <Button disabled variant="outline" size="sm">
+                  Backfill Google (2 years)
+                </Button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>Owner only</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span>
+                <Button disabled variant="outline" size="sm">
+                  Backfill Meta + Google (2 years)
+                </Button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>Owner only</TooltipContent>
+          </Tooltip>
+        </div>
       </TooltipProvider>
     )
   }
@@ -263,25 +299,64 @@ export function AdsBackfillClient({
         <p className="text-sm text-muted-foreground">
           Fetches up to 2 years of daily Meta and Google Ads metrics (spend, impressions,
           clicks, etc.) into this workspace. Use after connecting Meta and Google Ads, or to
-          refresh historical data.
+          refresh historical data. Meta backfill can take a long time — run Google alone if you
+          only need Google history.
         </p>
-        <Button
-          onClick={handleBackfill}
-          disabled={loading}
-          className="gap-2"
-        >
-          {loading ? (
-            <>
-              <IconLoader2 className="h-4 w-4 animate-spin" />
-              Backfilling…
-            </>
-          ) : (
-            <>
-              <IconRefresh className="h-4 w-4" />
-              Backfill Meta+Google (2 years)
-            </>
-          )}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            onClick={() => postAdsBackfill('meta')}
+            disabled={adsLoading !== null}
+            variant="outline"
+            className="gap-2"
+          >
+            {adsLoading === 'meta' ? (
+              <>
+                <IconLoader2 className="h-4 w-4 animate-spin" />
+                Meta…
+              </>
+            ) : (
+              <>
+                <IconRefresh className="h-4 w-4" />
+                Backfill Meta (2 years)
+              </>
+            )}
+          </Button>
+          <Button
+            onClick={() => postAdsBackfill('google')}
+            disabled={adsLoading !== null}
+            variant="outline"
+            className="gap-2"
+          >
+            {adsLoading === 'google' ? (
+              <>
+                <IconLoader2 className="h-4 w-4 animate-spin" />
+                Google…
+              </>
+            ) : (
+              <>
+                <IconRefresh className="h-4 w-4" />
+                Backfill Google (2 years)
+              </>
+            )}
+          </Button>
+          <Button
+            onClick={() => postAdsBackfill('both')}
+            disabled={adsLoading !== null}
+            className="gap-2"
+          >
+            {adsLoading === 'both' ? (
+              <>
+                <IconLoader2 className="h-4 w-4 animate-spin" />
+                Meta then Google…
+              </>
+            ) : (
+              <>
+                <IconRefresh className="h-4 w-4" />
+                Backfill Meta + Google (2 years)
+              </>
+            )}
+          </Button>
+        </div>
       </section>
 
       <section className="space-y-4 border-t pt-6">

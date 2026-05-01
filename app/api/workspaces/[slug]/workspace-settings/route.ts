@@ -59,6 +59,7 @@ export async function GET(
   const skippedTags = workspace.skipped_shopify_order_tags ?? []
   const skipZero = workspace.skip_zero_sales_orders ?? false
   return NextResponse.json({
+    platform: workspace.platform,
     timezone: workspace.timezone,
     taxPercent: Number(workspace.taxPercent),
     skippedShopifyOrderTags: skippedTags,
@@ -115,6 +116,7 @@ export async function PATCH(
     const skippedTags = updatedWorkspace.skipped_shopify_order_tags ?? []
     const skipZero = updatedWorkspace.skip_zero_sales_orders ?? false
     return NextResponse.json({
+      platform: updatedWorkspace.platform,
       timezone: updatedWorkspace.timezone,
       taxPercent: Number(updatedWorkspace.taxPercent),
       skippedShopifyOrderTags: skippedTags,
@@ -129,5 +131,67 @@ export async function PATCH(
     }
 
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 })
+  }
+}
+
+const deleteWorkspaceSchema = z.object({
+  password: z.string().min(1, 'Password is required'),
+})
+
+export async function DELETE(
+  request: NextRequest,
+  context: { params: Promise<{ slug: string }> }
+) {
+  const { slug } = await context.params
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const workspace = await getWorkspaceAndMembership(slug, user.id)
+  if (!workspace) {
+    return NextResponse.json({ error: 'Workspace not found' }, { status: 404 })
+  }
+
+  const role = workspace.members[0]?.role as WorkspaceRole | undefined
+  if (role !== 'OWNER') {
+    return NextResponse.json(
+      { error: 'Only workspace owner can delete this workspace' },
+      { status: 403 }
+    )
+  }
+
+  try {
+    const json = await request.json()
+    const { password } = deleteWorkspaceSchema.parse(json)
+    const email = user.email
+    if (!email) {
+      return NextResponse.json({ error: 'Could not verify account email' }, { status: 400 })
+    }
+
+    const verify = await supabase.auth.signInWithPassword({ email, password })
+    if (verify.error) {
+      return NextResponse.json({ error: 'Invalid password' }, { status: 401 })
+    }
+
+    await prisma.workspace.delete({
+      where: { id: workspace.id },
+    })
+
+    return NextResponse.json({ success: true })
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      const fieldErrors = error.flatten().fieldErrors as Record<string, string[] | undefined>
+      return NextResponse.json(
+        { error: fieldErrors.password?.[0] ?? 'Invalid request' },
+        { status: 400 }
+      )
+    }
+
+    return NextResponse.json({ error: 'Failed to delete workspace' }, { status: 500 })
   }
 }

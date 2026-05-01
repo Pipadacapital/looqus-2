@@ -4,6 +4,11 @@ import { prisma } from '@/lib/prisma'
 import { featureGuard } from '@/lib/features'
 import { computeCohorts, getOrderDateStats } from '@/lib/cohorts/compute'
 import type { CohortMetric, CohortMode } from '@/lib/cohorts/types'
+import {
+  isWoocommerceOrderIncluded,
+  normalizeOrderFilterSettings,
+} from '@/lib/order-filters'
+import { ensureWooOrderTypesForOrderFilters } from '@/lib/integrations/woocommerce-sync'
 
 const METRICS: CohortMetric[] = ['cm3', 'revenue', 'repeat', 'repurchase']
 const MODES: CohortMode[] = ['post', 'cumulative', 'incr', 'pct', 'ltvcac']
@@ -130,7 +135,9 @@ export async function GET(
     const toDateExtended = new Date(toDate)
     toDateExtended.setUTCDate(toDateExtended.getUTCDate() + 360)
 
-    const [orders, products] = await Promise.all([
+    const orderFilterSettings = normalizeOrderFilterSettings(workspace as any)
+    await ensureWooOrderTypesForOrderFilters(wooConn.id, orderFilterSettings, { maxUpdates: 5000 })
+    const [allOrders, products] = await Promise.all([
       prisma.woocommerceOrder.findMany({
         where: {
           connectionId: wooConn.id,
@@ -143,6 +150,8 @@ export async function GET(
           customerEmail: true,
           dateCreated: true,
           total: true,
+          orderType: true,
+          rawJson: true,
           lineItems: {
             select: {
               sku: true,
@@ -165,6 +174,16 @@ export async function GET(
         select: { sku: true, coq: true },
       }),
     ])
+    const orders = allOrders.filter((o) =>
+      isWoocommerceOrderIncluded(
+        {
+          orderType: o.orderType,
+          rawJson: o.rawJson,
+          total: o.total,
+        },
+        orderFilterSettings
+      )
+    )
 
     const meta = workspace.meta_ads_connections
     const google = workspace.google_ads_connections

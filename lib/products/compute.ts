@@ -6,8 +6,11 @@ import {
   getOrderInclusionWhere,
   getFilteredDailyAggregates,
   hasNoOrderFilters,
+  isWoocommerceOrderIncluded,
   normalizeOrderFilterSettings,
+  type OrderFilterSettings,
 } from '@/lib/order-filters'
+import { ensureWooOrderTypesForOrderFilters } from '@/lib/integrations/woocommerce-sync'
 import { getEffectiveDailyAggregates } from '@/lib/effective-daily'
 import { resolveLineItemCogs, normalizeCogsSettings } from '@/lib/cogs'
 import { getDailyVariableContribution } from '@/lib/workspace-costs'
@@ -900,23 +903,36 @@ async function fetchWooDailyRatesForProducts(
   wooConnId: string,
   fromDate: Date,
   toDate: Date,
-  storeCurrency: string
+  storeCurrency: string,
+  orderFilterSettings: OrderFilterSettings
 ): Promise<
   Map<string, { ordersCount: number; grossSales: number; totalReturns: number; variableCost: number }>
 > {
-  const [ordersByDay, workspaceCosts] = await Promise.all([
+  const [ordersByDayRaw, workspaceCosts] = await Promise.all([
     prisma.woocommerceOrder.findMany({
       where: {
         connectionId: wooConnId,
         dateCreated: { gte: fromDate, lte: toDate },
         status: { notIn: ['cancelled', 'failed', 'pending'] },
       },
-      select: { dateCreated: true, total: true, totalRefund: true },
+      select: {
+        dateCreated: true,
+        total: true,
+        totalRefund: true,
+        orderType: true,
+        rawJson: true,
+      },
     }),
     prisma.workspaceCost.findMany({
       where: { workspaceId, effectiveFrom: { lte: toDate } },
     }),
   ])
+  const ordersByDay = ordersByDayRaw.filter((o) =>
+    isWoocommerceOrderIncluded(
+      { orderType: o.orderType, rawJson: o.rawJson, total: o.total },
+      orderFilterSettings
+    )
+  )
   const dayAgg = new Map<string, { grossSales: number; ordersCount: number; totalReturns: number }>()
   for (const o of ordersByDay) {
     if (!o.dateCreated) continue
@@ -1001,6 +1017,18 @@ export async function computeWoocommerceProducts(
   const storeCurrency = wooConn.currency ?? 'USD'
   const fromDate = new Date(params.from + 'T00:00:00.000Z')
   const toDate = new Date(params.to + 'T23:59:59.999Z')
+  const workspaceOrderFilterRaw = await prisma.workspace.findUnique({
+    where: { id: workspaceId },
+    select: {
+      skipped_shopify_order_tags: true,
+      skip_zero_sales_orders: true,
+    },
+  })
+  const workspaceOrderFilterSettings = normalizeOrderFilterSettings({
+    skippedShopifyOrderTags: workspaceOrderFilterRaw?.skipped_shopify_order_tags ?? [],
+    skipZeroSalesOrders: workspaceOrderFilterRaw?.skip_zero_sales_orders ?? false,
+  })
+  await ensureWooOrderTypesForOrderFilters(wooConn.id, workspaceOrderFilterSettings, { maxUpdates: 5000 })
 
   const groupBy: 'product' | 'variant' =
     params.groupBy === 'variant' ? 'variant' : 'product'
@@ -1022,6 +1050,8 @@ export async function computeWoocommerceProducts(
             totalRefund: true,
             customerEmail: true,
             dateCreated: true,
+            orderType: true,
+            rawJson: true,
           },
         },
       },
@@ -1046,7 +1076,14 @@ export async function computeWoocommerceProducts(
         customerEmail: { not: null },
         status: { notIn: ['cancelled', 'failed', 'pending'] },
       },
-      select: { id: true, customerEmail: true, dateCreated: true },
+      select: {
+        id: true,
+        customerEmail: true,
+        dateCreated: true,
+        total: true,
+        orderType: true,
+        rawJson: true,
+      },
       orderBy: [{ dateCreated: 'asc' }, { id: 'asc' }],
     }),
   ])
@@ -1058,7 +1095,13 @@ export async function computeWoocommerceProducts(
   )
 
   const firstByEmail = new Map<string, { firstAt: Date; orderId: string }>()
-  for (const o of ordersForFirst) {
+  const filteredOrdersForFirst = ordersForFirst.filter((o) =>
+    isWoocommerceOrderIncluded(
+      { orderType: o.orderType, rawJson: o.rawJson, total: o.total },
+      workspaceOrderFilterSettings
+    )
+  )
+  for (const o of filteredOrdersForFirst) {
     const em = o.customerEmail?.trim().toLowerCase()
     if (!em) continue
     if (!firstByEmail.has(em)) {
@@ -1072,7 +1115,8 @@ export async function computeWoocommerceProducts(
     wooConn.id,
     fromDate,
     toDate,
-    storeCurrency
+    storeCurrency,
+    workspaceOrderFilterSettings
   )
 
   type Agg = {
@@ -1130,14 +1174,24 @@ export async function computeWoocommerceProducts(
   }
 
   const lineItemsByOrder = new Map<string, typeof lineItems>()
-  for (const li of lineItems) {
+  const filteredLineItems = lineItems.filter((li) =>
+    isWoocommerceOrderIncluded(
+      {
+        orderType: li.order.orderType,
+        rawJson: li.order.rawJson,
+        total: li.order.total,
+      },
+      workspaceOrderFilterSettings
+    )
+  )
+  for (const li of filteredLineItems) {
     const list = lineItemsByOrder.get(li.orderId) ?? []
     list.push(li)
     lineItemsByOrder.set(li.orderId, list)
   }
 
   const orderById = new Map<string, (typeof lineItems)[number]['order']>()
-  for (const li of lineItems) {
+  for (const li of filteredLineItems) {
     if (li.order) orderById.set(li.orderId, li.order)
   }
   const orderIdToNc = new Map<string, boolean>()
@@ -1153,7 +1207,7 @@ export async function computeWoocommerceProducts(
     orderIdToNc.set(oid, isNc)
   }
 
-  for (const li of lineItems) {
+  for (const li of filteredLineItems) {
     const order = li.order
     if (!order?.dateCreated) continue
     const dateStr = order.dateCreated.toISOString().slice(0, 10)

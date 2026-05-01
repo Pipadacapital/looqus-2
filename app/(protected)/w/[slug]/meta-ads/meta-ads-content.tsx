@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
 import { format, subDays } from 'date-fns'
@@ -18,6 +18,8 @@ import {
   IconArrowDown,
   IconArrowsSort,
   IconBrandMeta,
+  IconChevronDown,
+  IconChevronRight,
 } from '@tabler/icons-react'
 import { useWorkspace } from '@/hooks/use-workspace'
 import { Button } from '@/components/ui/button'
@@ -208,6 +210,192 @@ export type MetaCreativeAdRow = {
   roas: number
   conversions: number
   diagnosticLabels: string[]
+  /** From Graph API Ad → creative (live on creative tab load). */
+  previewImageUrl?: string | null
+  previewVideoId?: string | null
+}
+
+type MetaCreativeRollup = Pick<
+  MetaCreativeAdRow,
+  | 'impressions'
+  | 'clicks'
+  | 'spend'
+  | 'conversions'
+  | 'isVideo'
+  | 'hookRatePct'
+  | 'holdRatePct'
+  | 'p25RatePct'
+  | 'p50RatePct'
+  | 'p75RatePct'
+  | 'p95RatePct'
+  | 'avgWatchSec'
+  | 'ctrPct'
+  | 'roas'
+>
+
+function computeRollupMetaMetrics(rows: MetaCreativeAdRow[]): MetaCreativeRollup {
+  let impressions = 0
+  let clicks = 0
+  let spend = 0
+  let conversions = 0
+  let revenue = 0
+  let anyVideo = false
+
+  const weightedPct = (get: (r: MetaCreativeAdRow) => number | null) => {
+    let num = 0
+    let den = 0
+    for (const r of rows) {
+      const v = get(r)
+      if (v != null && r.impressions > 0) {
+        num += (v / 100) * r.impressions
+        den += r.impressions
+      }
+    }
+    return den > 0 ? (num / den) * 100 : null
+  }
+
+  for (const r of rows) {
+    impressions += r.impressions
+    clicks += r.clicks
+    spend += r.spend
+    conversions += r.conversions
+    revenue += r.roas * r.spend
+    if (r.isVideo) anyVideo = true
+  }
+
+  let avgWatchNum = 0
+  let avgWatchDen = 0
+  for (const r of rows) {
+    if (r.avgWatchSec != null && r.impressions > 0) {
+      avgWatchNum += r.avgWatchSec * r.impressions
+      avgWatchDen += r.impressions
+    }
+  }
+
+  return {
+    impressions,
+    clicks,
+    spend,
+    conversions,
+    isVideo: anyVideo,
+    hookRatePct: weightedPct((r) => r.hookRatePct),
+    holdRatePct: weightedPct((r) => r.holdRatePct),
+    p25RatePct: weightedPct((r) => r.p25RatePct),
+    p50RatePct: weightedPct((r) => r.p50RatePct),
+    p75RatePct: weightedPct((r) => r.p75RatePct),
+    p95RatePct: weightedPct((r) => r.p95RatePct),
+    avgWatchSec: avgWatchDen > 0 ? avgWatchNum / avgWatchDen : null,
+    ctrPct: impressions > 0 ? (100 * clicks) / impressions : 0,
+    roas: spend > 0 ? revenue / spend : 0,
+  }
+}
+
+type MetaAdsetCreativeTree = {
+  adsetKey: string
+  adsetId: string
+  adsetName: string
+  ads: MetaCreativeAdRow[]
+} & MetaCreativeRollup
+
+type MetaCampaignCreativeTree = {
+  campaignId: string
+  campaignName: string
+  intent: CampaignIntent
+  adsets: MetaAdsetCreativeTree[]
+  adCount: number
+} & MetaCreativeRollup
+
+function buildMetaCreativeTree(rows: MetaCreativeAdRow[]): MetaCampaignCreativeTree[] {
+  const byCampaign = new Map<string, MetaCreativeAdRow[]>()
+  for (const r of rows) {
+    const list = byCampaign.get(r.campaignId) ?? []
+    list.push(r)
+    byCampaign.set(r.campaignId, list)
+  }
+
+  const campaigns: MetaCampaignCreativeTree[] = []
+
+  for (const [, campAds] of byCampaign) {
+    if (campAds.length === 0) continue
+    const byAdset = new Map<string, MetaCreativeAdRow[]>()
+    for (const r of campAds) {
+      const k = r.adsetId?.trim() || '_no_adset'
+      const list = byAdset.get(k) ?? []
+      list.push(r)
+      byAdset.set(k, list)
+    }
+
+    const adsets: MetaAdsetCreativeTree[] = []
+    const firstCamp = campAds[0]!
+    const campaignId = firstCamp.campaignId
+
+    for (const [adsetKeyRaw, ads] of byAdset) {
+      const sorted = [...ads].sort((a, b) => b.spend - a.spend)
+      const first = sorted[0]!
+      const adsetId = adsetKeyRaw === '_no_adset' ? '' : first.adsetId ?? adsetKeyRaw
+      const adsetName =
+        adsetKeyRaw === '_no_adset'
+          ? 'Ad set (not linked in sync)'
+          : (first.adsetName?.trim() || adsetId || adsetKeyRaw)
+      const adsetKey = `${campaignId}|${adsetKeyRaw}`
+      adsets.push({
+        adsetKey,
+        adsetId,
+        adsetName,
+        ads: sorted,
+        ...computeRollupMetaMetrics(sorted),
+      })
+    }
+    adsets.sort((a, b) => b.spend - a.spend)
+
+    campaigns.push({
+      campaignId,
+      campaignName: firstCamp.campaignName || campaignId,
+      intent: firstCamp.intent,
+      adsets,
+      adCount: campAds.length,
+      ...computeRollupMetaMetrics(campAds),
+    })
+  }
+
+  campaigns.sort((a, b) => b.spend - a.spend)
+  return campaigns
+}
+
+function MetaCreativeMetricCells({
+  m,
+  currencyCode,
+  pctOrNa,
+}: {
+  m: MetaCreativeRollup
+  currencyCode: string
+  pctOrNa: (v: number | null) => ReactNode
+}) {
+  return (
+    <>
+      <TableCell className="text-right tabular-nums font-medium">
+        {formatCurrency(m.spend, currencyCode)}
+      </TableCell>
+      <TableCell className="text-right tabular-nums text-muted-foreground">
+        {formatNumber(m.impressions)}
+      </TableCell>
+      <TableCell className="text-right">{pctOrNa(m.hookRatePct)}</TableCell>
+      <TableCell className="text-right">{pctOrNa(m.holdRatePct)}</TableCell>
+      <TableCell className="text-right">{pctOrNa(m.p25RatePct)}</TableCell>
+      <TableCell className="text-right">{pctOrNa(m.p50RatePct)}</TableCell>
+      <TableCell className="text-right">{pctOrNa(m.p75RatePct)}</TableCell>
+      <TableCell className="text-right">{pctOrNa(m.p95RatePct)}</TableCell>
+      <TableCell className="text-right tabular-nums">
+        {m.avgWatchSec == null ? (
+          <span className="text-muted-foreground">N/A</span>
+        ) : (
+          m.avgWatchSec.toFixed(2)
+        )}
+      </TableCell>
+      <TableCell className="text-right tabular-nums">{m.ctrPct.toFixed(2)}%</TableCell>
+      <TableCell className="text-right font-medium tabular-nums">{m.roas.toFixed(2)}x</TableCell>
+    </>
+  )
 }
 
 function CreativeAdsTable({
@@ -231,9 +419,34 @@ function CreativeAdsTable({
         r.adName.toLowerCase().includes(q) ||
         r.adId.toLowerCase().includes(q) ||
         r.campaignName.toLowerCase().includes(q) ||
-        (r.campaignId && r.campaignId.toLowerCase().includes(q))
+        (r.campaignId && r.campaignId.toLowerCase().includes(q)) ||
+        (r.adsetName && r.adsetName.toLowerCase().includes(q)) ||
+        (r.adsetId && r.adsetId.toLowerCase().includes(q))
     )
   }, [rows, search])
+
+  const tree = useMemo(() => buildMetaCreativeTree(filtered), [filtered])
+
+  const [openCampaigns, setOpenCampaigns] = useState<Set<string>>(() => new Set())
+  const [openAdsets, setOpenAdsets] = useState<Set<string>>(() => new Set())
+
+  const toggleCampaign = (campaignId: string) => {
+    setOpenCampaigns((prev) => {
+      const next = new Set(prev)
+      if (next.has(campaignId)) next.delete(campaignId)
+      else next.add(campaignId)
+      return next
+    })
+  }
+
+  const toggleAdset = (adsetKey: string) => {
+    setOpenAdsets((prev) => {
+      const next = new Set(prev)
+      if (next.has(adsetKey)) next.delete(adsetKey)
+      else next.add(adsetKey)
+      return next
+    })
+  }
 
   const pctOrNa = (v: number | null) =>
     v == null ? (
@@ -252,8 +465,8 @@ function CreativeAdsTable({
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className="min-w-[140px]">Ad</TableHead>
-            <TableHead className="min-w-[120px]">Campaign</TableHead>
+            <TableHead className="min-w-[140px]">Ad / group</TableHead>
+            <TableHead className="min-w-[120px]">Campaign / ad set</TableHead>
             <TableHead>Intent</TableHead>
             <TableHead className="text-right">Spend</TableHead>
             <TableHead className="text-right">Impr</TableHead>
@@ -270,7 +483,7 @@ function CreativeAdsTable({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {filtered.length === 0 ? (
+          {tree.length === 0 ? (
             <TableRow>
               <TableCell colSpan={15} className="h-24 text-center text-muted-foreground">
                 {search.trim()
@@ -279,62 +492,212 @@ function CreativeAdsTable({
               </TableCell>
             </TableRow>
           ) : (
-            filtered.map((r) => (
-              <TableRow key={r.adId}>
-                <TableCell>
-                  <div className="max-w-[200px] truncate font-medium" title={r.adName || r.adId}>
-                    {r.adName || r.adId}
-                  </div>
-                  <div className="text-xs text-muted-foreground truncate max-w-[200px]">{r.adId}</div>
-                </TableCell>
-                <TableCell>
-                  <div className="max-w-[160px] truncate text-sm" title={r.campaignName}>
-                    {r.campaignName || r.campaignId}
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <IntentBadge intent={r.intent} />
-                </TableCell>
-                <TableCell className="text-right tabular-nums font-medium">
-                  {formatCurrency(r.spend, currencyCode)}
-                </TableCell>
-                <TableCell className="text-right tabular-nums text-muted-foreground">
-                  {formatNumber(r.impressions)}
-                </TableCell>
-                <TableCell className="text-right">{pctOrNa(r.hookRatePct)}</TableCell>
-                <TableCell className="text-right">{pctOrNa(r.holdRatePct)}</TableCell>
-                <TableCell className="text-right">{pctOrNa(r.p25RatePct)}</TableCell>
-                <TableCell className="text-right">{pctOrNa(r.p50RatePct)}</TableCell>
-                <TableCell className="text-right">{pctOrNa(r.p75RatePct)}</TableCell>
-                <TableCell className="text-right">{pctOrNa(r.p95RatePct)}</TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {r.avgWatchSec == null ? (
-                    <span className="text-muted-foreground">N/A</span>
-                  ) : (
-                    r.avgWatchSec.toFixed(2)
-                  )}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">{r.ctrPct.toFixed(2)}%</TableCell>
-                <TableCell className="text-right font-medium tabular-nums">{r.roas.toFixed(2)}x</TableCell>
-                <TableCell className="text-sm">
-                  {r.diagnosticLabels.length === 0 ? (
-                    <span className="text-muted-foreground">—</span>
-                  ) : (
-                    <ul className="list-disc list-inside space-y-0.5 text-amber-800 dark:text-amber-200">
-                      {r.diagnosticLabels.map((d) => (
-                        <li key={d}>{d}</li>
-                      ))}
-                    </ul>
-                  )}
-                </TableCell>
-              </TableRow>
-            ))
+            <>
+              {tree.map((c) => {
+                const campOpen = openCampaigns.has(c.campaignId)
+                return (
+                  <Fragment key={c.campaignId}>
+                    <TableRow className="bg-muted/30">
+                      <TableCell
+                        className="align-top max-w-[220px] cursor-pointer hover:bg-muted/50"
+                        onClick={() => toggleCampaign(c.campaignId)}
+                      >
+                        <div className="flex items-start gap-1">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="size-7 shrink-0 text-muted-foreground"
+                            aria-expanded={campOpen}
+                            aria-label={campOpen ? 'Collapse campaign' : 'Expand campaign'}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              toggleCampaign(c.campaignId)
+                            }}
+                          >
+                            {campOpen ? (
+                              <IconChevronDown className="size-4" />
+                            ) : (
+                              <IconChevronRight className="size-4" />
+                            )}
+                          </Button>
+                          <div className="min-w-0 pt-0.5">
+                            <p className="text-sm font-semibold">Campaign total</p>
+                            <p className="text-xs text-muted-foreground">
+                              {c.adsets.length} ad set{c.adsets.length !== 1 ? 's' : ''} · {c.adCount}{' '}
+                              ad{c.adCount !== 1 ? 's' : ''}
+                            </p>
+                          </div>
+                        </div>
+                      </TableCell>
+                      <TableCell
+                        className="align-top cursor-pointer hover:bg-muted/50"
+                        onClick={() => toggleCampaign(c.campaignId)}
+                      >
+                        <div className="max-w-[180px] truncate text-sm font-medium" title={c.campaignName}>
+                          {c.campaignName || c.campaignId}
+                        </div>
+                        <div className="text-xs text-muted-foreground truncate max-w-[180px]">
+                          {c.campaignId}
+                        </div>
+                      </TableCell>
+                      <TableCell className="align-top">
+                        <IntentBadge intent={c.intent} />
+                      </TableCell>
+                      <MetaCreativeMetricCells m={c} currencyCode={currencyCode} pctOrNa={pctOrNa} />
+                      <TableCell className="align-top text-sm text-muted-foreground">—</TableCell>
+                    </TableRow>
+                    {campOpen
+                      ? c.adsets.map((g) => {
+                          const grpOpen = openAdsets.has(g.adsetKey)
+                          return (
+                            <Fragment key={g.adsetKey}>
+                              <TableRow className="bg-muted/15">
+                                <TableCell
+                                  className="align-top max-w-[220px] pl-8 cursor-pointer hover:bg-muted/40"
+                                  onClick={() => toggleAdset(g.adsetKey)}
+                                >
+                                  <div className="flex items-start gap-1">
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon"
+                                      className="size-7 shrink-0 text-muted-foreground"
+                                      aria-expanded={grpOpen}
+                                      aria-label={grpOpen ? 'Collapse ad set' : 'Expand ad set'}
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        toggleAdset(g.adsetKey)
+                                      }}
+                                    >
+                                      {grpOpen ? (
+                                        <IconChevronDown className="size-4" />
+                                      ) : (
+                                        <IconChevronRight className="size-4" />
+                                      )}
+                                    </Button>
+                                    <div className="min-w-0 pt-0.5">
+                                      <p className="text-sm font-medium">Ad set total</p>
+                                      <p className="text-xs text-muted-foreground">
+                                        {g.ads.length} ad{g.ads.length !== 1 ? 's' : ''}
+                                      </p>
+                                    </div>
+                                  </div>
+                                </TableCell>
+                                <TableCell
+                                  className="align-top pl-8 cursor-pointer hover:bg-muted/40"
+                                  onClick={() => toggleAdset(g.adsetKey)}
+                                >
+                                  <div
+                                    className="max-w-[180px] truncate text-sm font-medium"
+                                    title={g.adsetName}
+                                  >
+                                    {g.adsetName}
+                                  </div>
+                                  {g.adsetId ? (
+                                    <div className="text-xs text-muted-foreground truncate max-w-[180px]">
+                                      {g.adsetId}
+                                    </div>
+                                  ) : null}
+                                </TableCell>
+                                <TableCell className="align-top">
+                                  <IntentBadge intent={c.intent} />
+                                </TableCell>
+                                <MetaCreativeMetricCells m={g} currencyCode={currencyCode} pctOrNa={pctOrNa} />
+                                <TableCell className="align-top text-sm text-muted-foreground">—</TableCell>
+                              </TableRow>
+                              {grpOpen
+                                ? g.ads.map((r) => (
+                                    <TableRow key={r.adId}>
+                                      <TableCell className="align-top max-w-[240px] pl-12">
+                                        {r.previewImageUrl ? (
+                                          <div className="mb-1.5 space-y-1">
+                                            <a
+                                              href={r.previewImageUrl}
+                                              target="_blank"
+                                              rel="noreferrer"
+                                              className="text-xs text-primary underline font-medium"
+                                            >
+                                              Open image
+                                            </a>
+                                            <a
+                                              href={r.previewImageUrl}
+                                              target="_blank"
+                                              rel="noreferrer"
+                                              className="block"
+                                              title="Open image"
+                                            >
+                                              <img
+                                                src={r.previewImageUrl}
+                                                alt=""
+                                                className="max-h-24 max-w-[220px] rounded-md border object-contain bg-muted/40"
+                                                loading="lazy"
+                                                referrerPolicy="no-referrer-when-downgrade"
+                                              />
+                                            </a>
+                                          </div>
+                                        ) : null}
+                                        {r.previewVideoId ? (
+                                          <div className="mb-1.5 space-y-1">
+                                            <a
+                                              href={`https://www.facebook.com/watch/?v=${encodeURIComponent(r.previewVideoId)}`}
+                                              target="_blank"
+                                              rel="noreferrer"
+                                              className="text-xs text-primary underline font-medium"
+                                            >
+                                              Watch on Facebook
+                                            </a>
+                                          </div>
+                                        ) : null}
+                                        <div
+                                          className="max-w-[200px] truncate font-medium"
+                                          title={r.adName || r.adId}
+                                        >
+                                          {r.adName || r.adId}
+                                        </div>
+                                        <div className="text-xs text-muted-foreground truncate max-w-[200px]">
+                                          {r.adId}
+                                        </div>
+                                        {r.isVideo ? (
+                                          <span className="text-[10px] text-muted-foreground uppercase mt-0.5 inline-block">
+                                            Video
+                                          </span>
+                                        ) : null}
+                                      </TableCell>
+                                      <TableCell className="align-top text-muted-foreground text-xs">—</TableCell>
+                                      <TableCell className="align-top">
+                                        <IntentBadge intent={r.intent} />
+                                      </TableCell>
+                                      <MetaCreativeMetricCells m={r} currencyCode={currencyCode} pctOrNa={pctOrNa} />
+                                      <TableCell className="text-sm align-top">
+                                        {r.diagnosticLabels.length === 0 ? (
+                                          <span className="text-muted-foreground">—</span>
+                                        ) : (
+                                          <ul className="list-disc list-inside space-y-0.5 text-amber-800 dark:text-amber-200">
+                                            {r.diagnosticLabels.map((d) => (
+                                              <li key={d}>{d}</li>
+                                            ))}
+                                          </ul>
+                                        )}
+                                      </TableCell>
+                                    </TableRow>
+                                  ))
+                                : null}
+                            </Fragment>
+                          )
+                        })
+                      : null}
+                  </Fragment>
+                )
+              })}
+            </>
           )}
         </TableBody>
       </Table>
       {filtered.length > 0 && (
         <div className="border-t px-4 py-2 text-xs text-muted-foreground">
-          {filtered.length} ad{filtered.length !== 1 ? 's' : ''}
+          {tree.length} campaign{tree.length !== 1 ? 's' : ''} · {filtered.length} ad
+          {filtered.length !== 1 ? 's' : ''}
           {totalDailyRows > 0 && (
             <>
               {' '}
@@ -420,6 +783,10 @@ export function MetaAdsContent({
     enabled: hasConnection,
   })
 
+  const adAccountIds = data?.adAccountIds ?? []
+  const activeAdAccountId = data?.activeAdAccountId ?? null
+  const currencyCode = data?.currency?.trim() || 'USD'
+
   type CreativeResponse = {
     ads: MetaCreativeAdRow[]
     note?: string
@@ -427,22 +794,27 @@ export function MetaAdsContent({
     totalDailyRows?: number
   }
 
-  const { data: creativeData, isLoading: creativeLoading } = useQuery<CreativeResponse>({
-    queryKey: ['meta-ads', 'creative', slug, dateFrom, dateTo, intentFilter],
-    queryFn: async () => {
-      const res = await fetch(
-        `/api/workspaces/${slug}/meta-ads/creative?from=${dateFrom}&to=${dateTo}&intent=${encodeURIComponent(intentFilter)}`
-      )
-      const json = await res.json()
-      if (!res.ok) throw new Error(json.error || 'Failed to load creative metrics')
-      return json
-    },
-    enabled: hasConnection && adsView === 'creative',
-  })
-
-  const adAccountIds = data?.adAccountIds ?? []
-  const activeAdAccountId = data?.activeAdAccountId ?? null
-  const currencyCode = data?.currency?.trim() || 'USD'
+  const { data: creativeData, isLoading: creativeLoading, refetch: refetchCreative } =
+    useQuery<CreativeResponse>({
+      queryKey: [
+        'meta-ads',
+        'creative',
+        slug,
+        dateFrom,
+        dateTo,
+        intentFilter,
+        activeAdAccountId ?? '',
+      ],
+      queryFn: async () => {
+        const res = await fetch(
+          `/api/workspaces/${slug}/meta-ads/creative?from=${dateFrom}&to=${dateTo}&intent=${encodeURIComponent(intentFilter)}`
+        )
+        const json = await res.json()
+        if (!res.ok) throw new Error(json.error || 'Failed to load creative metrics')
+        return json
+      },
+      enabled: hasConnection && adsView === 'creative',
+    })
 
   const handleSelectAccount = async (selectedAdAccountId: string) => {
     if (selectedAdAccountId === activeAdAccountId) return
@@ -458,6 +830,7 @@ export function MetaAdsContent({
         throw new Error(err.error || 'Failed to switch account')
       }
       await refetch()
+      await refetchCreative()
     } finally {
       setSelectingAccount(false)
     }
@@ -1206,7 +1579,7 @@ export function MetaAdsContent({
             <Input
               placeholder={
                 adsView === 'creative'
-                  ? 'Search ad, campaign...'
+                  ? 'Search ad, campaign, ad set...'
                   : view === 'daily'
                     ? 'Search campaign, ad set or date...'
                     : 'Search campaign or ad set...'

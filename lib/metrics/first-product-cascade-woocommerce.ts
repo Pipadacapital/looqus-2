@@ -11,6 +11,11 @@ import { differenceInCalendarDays } from 'date-fns'
 import type { PrismaClient } from '@prisma/client'
 import type { FirstProductCascadeResult, FirstProductCascadeRow } from '@/lib/metrics/first-product-cascade'
 import { EMPTY_FIRST_ORDER_KEY, NO_PRODUCT_KEY } from '@/lib/metrics/first-product-cascade'
+import {
+  isWoocommerceOrderIncluded,
+  normalizeOrderFilterSettings,
+} from '@/lib/order-filters'
+import { ensureWooOrderTypesForOrderFilters } from '@/lib/integrations/woocommerce-sync'
 
 const NULL_PID = '\uFFFF'
 
@@ -77,8 +82,20 @@ export async function computeFirstProductCascadeWoo(
   const fromDate = new Date(params.fromYyyyMmDd + 'T00:00:00.000Z')
   const toDate = endOfUtcDay(new Date(params.toYyyyMmDd + 'T00:00:00.000Z'))
   const observationEnd = endOfUtcDay(addUtcDays(toDate, observationDays))
+  const workspace = await prisma.workspace.findFirst({
+    where: { woocommerceConnection: { is: { id: wooConnectionId } } },
+    select: {
+      skipped_shopify_order_tags: true,
+      skip_zero_sales_orders: true,
+    },
+  })
+  const orderFilterSettings = normalizeOrderFilterSettings({
+    skippedShopifyOrderTags: workspace?.skipped_shopify_order_tags ?? [],
+    skipZeroSalesOrders: workspace?.skip_zero_sales_orders ?? false,
+  })
+  await ensureWooOrderTypesForOrderFilters(wooConnectionId, orderFilterSettings, { maxUpdates: 5000 })
 
-  const ordersInRange = await prisma.woocommerceOrder.findMany({
+  const allOrdersInRange = await prisma.woocommerceOrder.findMany({
     where: {
       connectionId: wooConnectionId,
       dateCreated: { gte: fromDate, lte: toDate },
@@ -88,6 +105,12 @@ export async function computeFirstProductCascadeWoo(
     include: { lineItems: true },
     orderBy: [{ dateCreated: 'asc' }, { id: 'asc' }],
   })
+  const ordersInRange = allOrdersInRange.filter((o) =>
+    isWoocommerceOrderIncluded(
+      { orderType: o.orderType, rawJson: o.rawJson, total: o.total },
+      orderFilterSettings
+    )
+  )
 
   const firstOrderByNormEmail = new Map<
     string,
@@ -120,7 +143,7 @@ export async function computeFirstProductCascadeWoo(
     if (o.dateCreated) firstAtByNormEmail.set(ne, o.dateCreated)
   }
 
-  const allOrdersFlat = await prisma.woocommerceOrder.findMany({
+  const allOrdersFlatRaw = await prisma.woocommerceOrder.findMany({
     where: {
       connectionId: wooConnectionId,
       dateCreated: { lte: observationEnd },
@@ -132,9 +155,17 @@ export async function computeFirstProductCascadeWoo(
       customerEmail: true,
       dateCreated: true,
       total: true,
+      orderType: true,
+      rawJson: true,
     },
     orderBy: [{ dateCreated: 'asc' }, { id: 'asc' }],
   })
+  const allOrdersFlat = allOrdersFlatRaw.filter((o) =>
+    isWoocommerceOrderIncluded(
+      { orderType: o.orderType, rawJson: o.rawJson, total: o.total },
+      orderFilterSettings
+    )
+  )
 
   const byNormEmail = new Map<string, { id: string; dateCreated: Date; total: { toString(): string } }[]>()
   for (const o of allOrdersFlat) {

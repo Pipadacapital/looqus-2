@@ -4,6 +4,11 @@ import { prisma } from '@/lib/prisma'
 import { featureGuard } from '@/lib/features'
 import { computeTimings } from '@/lib/timings/compute'
 import type { TimingsGroupBy, TimingsMetric } from '@/lib/timings/types'
+import {
+  isWoocommerceOrderIncluded,
+  normalizeOrderFilterSettings,
+} from '@/lib/order-filters'
+import { ensureWooOrderTypesForOrderFilters } from '@/lib/integrations/woocommerce-sync'
 
 const METRICS: TimingsMetric[] = ['median', 'mean']
 const GROUP_BY_OPTIONS: TimingsGroupBy[] = [
@@ -102,7 +107,9 @@ export async function GET(
       )
     }
 
-    const orders = await prisma.woocommerceOrder.findMany({
+    const orderFilterSettings = normalizeOrderFilterSettings(workspace as any)
+    await ensureWooOrderTypesForOrderFilters(wooConn.id, orderFilterSettings, { maxUpdates: 5000 })
+    const allOrders = await prisma.woocommerceOrder.findMany({
       where: {
         connectionId: wooConn.id,
         status: { notIn: ['cancelled', 'failed', 'pending'] },
@@ -112,9 +119,18 @@ export async function GET(
       select: {
         customerEmail: true,
         dateCreated: true,
+        total: true,
+        orderType: true,
+        rawJson: true,
       },
       orderBy: { dateCreated: 'asc' },
     })
+    const orders = allOrders.filter((o) =>
+      isWoocommerceOrderIncluded(
+        { orderType: o.orderType, rawJson: o.rawJson, total: o.total },
+        orderFilterSettings
+      )
+    )
 
     const ordersByCustomer = new Map<string, Date[]>()
     for (const order of orders) {
@@ -181,7 +197,7 @@ export async function GET(
     const median3to4 = pickMetric(gaps.gap3)
 
     const cohortEmails = Array.from(ordersByCustomer.keys())
-    const firstOrdersWithItems = await prisma.woocommerceOrder.findMany({
+    const allFirstOrdersWithItems = await prisma.woocommerceOrder.findMany({
       where: {
         connectionId: wooConn.id,
         status: { notIn: ['cancelled', 'failed', 'pending'] },
@@ -191,6 +207,9 @@ export async function GET(
       select: {
         customerEmail: true,
         dateCreated: true,
+        total: true,
+        orderType: true,
+        rawJson: true,
         lineItems: {
           select: {
             productId: true,
@@ -202,6 +221,12 @@ export async function GET(
       },
       orderBy: { dateCreated: 'asc' },
     })
+    const firstOrdersWithItems = allFirstOrdersWithItems.filter((o) =>
+      isWoocommerceOrderIncluded(
+        { orderType: o.orderType, rawJson: o.rawJson, total: o.total },
+        orderFilterSettings
+      )
+    )
 
     const firstOrderByEmail = new Map<string, (typeof firstOrdersWithItems)[number]>()
     for (const order of firstOrdersWithItems) {

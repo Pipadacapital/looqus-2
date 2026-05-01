@@ -2,13 +2,22 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/server'
 import { prisma } from '@/lib/prisma'
 import { eachDayOfInterval, getDaysInMonth } from 'date-fns'
-import { getOrderInclusionWhereFromWorkspace } from '@/lib/order-filters'
+import {
+  getOrderInclusionWhereFromWorkspace,
+  isWoocommerceOrderIncluded,
+  normalizeOrderFilterSettings,
+  resolveWoocommerceOrderType,
+} from '@/lib/order-filters'
 import { getRtoSummary } from '@/lib/workspace-metrics'
 import { computeLineItemsCogs, normalizeCogsSettings } from '@/lib/cogs'
 import { getDailyVariableContribution } from '@/lib/workspace-costs'
 import { fetchGoalRowsMap, buildGoalEvaluations } from '@/lib/metrics/goals'
 import type { GoalMetricId } from '@/lib/metrics/goal-metrics-registry'
 import { getShopifyStoreCurrency } from '@/lib/shopify/store-currency'
+import {
+  ensureWooOrderTypesForOrderFilters,
+  fetchLiveWoocommerceOrderTypeMap,
+} from '@/lib/integrations/woocommerce-sync'
 
 // MVP Exchange Rates (Fallback to standard if a live API isn't used)
 const EXCHANGE_RATES: Record<string, number> = {
@@ -75,7 +84,13 @@ export async function GET(
       },
       woocommerceConnection: {
         where: { status: 'CONNECTED' },
-        select: { id: true, currency: true },
+        select: {
+          id: true,
+          currency: true,
+          storeUrl: true,
+          consumerKey: true,
+          consumerSecret: true,
+        },
       },
     },
   })
@@ -132,7 +147,11 @@ export async function GET(
   }
 
   if (isWoocommerce && wooConnectionId) {
-    const [orders, products, workspaceCosts, miscExpenses] = await Promise.all([
+    const orderFilterSettings = normalizeOrderFilterSettings(workspace)
+    await ensureWooOrderTypesForOrderFilters(wooConnectionId, orderFilterSettings, {
+      maxUpdates: 5000,
+    })
+    const [allOrders, products, workspaceCosts, miscExpenses] = await Promise.all([
       prisma.woocommerceOrder.findMany({
         where: {
           connectionId: wooConnectionId,
@@ -141,12 +160,15 @@ export async function GET(
         },
         select: {
           id: true,
+          wcOrderId: true,
+          orderType: true,
           dateCreated: true,
           total: true,
           subtotal: true,
           discountTotal: true,
           totalTax: true,
           currency: true,
+          rawJson: true,
           lineItems: { select: { sku: true, quantity: true } },
         },
         orderBy: { dateCreated: 'asc' },
@@ -173,6 +195,43 @@ export async function GET(
         },
       }),
     ])
+
+    const orderTypeByWooOrderId = new Map<number, string>()
+    const needsLiveOrderTypes =
+      orderFilterSettings.skippedShopifyOrderTags.length > 0 &&
+      allOrders.some(
+        (o) => !resolveWoocommerceOrderType({ orderType: o.orderType, rawJson: o.rawJson })
+      )
+    if (needsLiveOrderTypes && workspace.woocommerceConnection) {
+      try {
+        const liveMap = await fetchLiveWoocommerceOrderTypeMap(
+          {
+            storeUrl: workspace.woocommerceConnection.storeUrl,
+            consumerKey: workspace.woocommerceConnection.consumerKey,
+            consumerSecret: workspace.woocommerceConnection.consumerSecret,
+          },
+          fromDate,
+          toDate,
+          { maxPages: 10, lookbackDays: 3 }
+        )
+        for (const [orderId, orderType] of liveMap) {
+          orderTypeByWooOrderId.set(orderId, orderType)
+        }
+      } catch {
+        // Best-effort live enrichment when DB/raw_json lack order_type.
+      }
+    }
+
+    const orders = allOrders.filter((o) =>
+      isWoocommerceOrderIncluded(
+        {
+          orderType: orderTypeByWooOrderId.get(o.wcOrderId) ?? o.orderType,
+          rawJson: o.rawJson,
+          total: o.total,
+        },
+        orderFilterSettings
+      )
+    )
 
     const storeCurrency =
       workspace.woocommerceConnection?.currency ||

@@ -1,6 +1,6 @@
 import { CogsSettingsContent } from './cogs-settings-content'
 import { FiltersSettingsContent } from './filters-settings-content'
-import { WorkspaceSettingsContent } from './workspace-settings-content'
+import { DeleteWorkspaceCard, WorkspaceSettingsContent } from './workspace-settings-content'
 
 // Layout already validates auth — no duplicate check needed here.
 export default async function SettingsPage() {
@@ -9,6 +9,7 @@ export default async function SettingsPage() {
       <WorkspaceSettingsContent />
       <FiltersSettingsContent />
       <CogsSettingsContent />
+      <DeleteWorkspaceCard />
     </div>
   )
 }

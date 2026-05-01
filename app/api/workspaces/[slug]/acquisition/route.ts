@@ -7,6 +7,11 @@ import { computeAcquisition, computeAcquisitionTrend, computeAcquisitionComposit
 import { fetchGoalRowsMap, buildGoalEvaluations } from '@/lib/metrics/goals'
 import type { GoalMetricId } from '@/lib/metrics/goal-metrics-registry'
 import { computeMarketingEfficiency } from '@/lib/metrics'
+import {
+  isWoocommerceOrderIncluded,
+  normalizeOrderFilterSettings,
+} from '@/lib/order-filters'
+import { ensureWooOrderTypesForOrderFilters } from '@/lib/integrations/woocommerce-sync'
 
 export async function GET(
   request: NextRequest,
@@ -79,6 +84,20 @@ export async function GET(
   const toDate = new Date(toStr + 'T23:59:59.999Z')
   if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime()) || fromDate > toDate) {
     return NextResponse.json({ error: 'Invalid date range' }, { status: 400 })
+  }
+
+  if (workspace.platform === 'WOOCOMMERCE') {
+    const wooForBackfill = await prisma.woocommerceConnection.findUnique({
+      where: { workspaceId: workspace.id },
+      select: { id: true },
+    })
+    if (wooForBackfill) {
+      await ensureWooOrderTypesForOrderFilters(
+        wooForBackfill.id,
+        normalizeOrderFilterSettings(workspace),
+        { maxUpdates: 5000 }
+      )
+    }
   }
 
   const [result, trend, composition] = await Promise.all([
@@ -244,8 +263,9 @@ async function computeAcquisitionWoo(
   const fromDate = new Date(params.from + 'T00:00:00.000Z')
   const toDate = new Date(params.to + 'T23:59:59.999Z')
   const fromExtended = subDays(fromDate, 364)
+  const orderFilterSettings = normalizeOrderFilterSettings(workspace as any)
 
-  const [allOrdersUntilTo, cogsProducts, adSpendMaps] = await Promise.all([
+  const [allOrdersUntilToRaw, cogsProducts, adSpendMaps] = await Promise.all([
     prismaClient.woocommerceOrder.findMany({
       where: {
         connectionId: wooConn.id,
@@ -259,6 +279,8 @@ async function computeAcquisitionWoo(
         dateCreated: true,
         total: true,
         totalTax: true,
+        orderType: true,
+        rawJson: true,
         lineItems: { select: { sku: true, quantity: true } },
       },
       orderBy: { dateCreated: 'asc' },
@@ -274,6 +296,12 @@ async function computeAcquisitionWoo(
     }),
     getWooAdSpendMaps(workspace, fromExtended, toDate),
   ])
+  const allOrdersUntilTo = allOrdersUntilToRaw.filter((o) =>
+    isWoocommerceOrderIncluded(
+      { orderType: o.orderType, rawJson: o.rawJson, total: o.total },
+      orderFilterSettings
+    )
+  )
 
   const cogsBySku = new Map(
     cogsProducts.map((p) => [String(p.sku).trim().toLowerCase(), Number(p.coq ?? 0)])
@@ -424,17 +452,30 @@ async function computeAcquisitionTrendWoo(
   const fromDate = new Date(params.from + 'T00:00:00.000Z')
   const toDate = new Date(params.to + 'T23:59:59.999Z')
   const fromExtended = subDays(fromDate, 364)
+  const orderFilterSettings = normalizeOrderFilterSettings(workspace as any)
 
-  const orders = await prismaClient.woocommerceOrder.findMany({
+  const allOrders = await prismaClient.woocommerceOrder.findMany({
     where: {
       connectionId: wooConn.id,
       status: { notIn: [...WOO_EXCLUDED_STATUSES] },
       customerEmail: { not: null },
       dateCreated: { gte: fromExtended, lte: toDate },
     },
-    select: { customerEmail: true, dateCreated: true },
+    select: {
+      customerEmail: true,
+      dateCreated: true,
+      total: true,
+      orderType: true,
+      rawJson: true,
+    },
     orderBy: { dateCreated: 'asc' },
   })
+  const orders = allOrders.filter((o) =>
+    isWoocommerceOrderIncluded(
+      { orderType: o.orderType, rawJson: o.rawJson, total: o.total },
+      orderFilterSettings
+    )
+  )
 
   const firstDateByCustomer = new Map<string, string>()
   for (const o of orders) {
@@ -489,8 +530,9 @@ async function computeAcquisitionCompositionWoo(
   const fromDate = new Date(params.from + 'T00:00:00.000Z')
   const toDate = new Date(params.to + 'T23:59:59.999Z')
   const fromExtended = subDays(fromDate, 6)
+  const orderFilterSettings = normalizeOrderFilterSettings(workspace as any)
 
-  const [orders, products, adSpendMaps] = await Promise.all([
+  const [allOrders, products, adSpendMaps] = await Promise.all([
     prismaClient.woocommerceOrder.findMany({
       where: {
         connectionId: wooConn.id,
@@ -506,6 +548,8 @@ async function computeAcquisitionCompositionWoo(
         totalTax: true,
         discountTotal: true,
         totalRefund: true,
+        orderType: true,
+        rawJson: true,
         lineItems: { select: { sku: true, quantity: true } },
       },
       orderBy: { dateCreated: 'asc' },
@@ -521,6 +565,12 @@ async function computeAcquisitionCompositionWoo(
     }),
     getWooAdSpendMaps(workspace, fromExtended, toDate),
   ])
+  const orders = allOrders.filter((o) =>
+    isWoocommerceOrderIncluded(
+      { orderType: o.orderType, rawJson: o.rawJson, total: o.total },
+      orderFilterSettings
+    )
+  )
 
   const cogsBySku = new Map(
     products.map((p) => [String(p.sku).trim().toLowerCase(), Number(p.coq ?? 0)])

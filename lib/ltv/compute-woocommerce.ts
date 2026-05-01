@@ -7,6 +7,11 @@ import type { PrismaClient } from '@prisma/client'
 import { getDailyVariableContribution } from '@/lib/workspace-costs'
 import type { LtvDimension, LtvMetric, LtvMode, LtvResponse, LtvRow, LtvSummary } from './types'
 import { normalizeCogsSettings, resolveLineItemCogs } from '@/lib/cogs'
+import {
+  isWoocommerceOrderIncluded,
+  normalizeOrderFilterSettings,
+} from '@/lib/order-filters'
+import { ensureWooOrderTypesForOrderFilters } from '@/lib/integrations/woocommerce-sync'
 
 function normEmail(e: string | null | undefined): string | null {
   if (e == null) return null
@@ -180,21 +185,34 @@ async function getWooDailyRatesLtv(
   wooConnId: string,
   fromDate: Date,
   toDate: Date,
-  storeCurrency: string
+  storeCurrency: string,
+  orderFilterSettings: { skippedShopifyOrderTags: string[]; skipZeroSalesOrders: boolean }
 ): Promise<Map<string, { ordersCount: number; grossSales: number; shipping: number; packaging: number; website: number; totalReturns: number }>> {
-  const [ordersByDay, workspaceCosts] = await Promise.all([
+  const [allOrdersByDay, workspaceCosts] = await Promise.all([
     prisma.woocommerceOrder.findMany({
       where: {
         connectionId: wooConnId,
         dateCreated: { gte: fromDate, lte: toDate },
         status: { notIn: ['cancelled', 'failed', 'pending'] },
       },
-      select: { dateCreated: true, total: true, totalRefund: true },
+      select: {
+        dateCreated: true,
+        total: true,
+        totalRefund: true,
+        orderType: true,
+        rawJson: true,
+      },
     }),
     prisma.workspaceCost.findMany({
       where: { workspaceId, effectiveFrom: { lte: toDate } },
     }),
   ])
+  const ordersByDay = allOrdersByDay.filter((o) =>
+    isWoocommerceOrderIncluded(
+      { orderType: o.orderType, rawJson: o.rawJson, total: o.total },
+      orderFilterSettings
+    )
+  )
   const dayAgg = new Map<string, { grossSales: number; ordersCount: number; totalReturns: number }>()
   for (const o of ordersByDay) {
     if (!o.dateCreated) continue
@@ -326,6 +344,8 @@ export async function computeWoocommerceLtv(
   const workspace = await prisma.workspace.findUnique({
     where: { id: workspaceId },
     select: {
+      skipped_shopify_order_tags: true,
+      skip_zero_sales_orders: true,
       cogsSettings: true,
       meta_ads_connections: {
         select: {
@@ -364,17 +384,35 @@ export async function computeWoocommerceLtv(
   const toDate = new Date(params.to + 'T23:59:59.999Z')
   const toDateExtended = new Date(toDate)
   toDateExtended.setUTCDate(toDateExtended.getUTCDate() + 360)
+  const orderFilterSettings = normalizeOrderFilterSettings({
+    skippedShopifyOrderTags: workspace.skipped_shopify_order_tags ?? [],
+    skipZeroSalesOrders: workspace.skip_zero_sales_orders ?? false,
+  })
+  await ensureWooOrderTypesForOrderFilters(wooConn.id, orderFilterSettings, { maxUpdates: 5000 })
 
-  const ordersForFirst = await prisma.woocommerceOrder.findMany({
+  const allOrdersForFirst = await prisma.woocommerceOrder.findMany({
     where: {
       connectionId: wooConn.id,
       dateCreated: { lte: toDateExtended },
       customerEmail: { not: null },
       status: { notIn: ['cancelled', 'failed', 'pending'] },
     },
-    select: { id: true, customerEmail: true, dateCreated: true },
+    select: {
+      id: true,
+      customerEmail: true,
+      dateCreated: true,
+      total: true,
+      orderType: true,
+      rawJson: true,
+    },
     orderBy: [{ dateCreated: 'asc' }, { id: 'asc' }],
   })
+  const ordersForFirst = allOrdersForFirst.filter((o) =>
+    isWoocommerceOrderIncluded(
+      { orderType: o.orderType, rawJson: o.rawJson, total: o.total },
+      orderFilterSettings
+    )
+  )
 
   const firstByEmail = new Map<string, { firstAt: Date; orderId: string }>()
   for (const o of ordersForFirst) {
@@ -417,12 +455,20 @@ export async function computeWoocommerceLtv(
   const customerKeys = firstOrders.map((r) => r.customer_key)
 
   const [dailyRates, dailyAdSpend] = await Promise.all([
-    getWooDailyRatesLtv(prisma, workspaceId, wooConn.id, fromDate, toDateExtended, storeCurrency),
+    getWooDailyRatesLtv(
+      prisma,
+      workspaceId,
+      wooConn.id,
+      fromDate,
+      toDateExtended,
+      storeCurrency,
+      orderFilterSettings
+    ),
     getDailyAdSpendWoo(prisma, workspace, fromDate, toDateExtended),
   ])
 
   const cohortSet = new Set(customerKeys)
-  const allOrdersRaw = await prisma.woocommerceOrder.findMany({
+  const allOrdersRawUnfiltered = await prisma.woocommerceOrder.findMany({
     where: {
       connectionId: wooConn.id,
       dateCreated: { gte: fromDate, lte: toDateExtended },
@@ -432,6 +478,12 @@ export async function computeWoocommerceLtv(
     include: { lineItems: true },
     orderBy: [{ dateCreated: 'asc' }, { id: 'asc' }],
   })
+  const allOrdersRaw = allOrdersRawUnfiltered.filter((o) =>
+    isWoocommerceOrderIncluded(
+      { orderType: o.orderType, rawJson: o.rawJson, total: o.total },
+      orderFilterSettings
+    )
+  )
   const orders = allOrdersRaw.filter((o) => {
     const k = normEmail(o.customerEmail)
     return k != null && cohortSet.has(k)

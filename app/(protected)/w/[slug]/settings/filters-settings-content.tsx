@@ -31,6 +31,7 @@ import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 
 type FiltersSettings = {
+  platform?: 'SHOPIFY' | 'WOOCOMMERCE'
   skippedShopifyOrderTags: string[]
   skipZeroSalesOrders: boolean
 }
@@ -70,6 +71,10 @@ export function FiltersSettingsContent() {
       setSkipZeroSales(settingsData.skipZeroSalesOrders ?? false)
     }
   }, [settingsData])
+
+  const isWoocommerce = settingsData?.platform === 'WOOCOMMERCE'
+  const itemNoun = isWoocommerce ? 'order type' : 'tag'
+  const itemNounPlural = isWoocommerce ? 'order types' : 'tags'
 
   const availableTags = useMemo(() => tagsData?.tags ?? [], [tagsData])
   const filteredTags = useMemo(() => {
@@ -132,27 +137,31 @@ export function FiltersSettingsContent() {
 
       <Card className="w-full max-w-lg flex-1 bg-muted/30">
         <CardHeader>
-          <CardTitle>Skip orders with tags</CardTitle>
+          <CardTitle>
+            Skip orders with {isWoocommerce ? 'order type' : 'tags'}
+          </CardTitle>
           <CardDescription className="sr-only">
-            Select tags to exclude from analytics.
+            Select values to exclude from analytics.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-6">
           <Field>
-            <FieldLabel>Skip orders with tags</FieldLabel>
+            <FieldLabel>
+              Skip orders with {isWoocommerce ? 'order type' : 'tags'}
+            </FieldLabel>
             <FieldContent>
               <Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
                 <PopoverTrigger asChild>
                   <Button
                     variant="outline"
                     className="min-h-9 w-full justify-between gap-2 font-normal text-muted-foreground"
-                    aria-label="Select tags to skip"
+                    aria-label={`Select ${itemNounPlural} to skip`}
                     disabled={!canChange}
                   >
                     <span className="truncate">
                       {skippedTags.length === 0
-                        ? 'Select tags to skip...'
-                        : `${skippedTags.length} tag(s) selected`}
+                        ? `Select ${itemNounPlural} to skip...`
+                        : `${skippedTags.length} ${itemNoun}${skippedTags.length > 1 ? 's' : ''} selected`}
                     </span>
                     <ChevronDownIcon className="size-4 shrink-0 opacity-50" />
                   </Button>
@@ -160,7 +169,7 @@ export function FiltersSettingsContent() {
                 <PopoverContent className="w-(--radix-popover-trigger-width) p-0" align="start">
                   <div className="p-2 border-b">
                     <Input
-                      placeholder="Search tags..."
+                      placeholder={`Search ${itemNounPlural}...`}
                       value={tagSearch}
                       onChange={(e) => setTagSearch(e.target.value)}
                       disabled={!canChange}
@@ -172,8 +181,8 @@ export function FiltersSettingsContent() {
                     {filteredTags.length === 0 ? (
                       <p className="py-4 text-center text-sm text-muted-foreground">
                         {availableTags.length === 0
-                          ? 'No order tags in this workspace yet.'
-                          : 'No tags match your search.'}
+                          ? `No ${itemNounPlural} in this workspace yet.`
+                          : `No ${itemNounPlural} match your search.`}
                       </p>
                     ) : (
                       <ul className="space-y-0.5">
@@ -220,8 +229,8 @@ export function FiltersSettingsContent() {
                 </div>
               )}
               <FieldDescription>
-                Orders with any of these tags will be excluded from all analytics. Leave
-                empty to include all orders.
+                Orders with any of these {itemNounPlural} will be excluded from
+                all analytics. Leave empty to include all orders.
               </FieldDescription>
             </FieldContent>
           </Field>
