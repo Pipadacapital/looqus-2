@@ -56,7 +56,7 @@ export async function POST(request: NextRequest) {
         controller.enqueue(
           encode({
             stage: 'syncing_done',
-            message: `Synced ${syncResult?.newShipments ?? 0} new shipments`,
+            message: 'Synced shipments from Shiprocket',
             progress: 35,
           })
         )
