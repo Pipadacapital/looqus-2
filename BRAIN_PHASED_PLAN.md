@@ -90,34 +90,32 @@ The current Looqus `app/`, `lib/`, `module/`, `prisma/`, `public/`, `components/
 
 **Mission:** Reshape the repo into the Brain monorepo layout while the Next.js app keeps running unchanged.
 
-> **Phase 0 deviation (executed 2026-05-14):** Scope reduced to frontend move + monorepo tooling only. Service shells, all `packages/*`, all `pylibs/*`, Docker Compose, Python tooling, protobuf scaffolding, full multi-language CI, and `infra/` CDK are deferred to their owning phases (e.g. ingestion-service scaffolds at Phase 2 start). Rationale: scaffolding 6 services 6+ weeks before implementation produces dead code that rots. See `docs/superpowers/specs/2026-05-14-phase-0-monorepo-design.md` for the full design and `docs/superpowers/plans/2026-05-14-phase-0-monorepo.md` for the executed plan.
-
 ### Deliverables
 
-- [x] Create top-level dirs: `apps/`, `packages/`, `pylibs/`, `protos/`, `infra/`, `tools/`, `docs/`.
-- [x] Move current Next.js app into `apps/frontend/`:
+- [ ] Create top-level dirs: `apps/`, `packages/`, `pylibs/`, `protos/`, `infra/`, `tools/`, `docs/`.
+- [ ] Move current Next.js app into `apps/frontend/`:
   - Move `app/`, `components/`, `lib/`, `module/`, `prisma/`, `public/`, `middleware.ts`, `next.config.ts`, `tailwind.config.*`, `postcss.config.*`, `tsconfig.json`, `package.json`, `package-lock.json`, `.env*` → `apps/frontend/`.
   - Keep `CLAUDE.md`, `AI_INSIGHTS_PLAN.md`, `BRAIN_PHASED_PLAN.md`, `.git/`, `.gitignore`, `.claude/` at repo root.
   - Verify: `cd apps/frontend && npm run dev` works identically to before.
-- [x] Add `pnpm-workspace.yaml`, `turbo.json` at root. Convert `apps/frontend/package.json` to use the workspace.
-- [ ] Add `pyproject.toml` (uv workspace) at root with placeholder for Python apps. *(Deferred — added in Phase 1.)*
-- [x] Add `tsconfig.base.json` at root; `apps/frontend/tsconfig.json` extends it.
-- [ ] Scaffold empty service shells (each with `package.json` or `pyproject.toml`, a `src/`, a `Dockerfile`, a `README.md` describing the service responsibility): *(Deferred per deviation note — each scaffolds at the start of its owning phase.)*
+- [ ] Add `pnpm-workspace.yaml`, `turbo.json` at root. Convert `apps/frontend/package.json` to use the workspace.
+- [ ] Add `pyproject.toml` (uv workspace) at root with placeholder for Python apps.
+- [ ] Add `tsconfig.base.json` at root; `apps/frontend/tsconfig.json` extends it.
+- [ ] Scaffold empty service shells (each with `package.json` or `pyproject.toml`, a `src/`, a `Dockerfile`, a `README.md` describing the service responsibility):
   - `apps/api-gateway/` (Node 20, Fastify, tRPC, grpc-js)
   - `apps/core-service/` (Node 20, Fastify, Prisma, grpc-js)
   - `apps/ingestion-service/` (Python 3.12, FastAPI, asyncpg, grpcio)
   - `apps/analytics-service/` (Python 3.12, FastAPI, clickhouse-driver, grpcio)
   - `apps/intelligence-service/` (Python 3.12, FastAPI, Anthropic SDK, grpcio)
   - `apps/notifications-service/` (Node 20, Fastify, grpc-js)
-- [ ] Scaffold empty shared packages: `packages/ui`, `packages/lib-metrics`, `packages/lib-regional`, `packages/lib-grpc-clients`, `packages/lib-kafka`, `packages/lib-auth`, `packages/eslint-config`, `packages/tsconfig`. *(Deferred — added on demand starting Phase 1.)*
-- [ ] Scaffold empty pylibs: `pylibs/brain_metrics`, `pylibs/brain_regional`, `pylibs/brain_kafka`, `pylibs/brain_clickhouse`, `pylibs/brain_db`, `pylibs/brain_grpc`. *(Deferred — added in Phase 1.)*
-- [ ] Move `Technical Document.pdf` content into `docs/BRAIN_TECHNICAL_DOCUMENTATION.md` (markdown source) and `docs/BRAIN_REQUIREMENTS.md` (product spec — leave a stub if not available). *(Deferred.)*
-- [ ] Set up monorepo CI in `.github/workflows/ci.yml`: *(Partial — only Job 1 (TS) added; Jobs 2 and 3 deferred per deviation note.)*
-  - [x] Job 1: `pnpm install`, `pnpm turbo run typecheck build` (TS apps + packages). *(`lint` deferred — no shared eslint config across workspaces yet.)*
-  - [ ] Job 2: `uv sync`, `uv run ruff check`, `uv run mypy`, `uv run pytest` (Python apps + pylibs). *(Deferred until pylibs exist.)*
-  - [ ] Job 3: `buf lint` on `protos/` (placeholder until Phase 1). *(Deferred until protos exist.)*
-- [ ] Add `tools/codegen-proto.sh` (placeholder script that runs `buf generate`). *(Deferred to Phase 1.)*
-- [ ] Add root `Makefile` / `package.json` scripts: `make dev` (Docker Compose up + all services), `make typecheck`, `make test`. *(Partial — root `package.json` has `dev`/`build`/`typecheck`/`lint` scripts via Turborepo; Makefile and Docker Compose deferred to Phase 1.)*
+- [ ] Scaffold empty shared packages: `packages/ui`, `packages/lib-metrics`, `packages/lib-regional`, `packages/lib-grpc-clients`, `packages/lib-kafka`, `packages/lib-auth`, `packages/eslint-config`, `packages/tsconfig`.
+- [ ] Scaffold empty pylibs: `pylibs/brain_metrics`, `pylibs/brain_regional`, `pylibs/brain_kafka`, `pylibs/brain_clickhouse`, `pylibs/brain_db`, `pylibs/brain_grpc`.
+- [ ] Move `Technical Document.pdf` content into `docs/BRAIN_TECHNICAL_DOCUMENTATION.md` (markdown source) and `docs/BRAIN_REQUIREMENTS.md` (product spec — leave a stub if not available).
+- [ ] Set up monorepo CI in `.github/workflows/ci.yml`:
+  - Job 1: `pnpm install`, `pnpm turbo run lint typecheck build` (TS apps + packages).
+  - Job 2: `uv sync`, `uv run ruff check`, `uv run mypy`, `uv run pytest` (Python apps + pylibs).
+  - Job 3: `buf lint` on `protos/` (placeholder until Phase 1).
+- [ ] Add `tools/codegen-proto.sh` (placeholder script that runs `buf generate`).
+- [ ] Add root `Makefile` / `package.json` scripts: `make dev` (Docker Compose up + all services), `make typecheck`, `make test`.
 
 ### Non-Disruption Guarantee
 
