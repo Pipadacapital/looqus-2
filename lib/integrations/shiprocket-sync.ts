@@ -448,7 +448,7 @@ async function upsertShipment(connectionId: string, s: ShiprocketShipmentRow) {
     status: s.status ?? null,
     statusCode: typeof s.status_code === 'number' ? s.status_code : null,
     courierName,
-    awbCode: s.awb_code?.trim() || s.awb?.trim() || null,
+    awbCode: s.awb_code?.trim() || (typeof s.awb === 'string' ? s.awb.trim() : null),
     isCod: !!s.is_cod,
     codAmount,
     paymentMethod,
