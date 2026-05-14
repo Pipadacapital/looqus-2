@@ -5,11 +5,16 @@ import { prisma } from "@/lib/prisma";
  * Tries DB `system_settings.ollama_url` first, then falls back to env, then localhost.
  * Normalizes by trimming whitespace and removing trailing slashes.
  */
-const settings = await prisma.systemSettings.findFirst()
-console.log('settingssssssssssssssssssssssssssss', settings)
-const rawOllamaBaseUrl =
- settings?.ollamaUrl ?? settings?.ollamaUrl ?? "http://localhost:11434"
-const OLLAMA_BASE_URL = rawOllamaBaseUrl?.replace(/\/$/, '')
+
+let cachedBaseUrl: string | null = null
+
+async function getOllamaBaseUrl(): Promise<string> {
+  if (cachedBaseUrl !== null) return cachedBaseUrl
+  const settings = await prisma.systemSettings.findFirst()
+  const raw = settings?.ollamaUrl ?? process.env.OLLAMA_URL ?? "http://localhost:11434"
+  cachedBaseUrl = raw.replace(/\/$/, '')
+  return cachedBaseUrl
+}
 
 export type OllamaGenerateOptions = {
   model: string
@@ -27,7 +32,8 @@ export async function ollamaGenerate(
   options: OllamaGenerateOptions
 ): Promise<OllamaGenerateResult> {
   const { model, prompt, system, format } = options
-  const res = await fetch(`${rawOllamaBaseUrl}/api/generate`, {
+  const baseUrl = await getOllamaBaseUrl()
+  const res = await fetch(`${baseUrl}/api/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -53,7 +59,8 @@ export async function ollamaGenerate(
 
 /** List available models for the insights model selector. */
 export async function ollamaListModels(): Promise<{ id: string; name: string }[]> {
-  const res = await fetch(`${OLLAMA_BASE_URL}/api/tags`)
+  const baseUrl = await getOllamaBaseUrl()
+  const res = await fetch(`${baseUrl}/api/tags`)
   if (!res.ok) return []
   const data = (await res.json()) as { models?: { name: string }[] }
   return (data.models ?? []).map((m) => ({
@@ -89,6 +96,7 @@ export async function ollamaChat(
   model: string
 }> {
   const { model, messages, tools } = options
+  const baseUrl = await getOllamaBaseUrl()
   const body: Record<string, unknown> = {
     model,
     messages: messages.map(normalizeMessageForSend),
@@ -97,7 +105,7 @@ export async function ollamaChat(
   if (tools && tools.length > 0) {
     body.tools = JSON.parse(JSON.stringify(tools))
   }
-  const res = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
+  const res = await fetch(`${baseUrl}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -171,7 +179,8 @@ export async function* ollamaChatStream(
   options: Omit<OllamaChatOptions, 'stream'>
 ): AsyncGenerator<string, void, unknown> {
   const { model, messages } = options
-  const res = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
+  const baseUrl = await getOllamaBaseUrl()
+  const res = await fetch(`${baseUrl}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model, messages, stream: true }),
