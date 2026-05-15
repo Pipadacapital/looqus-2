@@ -1,0 +1,78 @@
+syntax = "proto3";
+
+package brain.analytics.v1;
+
+// MetricsService is the unary-RPC surface for analytics queries.
+// Phase 5 SP-1 ships only GetPnL; subsequent SPs add GetWaterfall,
+// GetAcquisition, GetCohorts, etc. as additional RPCs in this same service.
+service MetricsService {
+  rpc GetPnL(GetPnLRequest) returns (PnLResponse);
+}
+
+// Granularity matches the Looqus `Granularity` type from lib/pnl/buckets.ts.
+enum Granularity {
+  GRANULARITY_UNSPECIFIED = 0;
+  GRANULARITY_DAY = 1;
+  GRANULARITY_WEEK = 2;
+  GRANULARITY_MONTH = 3;
+  GRANULARITY_QUARTER = 4;
+}
+
+message GetPnLRequest {
+  // UUID of the workspace (from the [slug] route segment, resolved to id).
+  string workspace_id = 1;
+  // ISO-8601 date string (YYYY-MM-DD), inclusive lower bound.
+  string from_date = 2;
+  // ISO-8601 date string (YYYY-MM-DD), inclusive upper bound.
+  string to_date = 3;
+  Granularity granularity = 4;
+}
+
+// PnLRow mirrors the row shape returned by the Looqus
+// /api/workspaces/[slug]/pnl route. Field names match the JSON keys exactly
+// (proto3 generates camelCase JSON by default for snake_case fields, so
+// snake_case here is correct).
+message PnLRow {
+  string bucket_key = 1;
+  string label = 2;
+  double gross_sales = 3;
+  double discounts = 4;
+  double sales = 5;
+  double net_sales = 6;
+  double product_gross = 7;
+  double shipping_gross = 8;
+  double product_discount = 9;
+  double shipping_discount = 10;
+  double product_net = 11;
+  double shipping_net = 12;
+  double refunds = 13;
+  double product_refunds = 14;
+  double shipping_refunds = 15;
+  double return_fees = 16;
+  double revenue = 17;
+  double nc_net_revenue = 18;
+  double ec_net_revenue = 19;
+  double net_revenue = 20;
+  double cogs = 21;
+  double variable_costs = 22;
+  double shipping_costs = 23;
+  double returns_costs = 24;
+  double payment_costs = 25;
+  double customs_costs = 26;
+  double other_variable = 27;
+  double ad_spend = 28;
+  double meta_ad_spend = 29;
+  double google_ad_spend = 30;
+  double contribution_margin1 = 31;
+  double contribution_margin2 = 32;
+  double contribution_margin3 = 33;
+  double fixed_costs = 34;
+  double founder_salary_allocated = 35;
+  double net_profit = 36;
+  uint64 orders_count = 37;
+}
+
+message PnLResponse {
+  repeated PnLRow rows = 1;
+  string currency = 2;
+}
