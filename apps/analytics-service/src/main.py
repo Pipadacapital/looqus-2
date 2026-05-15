@@ -6,6 +6,7 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI
 
+from src.cache.redis import close_client, init_client
 from src.db.pool import close_pool, init_pool
 from src.grpc.server import start_grpc_server
 
@@ -13,6 +14,7 @@ from src.grpc.server import start_grpc_server
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await init_pool()
+    await init_client()
     grpc_server: object | None = None
     try:
         grpc_server = await start_grpc_server()
@@ -20,6 +22,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         if grpc_server is not None:
             await grpc_server.stop(grace=2.0)
+        await close_client()
         await close_pool()
 
 
