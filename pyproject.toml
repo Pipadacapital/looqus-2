@@ -1,0 +1,4 @@
+# uv workspace for the monorepo's Python apps + pylibs.
+# analytics-service is the first Python app (Phase 5 SP-1).
+[tool.uv.workspace]
+members = ["apps/analytics-service"]

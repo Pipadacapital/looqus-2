@@ -1,0 +1,39 @@
+[project]
+name = "analytics-service"
+version = "0.0.0"
+description = "Brain OLAP / metric-engine service"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.34",
+    "grpcio>=1.68",
+    "grpcio-tools>=1.68",
+    "asyncpg>=0.30",
+    "redis>=5.2",
+    "protobuf>=5.28",
+    "python-dotenv>=1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "httpx>=0.28",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
