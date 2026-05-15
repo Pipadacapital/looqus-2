@@ -6,16 +6,21 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI
 
+from src.db.pool import close_pool, init_pool
 from src.grpc.server import start_grpc_server
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    grpc_server = await start_grpc_server()
+    await init_pool()
+    grpc_server: object | None = None
     try:
+        grpc_server = await start_grpc_server()
         yield
     finally:
-        await grpc_server.stop(grace=2.0)
+        if grpc_server is not None:
+            await grpc_server.stop(grace=2.0)
+        await close_pool()
 
 
 app = FastAPI(title="analytics-service", lifespan=lifespan)
