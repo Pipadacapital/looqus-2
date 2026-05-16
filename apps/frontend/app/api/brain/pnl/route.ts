@@ -84,8 +84,20 @@ export async function GET(request: NextRequest) {
     });
     return NextResponse.json(resp);
   } catch (err) {
+    // Surface the real underlying error in dev/test instead of a generic
+    // 502. Production should swallow this message; for now we always log
+    // the full error server-side and include the message in the response
+    // body so parity-test failures are debuggable without grepping logs.
+    const message =
+      err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    console.error("[/api/brain/pnl] gRPC call failed:", err);
     return NextResponse.json(
-      { error: "analytics-service unavailable", rows: [], currency: "USD" },
+      {
+        error: "analytics-service unavailable",
+        detail: message,
+        rows: [],
+        currency: "USD",
+      },
       { status: 502 }
     );
   }
