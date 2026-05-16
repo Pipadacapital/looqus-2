@@ -41,6 +41,16 @@ import type { PnLRow } from '@/app/api/workspaces/[slug]/pnl/route'
 type Granularity = 'day' | 'week' | 'month' | 'quarter'
 type ValueMode = 'absolute' | 'percentage'
 
+const BRAIN_PNL = process.env.NEXT_PUBLIC_BRAIN_PNL_ENABLED === 'true'
+
+function pnlUrl(slug: string, qs: URLSearchParams): string {
+  if (BRAIN_PNL) {
+    const base = `/api/brain/pnl?slug=${encodeURIComponent(slug)}`
+    return `${base}&${qs.toString()}`
+  }
+  return `/api/workspaces/${slug}/pnl?${qs.toString()}`
+}
+
 const GRANULARITY_OPTIONS: { value: Granularity; label: string }[] = [
   { value: 'day', label: 'Day' },
   { value: 'week', label: 'Week' },
@@ -193,9 +203,8 @@ export function PnlContent({
 
   useEffect(() => {
     if (!workspaceSlug || !from || !to) return
-    fetch(
-      `/api/workspaces/${workspaceSlug}/pnl?from=${from}&to=${to}&granularity=${granularity}`
-    )
+    const qs = new URLSearchParams({ from, to, granularity })
+    fetch(pnlUrl(workspaceSlug, qs))
       .then((res) => res.json())
       .then((json) => {
         if (json.error) {
