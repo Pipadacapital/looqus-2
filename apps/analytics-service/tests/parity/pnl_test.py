@@ -6,17 +6,24 @@ and asserts every numeric leaf is within 0.01% (with an absolute floor of
 1e-4 for tiny numbers) and every non-numeric leaf is exactly equal.
 
 Prereqs:
-  - SP-1 docker stack up (`pnpm infra:up`) — provides Redis
-  - Looqus dev server on http://localhost:3000 — pnpm --filter shopify-analytics dev
-  - analytics-service on localhost:50051 — uv run uvicorn src.main:app
-  - LOOQUS_BEARER env var set to a valid Supabase access token for the
-    user that has membership in PARITY_WORKSPACE_SLUG (the parity test
-    can't sign in; it borrows a session token).
+  - SP-1 docker stack up (`pnpm infra:up`) — provides Redis.
+  - Looqus dev server on http://localhost:3000 — pnpm --filter shopify-analitcs dev.
+  - analytics-service on localhost:50051 — uv run uvicorn src.main:app.
   - PARITY_WORKSPACE_SLUG, PARITY_FROM, PARITY_TO env vars set to the
     fixture workspace + date range (Shopify-only workspace per spec).
-  - NEXT_PUBLIC_BRAIN_PNL_ENABLED=true on the dev server so the page
-    bundle is built with the flag on (only needed if hitting /pnl through
-    the page — the /api/_brain/pnl proxy works regardless).
+  - ONE of these (the parity test can't sign in; it borrows a session):
+      LOOQUS_COOKIE_FILE  — path to a file whose ENTIRE contents form the
+                            Cookie request header (e.g. the value of the
+                            Cookie: line from DevTools Network → Request
+                            Headers). Recommended for modern Supabase
+                            cookies, which are 3-4 KB and prone to
+                            terminal-paste mangling.
+      LOOQUS_COOKIE       — the same value, supplied directly (use only
+                            for short cookies / tests).
+      LOOQUS_BEARER       — legacy: a raw JWT. Sent as
+                            `sb-access-token=<jwt>`; unlikely to work with
+                            modern Supabase (which uses a project-specific
+                            cookie name + base64 wrapping).
 
 Run:
   uv run pytest tests/parity/pnl_test.py -v
@@ -35,7 +42,25 @@ FIXTURE_TO = os.environ.get("PARITY_TO", "")
 FIXTURE_GRANULARITY = os.environ.get("PARITY_GRANULARITY", "day")
 
 LOOQUS_BASE = os.environ.get("LOOQUS_BASE_URL", "http://localhost:3000")
+COOKIE_FILE = os.environ.get("LOOQUS_COOKIE_FILE")
+COOKIE_LITERAL = os.environ.get("LOOQUS_COOKIE")
 BEARER = os.environ.get("LOOQUS_BEARER")
+
+
+def _load_cookie_header() -> str | None:
+    """Resolve the Cookie request header value from env / file.
+
+    Returns None if no auth is configured (the test will skip)."""
+    if COOKIE_FILE:
+        try:
+            return open(COOKIE_FILE).read().strip()
+        except OSError:
+            return None
+    if COOKIE_LITERAL:
+        return COOKIE_LITERAL.strip()
+    if BEARER:
+        return f"sb-access-token={BEARER}"
+    return None
 
 
 def _diff(path: str, a: Any, b: Any, diffs: list[str]) -> None:
@@ -63,12 +88,22 @@ def _diff(path: str, a: Any, b: Any, diffs: list[str]) -> None:
             diffs.append(f"{path}: OLD={a!r} NEW={b!r}")
 
 
+_COOKIE_HEADER = _load_cookie_header()
+
+
 @pytest.mark.skipif(
-    not BEARER or not FIXTURE_WORKSPACE_SLUG or not FIXTURE_FROM or not FIXTURE_TO,
-    reason="parity test requires LOOQUS_BEARER + PARITY_WORKSPACE_SLUG + PARITY_FROM + PARITY_TO env vars",
+    _COOKIE_HEADER is None
+    or not FIXTURE_WORKSPACE_SLUG
+    or not FIXTURE_FROM
+    or not FIXTURE_TO,
+    reason=(
+        "parity test requires PARITY_WORKSPACE_SLUG + PARITY_FROM + PARITY_TO "
+        "+ one of LOOQUS_COOKIE_FILE / LOOQUS_COOKIE / LOOQUS_BEARER"
+    ),
 )
 def test_pnl_parity():
-    headers = {"Cookie": f"sb-access-token={BEARER}"}
+    assert _COOKIE_HEADER is not None  # for type narrowing; skipif guards this
+    headers = {"Cookie": _COOKIE_HEADER}
     qs = f"from={FIXTURE_FROM}&to={FIXTURE_TO}&granularity={FIXTURE_GRANULARITY}"
 
     old_url = f"{LOOQUS_BASE}/api/workspaces/{FIXTURE_WORKSPACE_SLUG}/pnl?{qs}"
@@ -78,8 +113,9 @@ def test_pnl_parity():
         old = client.get(old_url)
         if old.status_code in (307, 401, 403):
             pytest.fail(
-                f"OLD endpoint returned {old.status_code} — check LOOQUS_BEARER is a valid "
-                f"Supabase session token for a user with membership in {FIXTURE_WORKSPACE_SLUG}"
+                f"OLD endpoint returned {old.status_code} — check the Cookie header is a "
+                f"valid Supabase session for a user with membership in {FIXTURE_WORKSPACE_SLUG} "
+                f"(file: {COOKIE_FILE or '<literal>'})"
             )
         old.raise_for_status()
 
