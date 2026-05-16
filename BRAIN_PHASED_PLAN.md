@@ -1136,6 +1136,7 @@ class RegionAdapter(ABC):
 - Live refresh delay < 5s end-to-end (event → UI).
 - Search returns results in < 200ms.
 
+
 ---
 
 ## Phase 14 — Global Expansion (matches doc Phase 4)

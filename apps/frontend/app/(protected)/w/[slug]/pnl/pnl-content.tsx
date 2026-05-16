@@ -45,7 +45,7 @@ const BRAIN_PNL = process.env.NEXT_PUBLIC_BRAIN_PNL_ENABLED === 'true'
 
 function pnlUrl(slug: string, qs: URLSearchParams): string {
   if (BRAIN_PNL) {
-    const base = `/api/_brain/pnl?slug=${encodeURIComponent(slug)}`
+    const base = `/api/brain/pnl?slug=${encodeURIComponent(slug)}`
     return `${base}&${qs.toString()}`
   }
   return `/api/workspaces/${slug}/pnl?${qs.toString()}`

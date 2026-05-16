@@ -14,7 +14,7 @@ import { z } from "zod";
 import { createClient } from "@/lib/server";
 import { prisma } from "@/lib/prisma";
 import { featureGuard } from "@/lib/features";
-import { getPnL } from "@/lib/_brain/grpc-client";
+import { getPnL } from "@/lib/brain/grpc-client";
 
 const QuerySchema = z.object({
   slug: z.string().min(1),

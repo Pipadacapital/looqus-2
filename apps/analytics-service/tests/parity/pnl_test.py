@@ -107,7 +107,7 @@ def test_pnl_parity():
     qs = f"from={FIXTURE_FROM}&to={FIXTURE_TO}&granularity={FIXTURE_GRANULARITY}"
 
     old_url = f"{LOOQUS_BASE}/api/workspaces/{FIXTURE_WORKSPACE_SLUG}/pnl?{qs}"
-    new_url = f"{LOOQUS_BASE}/api/_brain/pnl?slug={FIXTURE_WORKSPACE_SLUG}&{qs}"
+    new_url = f"{LOOQUS_BASE}/api/brain/pnl?slug={FIXTURE_WORKSPACE_SLUG}&{qs}"
 
     with httpx.Client(headers=headers, timeout=120.0, follow_redirects=False) as client:
         old = client.get(old_url)
