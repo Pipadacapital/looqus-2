@@ -16,6 +16,12 @@ import { prisma } from "@/lib/prisma";
 import { featureGuard } from "@/lib/features";
 import { getPnL } from "@/lib/brain/grpc-client";
 
+// Force the Node.js runtime (gRPC client uses fs + Node net stack — won't
+// run on the Edge runtime). Default is already nodejs in Next.js 14+, but
+// being explicit prevents any future regression if a parent layout opts
+// into edge.
+export const runtime = "nodejs";
+
 const QuerySchema = z.object({
   slug: z.string().min(1),
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
