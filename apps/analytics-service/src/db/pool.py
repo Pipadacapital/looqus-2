@@ -18,7 +18,8 @@ async def init_pool() -> asyncpg.Pool:
     if not dsn:
         raise RuntimeError("DATABASE_URL is not set")
     size = int(os.environ.get("PG_POOL_SIZE", "10"))
-    _pool = await asyncpg.create_pool(dsn=dsn, min_size=1, max_size=size)
+    # statement_cache_size=0 required for pgbouncer transaction-mode pooling.
+    _pool = await asyncpg.create_pool(dsn=dsn, min_size=1, max_size=size, statement_cache_size=0)
     return _pool
 
 

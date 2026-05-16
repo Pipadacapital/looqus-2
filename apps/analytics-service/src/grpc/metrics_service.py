@@ -1,13 +1,11 @@
-"""MetricsService gRPC handler — Phase 5 SP-1 stub.
-
-GetPnL returns an empty PnLResponse for now. The real implementation lands
-in Task 11, after the shared calc lib + queries/pnl.py are in place.
-"""
+"""MetricsService gRPC handler — Phase 5 SP-1."""
 from __future__ import annotations
 
 import grpc
 
+from src.db.pool import get_pool
 from src.grpc.gen.analytics import metrics_pb2, metrics_pb2_grpc
+from src.queries.pnl import compute_pnl
 
 
 class MetricsServicer(metrics_pb2_grpc.MetricsServiceServicer):
@@ -16,5 +14,5 @@ class MetricsServicer(metrics_pb2_grpc.MetricsServiceServicer):
         request: metrics_pb2.GetPnLRequest,
         context: grpc.aio.ServicerContext,
     ) -> metrics_pb2.PnLResponse:
-        # TODO(Phase 5 SP-1, Task 11): replace with real /pnl computation.
-        return metrics_pb2.PnLResponse(rows=[], currency="USD")
+        async with get_pool().acquire() as conn:
+            return await compute_pnl(conn, request)
